@@ -116,7 +116,7 @@ export const earthquakes = defineModule<Quake[]>({
   timeStepMs: 0, // animé : les séismes récents pulsent
   followsTerrain: true,
 
-  async load(signal) {
+  async load({ signal }) {
     const start = new Date(Date.now() - WINDOW_MS).toISOString().slice(0, 19);
     const [france, world] = await Promise.all([
       fetchEmsc({ start, ...FRANCE_AREA, limit: '3000' }, signal),

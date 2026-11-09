@@ -1,5 +1,5 @@
 import { useState } from 'react';
-import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule } from '../core/module';
+import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule, type LegendItem } from '../core/module';
 import type { ModuleManager, ModuleRuntimeState } from '../core/moduleManager';
 import { formatDateTime, formatRelative } from './format';
 import { useModuleStates, useNow } from './hooks';
@@ -39,15 +39,7 @@ export function LayerPanel({ manager }: { manager: ModuleManager }) {
               <h2 className="layers__category">{CATEGORY_LABELS[category]}</h2>
               {modules.map((module) => {
                 const state = states[module.id];
-                return state ? (
-                  <LayerRow
-                    key={module.id}
-                    module={module}
-                    state={state}
-                    now={now}
-                    onToggle={(visible) => manager.setVisible(module.id, visible)}
-                  />
-                ) : null;
+                return state ? <LayerRow key={module.id} module={module} state={state} now={now} manager={manager} /> : null;
               })}
             </section>
           ))}
@@ -61,32 +53,79 @@ interface LayerRowProps {
   module: LayerModule;
   state: ModuleRuntimeState;
   now: number;
-  onToggle: (visible: boolean) => void;
+  manager: ModuleManager;
 }
 
-function LayerRow({ module, state, now, onToggle }: LayerRowProps) {
+function LayerRow({ module, state, now, manager }: LayerRowProps) {
+  const legend = state.visible ? (module.legend?.(state.settings) ?? []) : [];
   return (
-    <label className="layer">
-      <input
-        type="checkbox"
-        className="switch"
-        checked={state.visible}
-        onChange={(event) => onToggle(event.target.checked)}
-      />
-      <span className="layer__text">
-        <span className="layer__name">
-          {module.name}
-          {state.visible && <Status state={state} />}
+    <div className="layer">
+      <label className="layer__main">
+        <input
+          type="checkbox"
+          className="switch"
+          checked={state.visible}
+          onChange={(event) => manager.setVisible(module.id, event.target.checked)}
+        />
+        <span className="layer__text">
+          <span className="layer__name">
+            {module.name}
+            {state.visible && <Status state={state} />}
+          </span>
+          <span className="layer__description">{module.description}</span>
+          {state.visible && state.summary && <span className="layer__summary">{state.summary}</span>}
+          <span className="layer__meta">
+            Source : {module.attribution}
+            {state.lastUpdated !== undefined && (
+              <span title={formatDateTime(state.lastUpdated)}> · mis à jour {formatRelative(state.lastUpdated, now)}</span>
+            )}
+          </span>
         </span>
-        <span className="layer__description">{module.description}</span>
-        <span className="layer__meta">
-          Source : {module.attribution}
-          {state.lastUpdated !== undefined && (
-            <span title={formatDateTime(state.lastUpdated)}> · mis à jour {formatRelative(state.lastUpdated, now)}</span>
+      </label>
+
+      {state.visible && (module.settings?.length || legend.length > 0) ? (
+        <div className="layer__details">
+          {module.settings?.map((setting) => (
+            <div key={setting.id} className="segmented" role="radiogroup" aria-label={`${module.name} : ${setting.label}`}>
+              {setting.options.map((option) => (
+                <button
+                  key={option.value}
+                  type="button"
+                  role="radio"
+                  aria-checked={state.settings[setting.id] === option.value}
+                  className="segmented__option"
+                  onClick={() => manager.setSetting(module.id, setting.id, option.value)}
+                >
+                  {option.label}
+                </button>
+              ))}
+            </div>
+          ))}
+          {legend.length > 0 && <Legend items={legend} />}
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+function Legend({ items }: { items: LegendItem[] }) {
+  return (
+    <ul className="legend">
+      {items.map((item) => (
+        <li key={item.label} className="legend__item">
+          {item.icon ? (
+            <img className="legend__icon" src={item.icon} alt="" />
+          ) : (
+            <span
+              className={`legend__swatch legend__swatch--${item.size ?? 'medium'}`}
+              style={{ background: item.color }}
+              aria-hidden="true"
+            />
           )}
-        </span>
-      </span>
-    </label>
+          {item.label}
+        </li>
+      ))}
+    </ul>
   );
 }
 

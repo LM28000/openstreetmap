@@ -23,7 +23,12 @@ const clockFormat = new Intl.DateTimeFormat('fr-FR', {
   minute: '2-digit',
   second: '2-digit',
 });
-const relativeFormat = new Intl.RelativeTimeFormat('fr', { numeric: 'auto' });
+const timeFormat = new Intl.DateTimeFormat('fr-FR', {
+  timeZone: TIME_ZONE,
+  hour: '2-digit',
+  minute: '2-digit',
+});
+const relativeFormat =new Intl.RelativeTimeFormat('fr', { numeric: 'auto' });
 
 /** « 9 nov. 2026, 22:16 » */
 export function formatDateTime(ms: number): string {
@@ -38,6 +43,11 @@ export function formatLongDate(ms: number): string {
 /** « 22:16:05 » */
 export function formatClock(ms: number): string {
   return clockFormat.format(ms);
+}
+
+/** « 22:16 » */
+export function formatTime(ms: number): string {
+  return timeFormat.format(ms);
 }
 
 /** « il y a 3 minutes », « à l'instant » */

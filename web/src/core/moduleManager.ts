@@ -1,5 +1,5 @@
 /**
- * Gestionnaire des modules : visibilité, chargements périodiques, rendu.
+ * Gestionnaire des modules : visibilité, réglages, chargements, rendu.
  *
  * Il ne dépend pas de React. La carte l'appelle à chaque image (`frame`) ;
  * l'interface s'y abonne (`subscribe` / `getSnapshot`) pour afficher l'état
@@ -17,22 +17,32 @@ export interface ModuleRuntimeState {
   error?: string;
   /** Heure réelle de la dernière réception de données. */
   lastUpdated?: number;
+  /** Valeur de chaque réglage du module. */
+  settings: Readonly<Record<string, string>>;
+  /** Résumé court fourni par le module (ex. « 812 trains en circulation »). */
+  summary?: string | null;
 }
 
 interface Entry {
   module: LayerModule;
   data: unknown;
-  /** Incrémenté à chaque nouvelle donnée, pour savoir quand redessiner. */
-  dataVersion: number;
+  /** Incrémenté à chaque nouvelle donnée ou nouveau réglage, pour savoir quand redessiner. */
+  version: number;
   timer?: ReturnType<typeof setInterval>;
   abort?: AbortController;
-  /** Clé du dernier rendu : version des données + case de temps. */
+  /** Heure réelle du dernier échec de chargement (pour ne pas réessayer en boucle). */
+  lastFailure: number;
+  /** Clé du dernier rendu : version + case de temps + relief + vue. */
   renderedKey?: string;
   layers: Layer[];
   nativeAdded: boolean;
 }
 
-const STORAGE_KEY = 'carte-vivante:couches-visibles';
+const VISIBILITY_KEY = 'carte-vivante:couches-visibles';
+const SETTINGS_KEY = 'carte-vivante:reglages';
+/** Après un échec, délai avant de retenter un rechargement déclenché par un saut dans le temps. */
+const RELOAD_BACKOFF_MS = 3_000;
+const SUMMARY_INTERVAL_MS = 1_000;
 
 export class ModuleManager {
   readonly modules: readonly LayerModule[];
@@ -44,6 +54,9 @@ export class ModuleManager {
   private frameCount = 0;
   private viewVersion = 0;
   private dirty = true;
+  /** Dernier instant simulé vu par `frame` (les chargements s'en servent). */
+  private currentTime = Date.now();
+  private lastSummaryAt = 0;
   private readonly terrain: TerrainSampler = {
     elevation: (lon, lat) => this.map?.queryTerrainElevation([lon, lat]) ?? 0,
     version: 0,
@@ -51,12 +64,17 @@ export class ModuleManager {
 
   constructor(modules: readonly LayerModule[]) {
     this.modules = modules;
-    const saved = readSavedVisibility();
+    const savedVisibility = readStorage<Record<string, boolean>>(VISIBILITY_KEY);
+    const savedSettings = readStorage<Record<string, Record<string, string>>>(SETTINGS_KEY);
     const snapshot: Record<string, ModuleRuntimeState> = {};
     for (const module of modules) {
       if (this.entries.has(module.id)) throw new Error(`Module en double : ${module.id}`);
-      this.entries.set(module.id, { module, data: undefined, dataVersion: 0, layers: [], nativeAdded: false });
-      snapshot[module.id] = { visible: saved[module.id] ?? module.visibleByDefault ?? false, status: 'idle' };
+      this.entries.set(module.id, { module, data: undefined, version: 0, lastFailure: 0, layers: [], nativeAdded: false });
+      snapshot[module.id] = {
+        visible: savedVisibility[module.id] ?? module.visibleByDefault ?? false,
+        status: 'idle',
+        settings: initialSettings(module, savedSettings[module.id]),
+      };
     }
     this.snapshot = snapshot;
   }
@@ -92,10 +110,19 @@ export class ModuleManager {
     const entry = this.entries.get(id);
     if (!entry || this.isVisible(entry) === visible) return;
     this.patch(id, { visible });
-    saveVisibility(this.snapshot);
+    writeStorage(VISIBILITY_KEY, mapValues(this.snapshot, (state) => state.visible));
     if (!this.map) return;
     if (visible) this.activate(entry);
     else this.deactivate(entry);
+  }
+
+  setSetting(id: string, settingId: string, value: string): void {
+    const entry = this.entries.get(id);
+    const state = this.snapshot[id];
+    if (!entry || !state || state.settings[settingId] === value) return;
+    this.patch(id, { settings: { ...state.settings, [settingId]: value } });
+    writeStorage(SETTINGS_KEY, mapValues(this.snapshot, (s) => s.settings));
+    entry.version++;
   }
 
   /** À appeler quand le relief change (tuiles reçues, relief activé ou désactivé). */
@@ -115,25 +142,47 @@ export class ModuleManager {
 
   /**
    * Appelé à chaque image avec l'instant simulé. Ne redessine que les modules
-   * dont les données ou la case de temps ont changé. Renvoie la nouvelle liste
-   * de couches deck.gl, ou `null` si rien n'a changé (la carte ne fait alors rien).
+   * dont les données, les réglages ou la case de temps ont changé. Renvoie la
+   * nouvelle liste de couches deck.gl, ou `null` si rien n'a changé.
    */
   frame(time: number): Layer[] | null {
     if (!this.map) return null;
     this.frameCount++;
+    this.currentTime = time;
     let changed = this.dirty;
+    const now = Date.now();
+    const refreshSummaries = now - this.lastSummaryAt >= SUMMARY_INTERVAL_MS;
+    if (refreshSummaries) this.lastSummaryAt = now;
 
     for (const entry of this.entries.values()) {
-      if (!this.isVisible(entry)) continue;
+      const state = this.snapshot[entry.module.id];
+      if (!state?.visible) continue;
       const { module } = entry;
+      const ctx: RenderContext<unknown> = { data: entry.data, time, terrain: this.terrain, settings: state.settings };
+
+      // Saut dans le temps hors de la période chargée : on recharge (sans s'acharner en cas d'échec).
+      if (
+        module.needsReload &&
+        entry.data !== undefined &&
+        !entry.abort &&
+        now - entry.lastFailure > RELOAD_BACKOFF_MS &&
+        module.needsReload(entry.data, time)
+      ) {
+        void this.load(entry, { showLoading: true });
+      }
+
+      if (refreshSummaries && module.summary) {
+        const summary = module.summary(ctx);
+        if (summary !== state.summary) this.patch(module.id, { summary });
+      }
+
       const step = module.timeStepMs > 0 ? Math.floor(time / module.timeStepMs) : `image-${this.frameCount}`;
       const terrainVersion = module.followsTerrain ? this.terrain.version : 0;
       const viewVersion = module.followsView ? this.viewVersion : 0;
-      const key = `${entry.dataVersion}:${step}:${terrainVersion}:${viewVersion}`;
+      const key = `${entry.version}:${step}:${terrainVersion}:${viewVersion}`;
       if (key === entry.renderedKey) continue;
       entry.renderedKey = key;
 
-      const ctx: RenderContext<unknown> = { data: entry.data, time, terrain: this.terrain };
       if (module.deckLayers) {
         entry.layers = flattenLayers(module.deckLayers(ctx));
         changed = true;
@@ -177,10 +226,11 @@ export class ModuleManager {
     const lastUpdated = this.snapshot[module.id]?.lastUpdated ?? 0;
     const stale =
       entry.data === undefined ||
-      (module.refreshIntervalMs !== undefined && Date.now() - lastUpdated > module.refreshIntervalMs);
-    if (stale) void this.load(entry);
+      (module.refreshIntervalMs !== undefined && Date.now() - lastUpdated > module.refreshIntervalMs) ||
+      (module.needsReload?.(entry.data, this.currentTime) ?? false);
+    if (stale) void this.load(entry, { showLoading: entry.data === undefined });
     if (module.refreshIntervalMs) {
-      entry.timer = setInterval(() => void this.load(entry), module.refreshIntervalMs);
+      entry.timer = setInterval(() => void this.load(entry, { showLoading: false }), module.refreshIntervalMs);
     }
   }
 
@@ -197,22 +247,23 @@ export class ModuleManager {
     if (this.snapshot[entry.module.id]?.status === 'loading') this.patch(entry.module.id, { status: 'idle' });
   }
 
-  private async load(entry: Entry): Promise<void> {
+  private async load(entry: Entry, { showLoading }: { showLoading: boolean }): Promise<void> {
     const { module } = entry;
     if (!module.load) return;
     entry.abort?.abort();
     const controller = new AbortController();
     entry.abort = controller;
-    // Pendant un simple rafraîchissement, on garde l'affichage actuel sans indicateur de chargement.
-    if (entry.data === undefined) this.patch(module.id, { status: 'loading', error: undefined });
+    // Pendant un simple rafraîchissement, on garde l'affichage actuel sans indicateur.
+    if (showLoading) this.patch(module.id, { status: 'loading', error: undefined });
     try {
-      const data = await module.load(controller.signal);
+      const data = await module.load({ signal: controller.signal, time: this.currentTime });
       if (controller.signal.aborted) return;
       entry.data = data;
-      entry.dataVersion++;
+      entry.version++;
       this.patch(module.id, { status: 'ready', error: undefined, lastUpdated: Date.now() });
     } catch (error) {
       if (controller.signal.aborted) return;
+      entry.lastFailure = Date.now();
       console.error(`[module ${module.id}]`, error);
       this.patch(module.id, { status: 'error', error: error instanceof Error ? error.message : String(error) });
     } finally {
@@ -228,6 +279,20 @@ export class ModuleManager {
   }
 }
 
+/** Réglages enregistrés s'ils sont encore valides, sinon valeurs par défaut. */
+function initialSettings(module: LayerModule, saved: Record<string, string> | undefined): Record<string, string> {
+  const settings: Record<string, string> = {};
+  for (const setting of module.settings ?? []) {
+    const value = saved?.[setting.id];
+    settings[setting.id] = setting.options.some((o) => o.value === value) && value ? value : setting.defaultValue;
+  }
+  return settings;
+}
+
+function mapValues<T, U>(record: Readonly<Record<string, T>>, fn: (value: T) => U): Record<string, U> {
+  return Object.fromEntries(Object.entries(record).map(([key, value]) => [key, fn(value)]));
+}
+
 function flattenLayers(list: LayersList, out: Layer[] = []): Layer[] {
   for (const item of list) {
     if (Array.isArray(item)) flattenLayers(item, out);
@@ -236,19 +301,18 @@ function flattenLayers(list: LayersList, out: Layer[] = []): Layer[] {
   return out;
 }
 
-function readSavedVisibility(): Record<string, boolean> {
+function readStorage<T extends object>(key: string): Partial<T> {
   try {
-    const parsed: unknown = JSON.parse(localStorage.getItem(STORAGE_KEY) ?? '{}');
-    return parsed && typeof parsed === 'object' ? (parsed as Record<string, boolean>) : {};
+    const parsed: unknown = JSON.parse(localStorage.getItem(key) ?? '{}');
+    return parsed && typeof parsed === 'object' ? (parsed as Partial<T>) : {};
   } catch {
     return {}; // stockage indisponible (navigation privée…) : valeurs par défaut
   }
 }
 
-function saveVisibility(snapshot: Readonly<Record<string, ModuleRuntimeState>>): void {
+function writeStorage(key: string, value: unknown): void {
   try {
-    const visibility = Object.fromEntries(Object.entries(snapshot).map(([id, state]) => [id, state.visible]));
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(visibility));
+    localStorage.setItem(key, JSON.stringify(value));
   } catch {
     // stockage indisponible : la préférence ne sera simplement pas retenue
   }

@@ -43,10 +43,11 @@ export const DAY_SKY: SkySpecification = {
   'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 8, 0],
 };
 
-/** À appeler à chaque chargement de style. */
+/**
+ * À appeler à chaque chargement de style. La carte démarre à plat (Mercator) avec
+ * le relief ; le globe est proposé par un bouton (voir `keepGlobeAndTerrainApart`).
+ */
 export function setupBaseMap(map: MapLibreMap): void {
-  map.setProjection({ type: 'globe' });
-
   // Deux sources distinctes : MapLibre rend mieux l'ombrage quand il ne partage
   // pas sa source avec le relief 3D.
   if (!map.getSource(TERRAIN_SOURCE)) map.addSource(TERRAIN_SOURCE, DEM_SOURCE);
@@ -73,6 +74,56 @@ export function setupBaseMap(map: MapLibreMap): void {
   map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
 
   map.setSky(DAY_SKY);
+}
+
+/**
+ * MapLibre 5 ne gère pas complètement le relief 3D sur le globe (il l'annonce :
+ * « terrain is not fully supported on vertical perspective projection ») : faire
+ * pivoter ou incliner la carte peut y déclencher une erreur interne qui la fige
+ * définitivement. Globe et relief ne vont donc jamais ensemble : passer au globe
+ * coupe le relief (il revient en repassant à plat), et réactiver le relief sur le
+ * globe repasse à plat.
+ */
+export function keepGlobeAndTerrainApart(map: MapLibreMap): void {
+  const isGlobe = () => map.getProjection()?.type === 'globe';
+  let terrainWanted = true;
+  /** État du relief que l'on vient d'imposer nous-mêmes (pour ne pas le prendre pour un choix de l'utilisateur). */
+  let imposed: boolean | null = null;
+
+  const setTerrain = (on: boolean) => {
+    imposed = on;
+    map.setTerrain(on ? { source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION } : null);
+  };
+
+  map.on('projectiontransition', () => {
+    const hasTerrain = map.getTerrain() !== null;
+    if (isGlobe()) {
+      if (hasTerrain) setTerrain(false);
+    } else if (terrainWanted && !hasTerrain && map.getSource(TERRAIN_SOURCE)) {
+      // (L'événement arrive aussi pendant le chargement du style, avant que la source existe.)
+      setTerrain(true);
+    }
+  });
+
+  map.on('terrain', () => {
+    const hasTerrain = map.getTerrain() !== null;
+    if (imposed === hasTerrain) {
+      imposed = null;
+      return;
+    }
+    terrainWanted = hasTerrain;
+    if (hasTerrain && isGlobe()) map.setProjection({ type: 'mercator' });
+  });
+}
+
+/**
+ * Le style OSM utilisé référence quelques icônes absentes de sa planche d'images :
+ * on les remplace par une image transparente plutôt que d'encombrer la console.
+ */
+export function ignoreMissingIcons(map: MapLibreMap): void {
+  map.on('styleimagemissing', ({ id }) => {
+    if (!map.hasImage(id)) map.addImage(id, { width: 1, height: 1, data: new Uint8Array(4) });
+  });
 }
 
 /** Première couche de texte : on insère nos couches dessous pour garder les noms lisibles. */

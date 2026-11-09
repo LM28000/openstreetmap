@@ -143,16 +143,110 @@ button {
 }
 
 .layer {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 8px;
   border-radius: 10px;
-  cursor: pointer;
 }
 
 .layer:hover {
   background: rgba(255, 255, 255, 0.04);
+}
+
+.layer__main {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 8px;
+  cursor: pointer;
+}
+
+.layer__summary {
+  color: var(--text);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+}
+
+.layer__details {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  padding: 0 8px 10px 54px; /* aligné sur le texte, après l'interrupteur */
+}
+
+/* Choix exclusifs (ex. « Par type / Par retard ») */
+.segmented {
+  display: inline-flex;
+  align-self: flex-start;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--control-bg);
+}
+
+.segmented__option {
+  padding: 4px 10px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+.segmented__option:hover {
+  color: var(--text);
+}
+
+.segmented__option[aria-checked='true'] {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+
+.legend {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.legend__item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
+/* Pastilles de la taille des symboles sur la carte, avec le même contour sombre. */
+.legend__swatch {
+  flex: none;
+  border-radius: 50%;
+  box-shadow: 0 0 0 1.5px rgba(22, 26, 38, 0.9), 0 0 0 2.5px rgba(255, 255, 255, 0.25);
+}
+
+.legend__swatch--small {
+  width: 7px;
+  height: 7px;
+  margin: 0 3.5px;
+}
+
+.legend__swatch--medium {
+  width: 10px;
+  height: 10px;
+  margin: 0 2px;
+}
+
+.legend__swatch--large {
+  width: 14px;
+  height: 14px;
+}
+
+/* Icône de train : hauteur fixe, largeur selon la silhouette (les TGV sont plus longs). */
+.legend__icon {
+  flex: none;
+  width: 36px;
+  height: 14px;
+  object-fit: contain;
+  object-position: left center;
 }
 
 .layer__text {

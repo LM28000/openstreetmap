@@ -6,5 +6,6 @@
 import type { LayerModule } from '../core/module';
 import { dayNight } from './dayNight';
 import { earthquakes } from './earthquakes';
+import { trains } from './trains';
 
-export const MODULES: LayerModule[] = [earthquakes, dayNight];
+export const MODULES: LayerModule[] = [trains, earthquakes, dayNight];

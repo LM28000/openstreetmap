@@ -12,7 +12,15 @@ import type { PickingInfo } from '@deck.gl/core';
 import { clock } from '../core/clock';
 import type { InfoContent } from '../core/module';
 import type { ModuleManager } from '../core/moduleManager';
-import { BASE_STYLE_URL, INITIAL_VIEW, TERRAIN_EXAGGERATION, TERRAIN_SOURCE, setupBaseMap } from './baseMap';
+import {
+  BASE_STYLE_URL,
+  INITIAL_VIEW,
+  TERRAIN_EXAGGERATION,
+  TERRAIN_SOURCE,
+  ignoreMissingIcons,
+  keepGlobeAndTerrainApart,
+  setupBaseMap,
+} from './baseMap';
 
 export interface Pick {
   moduleName: string;
@@ -48,6 +56,8 @@ export function MapView({ manager, onPick }: MapViewProps) {
     map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
     map.addControl(new GlobeControl(), 'top-right');
     map.addControl(new TerrainControl({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION }), 'top-right');
+    keepGlobeAndTerrainApart(map);
+    ignoreMissingIcons(map);
 
     // Le relief arrive par tuiles, et sa précision change avec le zoom : on prévient
     // les modules posés dessus, au plus quatre fois par seconde.

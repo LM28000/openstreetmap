@@ -39,6 +39,32 @@ export interface RenderContext<TData> {
   time: number;
   /** Altitude du relief, pour poser les objets dessus (modules avec `followsTerrain`). */
   terrain: TerrainSampler;
+  /** Valeur choisie pour chaque réglage du module (voir `settings`). */
+  settings: Readonly<Record<string, string>>;
+}
+
+export interface LoadContext {
+  signal: AbortSignal;
+  /** Instant simulé au moment du chargement : pour ne charger que la période utile. */
+  time: number;
+}
+
+/** Un réglage proposé dans le panneau des couches, sous forme de choix exclusifs. */
+export interface ModuleSetting {
+  id: string;
+  label: string;
+  options: ReadonlyArray<{ value: string; label: string }>;
+  defaultValue: string;
+}
+
+export interface LegendItem {
+  /** Couleur CSS du symbole. */
+  color: string;
+  label: string;
+  /** Taille relative du symbole, quand la taille porte aussi l'information. */
+  size?: 'small' | 'medium' | 'large';
+  /** Image du symbole (adresse ou data URL), à la place de la pastille de couleur. */
+  icon?: string;
 }
 
 export interface TerrainSampler {
@@ -83,9 +109,21 @@ export interface LayerModule<TData = unknown> {
   visibleByDefault?: boolean;
 
   /** Charge ou calcule les données. Appelé à l'activation, puis toutes les `refreshIntervalMs`. */
-  load?(signal: AbortSignal): Promise<TData>;
+  load?(ctx: LoadContext): Promise<TData>;
   /** Absent = données chargées une seule fois. */
   refreshIntervalMs?: number;
+  /**
+   * Faut-il recharger pour afficher l'instant t ? Par exemple quand t sort de la
+   * période chargée, après un saut dans le temps.
+   */
+  needsReload?(data: TData, time: number): boolean;
+
+  /** Réglages proposés à l'utilisateur (ex. mode de couleur). */
+  settings?: readonly ModuleSetting[];
+  /** Légende affichée sous la couche quand elle est visible. */
+  legend?(settings: Readonly<Record<string, string>>): LegendItem[];
+  /** Résumé court affiché sous la couche, recalculé chaque seconde (ex. « 812 trains en circulation »). */
+  summary?(ctx: RenderContext<TData>): string | null;
 
   /**
    * Granularité de l'affichage, en millisecondes de temps simulé.

@@ -2,6 +2,7 @@
 //!
 //! - charge les horaires SNCF (GTFS) et les remet à jour quand la SNCF en publie de nouveaux ;
 //! - interroge le flux temps réel SNCF (GTFS-RT) toutes les 30 secondes, et l'archive si demandé ;
+//! - calcule le tracé réel des trains sur les voies OpenStreetMap, avec leur altitude ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -11,10 +12,13 @@
 //! - `RUST_LOG` (info) : niveau de détail des journaux.
 
 mod api;
+mod dem;
 mod gtfs_rt;
+mod rails;
 mod realtime;
 mod state;
 mod timetable;
+mod tracks;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -63,6 +67,7 @@ async fn main() -> Result<()> {
     }
     tokio::spawn(realtime::poll_forever(http.clone(), state.clone(), config.archive_dir.clone()));
     tokio::spawn(timetable::refresh_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(tracks::build_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;

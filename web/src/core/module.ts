@@ -70,6 +70,8 @@ export interface LegendItem {
 export interface TerrainSampler {
   /** Altitude affichée du relief en mètres (exagération comprise), 0 si le relief est désactivé. */
   elevation(lon: number, lat: number): number;
+  /** Exagération du relief affiché (0 quand le relief est désactivé). */
+  exaggeration: number;
   /**
    * Change à chaque arrivée de tuiles de relief ou activation du relief.
    * À mettre dans les `updateTriggers` de `getPosition` des couches deck.gl.

@@ -1,7 +1,9 @@
 //! Horaires théoriques SNCF (GTFS) : téléchargement, modèle compact en mémoire,
 //! et recherche des trains en circulation sur une plage horaire.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{Duration, SystemTime};
 
 use anyhow::{Context, Result, bail};
@@ -48,6 +50,9 @@ pub struct Trip {
 }
 
 pub struct Timetable {
+    /// Numéro unique de ce chargement : les tracés calculés pour lui ne valent que pour lui
+    /// (les indices de gares changent d'un chargement à l'autre).
+    pub id: u64,
     pub stations: Vec<Station>,
     pub stop_points: Vec<String>,
     pub trips: Vec<Trip>,
@@ -94,6 +99,20 @@ impl Timetable {
 
     pub fn trip_count(&self) -> usize {
         self.trips.len()
+    }
+
+    /// Toutes les paires de gares consécutives des horaires, rangées (petit indice, grand indice).
+    pub fn station_pairs(&self) -> HashSet<(u32, u32)> {
+        let mut pairs = HashSet::new();
+        for trip in &self.trips {
+            for pair in trip.stops.windows(2) {
+                let (a, b) = (pair[0].station, pair[1].station);
+                if a != b {
+                    pairs.insert((a.min(b), a.max(b)));
+                }
+            }
+        }
+        pairs
     }
 
     fn local_date(&self, seconds: i64) -> Date {
@@ -255,7 +274,9 @@ fn build(path: &Path) -> Result<Timetable> {
 
     let feed_version = gtfs.feed_info.first().and_then(|f| f.version.clone()).unwrap_or_default();
     info!(trajets = trips.len(), gares = stations.len(), version = %feed_version, "horaires prêts");
-    Ok(Timetable { stations, stop_points, trips, feed_version, services, base_date, tz })
+    static NEXT_ID: AtomicU64 = AtomicU64::new(1);
+    let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
+    Ok(Timetable { id, stations, stop_points, trips, feed_version, services, base_date, tz })
 }
 
 /// La catégorie est dans l'identifiant du quai : « StopPoint:OCETGV INOUI-87686006 » → « TGV INOUI ».

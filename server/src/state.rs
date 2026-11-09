@@ -1,13 +1,16 @@
 //! État partagé entre les requêtes HTTP et les tâches de fond.
 //!
-//! Les horaires et le temps réel sont remplacés d'un bloc (jamais modifiés sur
-//! place) : une requête qui a pris sa copie (`Arc`) la garde cohérente jusqu'au
-//! bout, même si une mise à jour arrive pendant ce temps.
+//! Les horaires, le temps réel et les tracés sont remplacés d'un bloc (jamais
+//! modifiés sur place) : une requête qui a pris sa copie (`Arc`) la garde cohérente
+//! jusqu'au bout, même si une mise à jour arrive pendant ce temps.
 
 use std::sync::{Arc, RwLock};
 
+use tokio::sync::Notify;
+
 use crate::realtime::Realtime;
 use crate::timetable::Timetable;
+use crate::tracks::Tracks;
 
 #[derive(Clone)]
 pub struct AppState(Arc<Inner>);
@@ -15,11 +18,18 @@ pub struct AppState(Arc<Inner>);
 struct Inner {
     timetable: RwLock<Arc<Timetable>>,
     realtime: RwLock<Option<Arc<Realtime>>>,
+    tracks: RwLock<Option<Arc<Tracks>>>,
+    timetable_changed: Notify,
 }
 
 impl AppState {
     pub fn new(timetable: Timetable) -> Self {
-        Self(Arc::new(Inner { timetable: RwLock::new(Arc::new(timetable)), realtime: RwLock::new(None) }))
+        Self(Arc::new(Inner {
+            timetable: RwLock::new(Arc::new(timetable)),
+            realtime: RwLock::new(None),
+            tracks: RwLock::new(None),
+            timetable_changed: Notify::new(),
+        }))
     }
 
     pub fn timetable(&self) -> Arc<Timetable> {
@@ -28,6 +38,12 @@ impl AppState {
 
     pub fn set_timetable(&self, timetable: Timetable) {
         *self.0.timetable.write().expect("verrou des horaires") = Arc::new(timetable);
+        self.0.timetable_changed.notify_one();
+    }
+
+    /// Se termine à la prochaine nouvelle version des horaires.
+    pub async fn timetable_changed(&self) {
+        self.0.timetable_changed.notified().await;
     }
 
     pub fn realtime(&self) -> Option<Arc<Realtime>> {
@@ -36,5 +52,15 @@ impl AppState {
 
     pub fn set_realtime(&self, realtime: Realtime) {
         *self.0.realtime.write().expect("verrou du temps réel") = Some(Arc::new(realtime));
+    }
+
+    /// Les tracés, seulement s'ils ont été calculés pour ces horaires-là.
+    pub fn tracks_for(&self, timetable: &Timetable) -> Option<Arc<Tracks>> {
+        let tracks = self.0.tracks.read().expect("verrou des tracés").clone()?;
+        (tracks.timetable_id == timetable.id).then_some(tracks)
+    }
+
+    pub fn set_tracks(&self, tracks: Tracks) {
+        *self.0.tracks.write().expect("verrou des tracés") = Some(Arc::new(tracks));
     }
 }

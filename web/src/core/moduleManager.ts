@@ -59,6 +59,7 @@ export class ModuleManager {
   private lastSummaryAt = 0;
   private readonly terrain: TerrainSampler = {
     elevation: (lon, lat) => this.map?.queryTerrainElevation([lon, lat]) ?? 0,
+    exaggeration: 0,
     version: 0,
   };
 
@@ -149,6 +150,7 @@ export class ModuleManager {
     if (!this.map) return null;
     this.frameCount++;
     this.currentTime = time;
+    this.terrain.exaggeration = this.map.getTerrain()?.exaggeration ?? 0;
     let changed = this.dirty;
     const now = Date.now();
     const refreshSummaries = now - this.lastSummaryAt >= SUMMARY_INTERVAL_MS;

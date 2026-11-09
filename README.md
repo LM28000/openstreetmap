@@ -5,28 +5,54 @@ Projet personnel pour apprendre.
 
 ## Lancer le projet
 
+Deux programmes tournent ensemble, chacun dans son terminal :
+
 ```bash
+# 1. Le serveur (Rust) : horaires, temps réel et tracés des trains
+cd server
+cargo run --release          # http://127.0.0.1:8787
+
+# 2. Le site (TypeScript) : la carte
 cd web
 pnpm install
-pnpm dev        # http://localhost:5173
+pnpm dev                     # http://localhost:5173
 ```
 
-Autres commandes : `pnpm typecheck` (vérifie les types), `pnpm build` (version de production dans `web/dist`).
+**Au premier démarrage, le serveur télécharge ses données**, environ 350 Mo rangés dans `data/` :
+- les horaires SNCF ;
+- les voies ferrées OpenStreetMap, en 14 fichiers ;
+- les altitudes du relief.
+
+Comptez quelques minutes. Le service Overpass, qui fournit les voies OSM, est gratuit et souvent saturé : le serveur réessaie tout seul en espaçant ses tentatives. Pendant ce temps, la carte fonctionne déjà, avec des trains en ligne droite. Les démarrages suivants prennent quelques secondes.
+
+Sans le serveur, la carte s'ouvre quand même. Seule la couche des trains affiche une erreur.
+
+Autres commandes :
+- `pnpm typecheck` et `pnpm build` dans `web/` ;
+- `cargo test` et `cargo clippy` dans `server/`.
 
 En développement, la carte est accessible depuis la console du navigateur via `window.__carte` (`map`, `overlay`, `clock`, `manager`).
 
 ## Organisation
 
 ```
-web/                 le site (TypeScript, React, Vite)
-  src/core/          le moteur, sans dépendance à React
-    clock.ts         horloge globale (direct, pause, vitesse, saut dans le temps)
-    module.ts        contrat d'un module de couche
-    moduleManager.ts visibilité, chargements périodiques, rendu à chaque image
-  src/map/           la carte : fond OSM, globe, relief, branchement de deck.gl
-  src/modules/       une couche = un module
-  src/ui/            panneau des couches, frise temporelle, fiche d'info
-server/              (phase 1) le serveur Rust
+web/                   le site (TypeScript, React, Vite)
+  src/core/            le moteur, sans dépendance à React
+    clock.ts           horloge globale (direct, pause, vitesse, saut dans le temps)
+    module.ts          contrat d'un module de couche
+    moduleManager.ts   visibilité, réglages, chargements, rendu à chaque image
+  src/map/             la carte : fond OSM, globe, relief, branchement de deck.gl
+  src/modules/         une couche = un module
+  src/ui/              panneau des couches, frise temporelle, fiche d'info
+server/                le serveur (Rust : tokio, axum)
+  src/timetable.rs     horaires SNCF (GTFS) en mémoire, trains en circulation sur une période
+  src/realtime.rs      retards en temps réel (GTFS-RT), archivage optionnel
+  src/gtfs_rt.rs       le format protobuf du temps réel, déclaré à la main (pas besoin de protoc)
+  src/rails.rs         voies OSM : téléchargement, graphe, plus court chemin (A*)
+  src/dem.rs           altitudes du relief (tuiles Mapterhorn)
+  src/tracks.rs        tracé réel de chaque tronçon entre deux gares, avec altitude
+  src/api.rs           l'API HTTP
+data/                  données téléchargées (jamais versionnées)
 ```
 
 ## Les deux idées clés
@@ -48,32 +74,50 @@ export const maCouche = defineModule<MesDonnees>({
   attribution: 'Nom de la source',      // obligatoire : chaque source a sa licence
   refreshIntervalMs: 5 * 60_000,         // recharger toutes les 5 minutes
   timeStepMs: 60_000,                    // redessiner une fois par minute simulée (0 = à chaque image)
-  async load(signal) { /* fetch… */ },
-  deckLayers({ data, time, terrain }) { /* couches deck.gl pour l'instant t */ },
+  async load({ signal, time }) { /* fetch… */ },
+  deckLayers({ data, time, terrain, settings }) { /* couches deck.gl pour l'instant t */ },
   describe(objet) { /* contenu de la fiche au clic */ },
 });
 ```
 
 2. L'ajouter à la liste de `web/src/modules/index.ts`.
 
-Deux options utiles :
-- `followsTerrain: true` pour poser les objets sur le relief, avec `terrain.elevation(lon, lat)` ;
-- `followsView: true` pour redessiner la couche après chaque déplacement de la carte.
+Options utiles :
 
-Pour les images drapées sur le relief (nuit, radar de pluie, photos anciennes), un module peut utiliser des couches MapLibre natives (`native`) au lieu de deck.gl.
+| Option | Effet |
+|---|---|
+| `needsReload(data, time)` | Recharge après un saut dans le temps hors de la période chargée. |
+| `settings` | Réglages proposés dans le panneau (ex. « Par type / Par retard »). |
+| `legend` | Légende affichée sous la couche. |
+| `summary` | Résumé court, recalculé chaque seconde. |
+| `followsTerrain` | Pose les objets sur le relief, avec `terrain.elevation(lon, lat)`. |
+| `followsView` | Redessine la couche après chaque déplacement de la carte. |
+| `native` | Couches MapLibre natives, pour les images drapées sur le relief (nuit, radar de pluie, photos anciennes). |
+
+## Comment les trains sont placés
+
+1. Le serveur charge les horaires théoriques (52 000 trajets) et interroge le temps réel SNCF toutes les 30 secondes.
+2. Pour chaque paire de gares consécutives, il cherche le chemin sur les voies OSM : c'est un plus court chemin sur un graphe d'environ un million de points (A*). Il attribue ensuite à chaque point l'altitude du relief. Sur les ponts et dans les tunnels, une pente régulière remplace le sol, qui n'y est pas à la hauteur du rail.
+3. Le site demande les trains de quelques heures autour de l'instant affiché. À chaque image, il calcule la position de chaque train le long de son tracé, en supposant une vitesse constante entre deux gares.
+4. Si un tronçon n'a pas de tracé (voie absente d'OSM, gare trop loin d'une voie), le train y va en ligne droite. La fiche du train l'indique.
 
 ## Couches disponibles
 
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
+| Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards. Couleur par type ou par retard. | SNCF, OpenStreetMap |
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Jour et nuit | L'ombre de la nuit et des crépuscules. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
+
+Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles (TER, grande vitesse, Intercités) reprennent les trois premières couleurs de la palette de référence. Le mode « retard » utilise une seule teinte, de plus en plus sombre, car le vert et le rouge sont confondus par les daltoniens.
 
 ## Sources et licences
 
 | Quoi | Source | Licence / condition |
 |---|---|---|
 | Fond de carte | [OpenFreeMap](https://openfreemap.org), données OpenStreetMap | ODbL : l'attribution doit rester visible |
+| Voies ferrées | OpenStreetMap, via l'API [Overpass](https://overpass-api.de) | ODbL |
+| Horaires et temps réel | SNCF, via [transport.data.gouv.fr](https://transport.data.gouv.fr) | ODbL |
 | Relief | [Mapterhorn](https://mapterhorn.com/attribution) | attribution |
 | Séismes | EMSC | attribution |
 
@@ -82,14 +126,16 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 ## Points à connaître
 
 - **MapLibre est volontairement en version 5.** deck.gl 9.4 utilise des éléments internes de MapLibre que la version 6 a renommés : la carte plante dès que le relief 3D est actif. Il faudra repasser en v6 quand deck.gl la prendra en charge.
+- **Le globe et le relief ne vont jamais ensemble.** MapLibre 5 ne gère pas complètement le relief sur le globe, et faire pivoter la carte peut alors la figer. Passer au globe coupe donc le relief. Le réactiver ramène la carte à plat.
 - **Des erreurs 404 sur `tiles.mapterhorn.com` apparaissent dans la console.** C'est normal : Mapterhorn ne fournit pas de tuiles au-dessus de l'océan.
+- **Les dépendances doivent avoir plus de 24 h.** pnpm refuse sur cette machine les paquets publiés depuis moins de 24 heures. Il ne faut pas contourner cette règle par une exemption.
 
 ## Feuille de route
 
 | Phase | Contenu |
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
-| 1. Trains | Horaires SNCF, recalage sur les voies OSM, retards en temps réel, serveur Rust, caméra qui suit un train, début de l'archivage |
+| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude, couleur par type ou par retard. Reste : caméra qui suit un train, archivage sur le serveur maison, réponse plus légère |
 | 2. Couches rapides | Carburants, rivières, qualité de l'air, incendies, vélos, réseau électrique |
 | 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |

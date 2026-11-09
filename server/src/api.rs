@@ -20,6 +20,7 @@ use tower_http::trace::TraceLayer;
 use crate::realtime::Realtime;
 use crate::state::AppState;
 use crate::timetable::Timetable;
+use crate::tracks::Tracks;
 
 /// Plage maximale d'une requête.
 const MAX_WINDOW_S: i64 = 12 * 3600;
@@ -50,6 +51,9 @@ struct TrainsResponse<'a> {
     realtime: Option<RealtimeInfo>,
     /// Gares utilisées par les trains ci-dessous (les trains y renvoient par indice).
     stations: Vec<StationOut<'a>>,
+    /// Tracés sur les voies, au format « polyline » de Google étendu à l'altitude :
+    /// triplets (latitude × 10⁵, longitude × 10⁵, altitude en m), chacun codé en écart avec le précédent.
+    tracks: Vec<String>,
     trains: Vec<TrainOut<'a>>,
 }
 
@@ -76,6 +80,9 @@ struct TrainOut<'a> {
     line: &'a str,
     /// Indices dans `stations`, dans l'ordre de passage.
     stations: Vec<u32>,
+    /// Tracé entre chaque gare et la suivante : `k > 0` = `tracks[k - 1]` dans le sens
+    /// d'écriture, `k < 0` = `tracks[-k - 1]` à l'envers, `0` = pas de tracé (ligne droite).
+    tracks: Vec<i32>,
     /// Horaires prévus (secondes UTC).
     arr: Vec<i64>,
     dep: Vec<i64>,
@@ -99,9 +106,10 @@ async fn trains(
     }
     let timetable = state.timetable();
     let realtime = state.realtime();
+    let tracks = state.tracks_for(&timetable);
     // Calcul un peu long (quelques millisecondes) : hors de la boucle asynchrone.
     let body = tokio::task::spawn_blocking(move || {
-        trains_json(&timetable, realtime.as_deref(), query.from, query.to)
+        trains_json(&timetable, realtime.as_deref(), tracks.as_deref(), query.from, query.to)
     })
     .await
     .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
@@ -109,9 +117,17 @@ async fn trains(
     Ok(([(header::CONTENT_TYPE, "application/json")], body))
 }
 
-fn trains_json(timetable: &Timetable, realtime: Option<&Realtime>, from: i64, to: i64) -> serde_json::Result<Vec<u8>> {
+fn trains_json(
+    timetable: &Timetable,
+    realtime: Option<&Realtime>,
+    tracks: Option<&Tracks>,
+    from: i64,
+    to: i64,
+) -> serde_json::Result<Vec<u8>> {
     let mut station_ids: HashMap<u32, u32> = HashMap::new();
     let mut stations = Vec::new();
+    let mut track_ids: HashMap<u32, i32> = HashMap::new();
+    let mut encoded_tracks = Vec::new();
     let mut trains = Vec::new();
 
     for run in timetable.runs_between(from - MAX_DELAY_S, to) {
@@ -141,6 +157,22 @@ fn trains_json(timetable: &Timetable, realtime: Option<&Realtime>, from: i64, to
             })
             .collect();
 
+        // Chaque tracé n'est envoyé qu'une fois, même si plusieurs trains l'empruntent.
+        let train_tracks = stops
+            .windows(2)
+            .map(|pair| {
+                let Some((segment, reversed)) = tracks.and_then(|t| t.find(pair[0].station, pair[1].station)) else {
+                    return 0;
+                };
+                let local = *track_ids.entry(segment).or_insert_with(|| {
+                    let s = &tracks.expect("tracés présents").segments[segment as usize];
+                    encoded_tracks.push(encode_track(&s.points, &s.heights));
+                    encoded_tracks.len() as i32
+                });
+                if reversed { -local } else { local }
+            })
+            .collect();
+
         let (arr_rt, dep_rt, skipped, canceled) = match live {
             Some(l) => (Some(l.arrival), Some(l.departure), l.skipped, l.canceled),
             None => (None, None, Vec::new(), false),
@@ -151,6 +183,7 @@ fn trains_json(timetable: &Timetable, realtime: Option<&Realtime>, from: i64, to
             category: &run.trip.category,
             line: &run.trip.line,
             stations: indices,
+            tracks: train_tracks,
             arr,
             dep,
             arr_rt,
@@ -166,9 +199,35 @@ fn trains_json(timetable: &Timetable, realtime: Option<&Realtime>, from: i64, to
         to,
         realtime: realtime.map(|rt| RealtimeInfo { feed_timestamp: rt.feed_timestamp, fetched_at: rt.fetched_at }),
         stations,
+        tracks: encoded_tracks,
         trains,
     })
 }
+
+/// Code un tracé au format « polyline » (voir `TrainsResponse::tracks`) : chaque valeur
+/// est l'écart avec le point précédent, écrit en caractères imprimables par paquets de 5 bits.
+fn encode_track(points: &[(f64, f64)], heights: &[f32]) -> String {
+    let mut out = String::with_capacity(points.len() * 10);
+    let mut previous = [0i64; 3];
+    for (&(lon, lat), &height) in points.iter().zip(heights) {
+        let current = [(lat * 1e5).round() as i64, (lon * 1e5).round() as i64, height.round() as i64];
+        for (value, last) in current.iter().zip(previous.iter_mut()) {
+            encode_value(value - *last, &mut out);
+            *last = *value;
+        }
+    }
+    out
+}
+
+fn encode_value(value: i64, out: &mut String) {
+    let mut v = if value < 0 { !(value << 1) } else { value << 1 };
+    while v >= 0x20 {
+        out.push(char::from(((0x20 | (v & 0x1f)) + 63) as u8));
+        v >>= 5;
+    }
+    out.push(char::from((v + 63) as u8));
+}
+
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let timetable = state.timetable();
@@ -178,8 +237,10 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let live = realtime
         .as_deref()
         .map_or(0, |rt| runs.iter().filter(|run| rt.apply(run, &timetable.stop_points).is_some()).count());
+    let tracks = state.tracks_for(&timetable);
     Json(serde_json::json!({
         "timetable": { "version": timetable.feed_version, "trips": timetable.trip_count() },
+        "tracks": tracks.map(|t| serde_json::json!({ "segments": t.segments.len(), "stationPairs": t.pair_count })),
         "realtime": realtime.map(|rt| serde_json::json!({
             "feedTimestamp": rt.feed_timestamp,
             "fetchedAt": rt.fetched_at,
@@ -187,4 +248,19 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         })),
         "now": { "running": runs.len(), "withRealtime": live },
     }))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn polyline_comme_google() {
+        // Exemple de la documentation Google (sans altitude) : (38.5, -120.2), (40.7, -120.95).
+        let mut out = String::new();
+        for v in [3_850_000, -12_020_000, 220_000, -75_000] {
+            encode_value(v, &mut out);
+        }
+        assert_eq!(out, "_p~iF~ps|U_ulLnnqC");
+    }
 }

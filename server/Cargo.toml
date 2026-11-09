@@ -9,6 +9,7 @@ description = "Serveur de la carte vivante : horaires et temps réel des trains 
 anyhow = "1.0.104"
 axum = "0.8.9"
 flate2 = "1.1.11"
+image-webp = "0.2.4"
 gtfs-structures = { version = "0.52.0", default-features = false }
 jiff = { version = "0.2.41", features = ["tzdb-bundle-always"] }
 prost = "0.14.4"

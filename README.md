@@ -33,6 +33,35 @@ Autres commandes :
 
 En développement, la carte est accessible depuis la console du navigateur via `window.__carte` (`map`, `overlay`, `clock`, `manager`).
 
+### Utiliser un serveur installé ailleurs
+
+Le site peut interroger un serveur qui tourne sur une autre machine, sans lancer Rust localement :
+
+```bash
+cd web
+CARTE_API=http://192.168.0.75:8787 pnpm dev
+```
+
+## Serveur permanent (Docker)
+
+Pour que le temps réel soit archivé en continu, le serveur tourne en permanence dans Docker (`compose.yaml`, `server/Dockerfile`).
+
+```bash
+git clone https://github.com/LM28000/openstreetmap.git carte-vivante && cd carte-vivante
+mkdir -p data archive              # avant le premier démarrage : sinon Docker les crée au nom de root
+cat > .env <<EOF
+BIND_ADDRESS=192.168.0.75          # adresse d'écoute (127.0.0.1 par défaut : la machine seule)
+RUN_AS=1000:1000                   # utilisateur:groupe propriétaire de data/ et archive/
+ARCHIVE_PATH=./archive             # où garder les archives (environ 50 Mo par jour)
+EOF
+docker compose up -d --build       # installer, ou mettre à jour après un git pull
+docker compose logs -f             # suivre les journaux
+```
+
+Le conteneur est isolé : son système de fichiers est en lecture seule, il n'a aucun privilège, sa mémoire est limitée à 1 Go (le pic mesuré est de 540 Mo) et ses journaux sont bornés à 30 Mo. Il n'écoute que sur l'adresse choisie et n'est pas exposé à Internet.
+
+Les archives sont rangées dans `archive/sncf-trip-updates/AAAA-MM-JJ/HHMMSS.pb.gz`, une par version du flux temps réel.
+
 ## Organisation
 
 ```

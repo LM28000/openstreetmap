@@ -1,0 +1,38 @@
+# Le serveur de la carte vivante, en service permanent (serveur maison).
+#
+#   docker compose up -d --build      installer ou mettre à jour
+#   docker compose logs -f            suivre les journaux
+#
+# Réglages dans un fichier .env à côté de ce fichier (jamais versionné), par exemple :
+#   BIND_ADDRESS=192.168.0.75          adresse d'écoute sur la machine (127.0.0.1 par défaut : la machine seule)
+#   ARCHIVE_PATH=/mnt/pool/carte-vivante   où garder les archives du temps réel
+#   RUN_AS=1000:1000                   utilisateur:groupe propriétaire des dossiers data et archive
+
+name: carte-vivante
+
+services:
+  serveur:
+    build: ./server
+    image: carte-vivante-serveur
+    restart: unless-stopped
+    user: "${RUN_AS:-1000:1000}"
+    ports:
+      - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8787}:8787"
+    volumes:
+      - "${DATA_PATH:-./data}:/data"
+      - "${ARCHIVE_PATH:-./archive}:/archive"
+    # Isolation : système de fichiers en lecture seule, aucun privilège, mémoire et processeur bornés.
+    read_only: true
+    tmpfs:
+      - /tmp
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    mem_limit: 1g
+    cpus: 2.0
+    logging:
+      driver: json-file
+      options:
+        max-size: 10m
+        max-file: "3"

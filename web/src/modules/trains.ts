@@ -62,6 +62,8 @@ interface Track {
   z: Float32Array;
   /** Distance depuis le début du tracé, en mètres. */
   along: Float64Array;
+  /** Vitesse maximale (km/h, 0 : inconnue) de la portion qui part de chaque point. */
+  limit: Float32Array;
 }
 
 type Family = 'ter' | 'grande-vitesse' | 'intercites';
@@ -115,6 +117,10 @@ interface Train extends Run {
   zRail: Float32Array;
   /** Heure de passage à chaque sommet (secondes UTC). */
   times: Float64Array;
+  /** Vitesse estimée en chaque sommet (km/h). */
+  speeds: Float32Array;
+  /** Vitesse maximale de la ligne sur la portion qui part de chaque sommet (km/h, 0 : inconnue). */
+  limits: Float32Array;
   /** Cap (degrés deck.gl) du premier tronçon non nul partant de chaque sommet. */
   angles: Float32Array;
   /** Sommet du chemin où se trouve chaque arrêt. */
@@ -136,8 +142,10 @@ interface Head {
   /** Indice de l'arrêt où le train est à quai, sinon `null`. */
   atStop: number | null;
   nextStop: number | null;
-  /** Vitesse moyenne estimée sur la portion en cours, en km/h (0 à quai). */
+  /** Vitesse estimée en km/h (0 à quai). */
   speed: number;
+  /** Vitesse maximale de la ligne à cet endroit (km/h, 0 : inconnue). */
+  limit: number;
 }
 
 interface TrainsData {
@@ -152,7 +160,9 @@ interface TrainsData {
   trains: Train[];
   trainById: Map<string, Train>;
   canceled: number;
-  /** Exagération du relief appliquée à `flatPath` (−1 : pas encore calculé). */
+  /** Chemins calculés de ces trains (partagés avec les chargements précédents, voir `geometryCache`). */
+  geometries: TrainGeometry[];
+  /** Exagération du relief pour laquelle tous les chemins sont à jour (−1 : à vérifier). */
   exaggeration: number;
   /** Change à chaque recalcul de `flatPath`, pour prévenir deck.gl. */
   pathVersion: number;
@@ -246,7 +256,7 @@ function heading(lon1: number, my1: number, lon2: number, my2: number): number {
   return Math.atan2(my2 - my1, (lon2 - lon1) * DEG) / DEG;
 }
 
-/** Décode un tracé « polyline » étendu à l'altitude (voir server/src/api.rs). */
+/** Décode un tracé « polyline » étendu à l'altitude et à la vitesse maximale (voir server/src/api.rs). */
 function decodeTrack(encoded: string): Track {
   const values: number[] = [];
   let index = 0;
@@ -261,21 +271,25 @@ function decodeTrack(encoded: string): Track {
     } while (byte >= 0x20 && index < encoded.length);
     values.push(result & 1 ? ~(result >> 1) : result >> 1);
   }
-  const count = Math.floor(values.length / 3);
+  const count = Math.floor(values.length / 4);
   const track: Track = {
     lon: new Float64Array(count),
     lat: new Float64Array(count),
     my: new Float64Array(count),
     z: new Float32Array(count),
     along: new Float64Array(count),
+    limit: new Float32Array(count),
   };
   let lat = 0;
   let lon = 0;
   let z = 0;
+  let limit = 0;
   for (let i = 0; i < count; i++) {
-    lat += values[i * 3]!;
-    lon += values[i * 3 + 1]!;
-    z += values[i * 3 + 2]!;
+    lat += values[i * 4]!;
+    lon += values[i * 4 + 1]!;
+    z += values[i * 4 + 2]!;
+    limit += values[i * 4 + 3]!;
+    track.limit[i] = limit;
     track.lat[i] = lat / 1e5;
     track.lon[i] = lon / 1e5;
     track.my[i] = mercatorY(lat / 1e5);
@@ -310,12 +324,19 @@ function intervalVertices(
   tracks: Track[],
   from: ApiStation,
   to: ApiStation,
-): { lon: number[]; lat: number[]; z: number[]; along: number[]; real: boolean } {
+): IntervalVertices {
   const track = ref !== 0 ? tracks[Math.abs(ref) - 1] : undefined;
   if (!track || track.lon.length < 2) {
     const dx = (to.lon - from.lon) * Math.cos(from.lat * DEG) * 111_320;
     const dy = (to.lat - from.lat) * 110_540;
-    return { lon: [from.lon, to.lon], lat: [from.lat, to.lat], z: [NaN, NaN], along: [0, Math.hypot(dx, dy)], real: false };
+    return {
+      lon: [from.lon, to.lon],
+      lat: [from.lat, to.lat],
+      z: [NaN, NaN],
+      along: [0, Math.hypot(dx, dy)],
+      limits: [0],
+      real: false,
+    };
   }
   const n = track.lon.length;
   const total = track.along[n - 1]!;
@@ -325,16 +346,170 @@ function intervalVertices(
     lat: order.map((i) => track.lat[i]!),
     z: order.map((i) => track.z[i]!),
     along: order.map((i) => (ref > 0 ? track.along[i]! : total - track.along[i]!)),
+    // Portion k : à l'endroit, celle qui part du point k ; à l'envers, celle qui arrive au point n-1-k.
+    limits: Array.from({ length: n - 1 }, (_, k) => (ref > 0 ? track.limit[k]! : track.limit[n - 2 - k]!)),
     real: true,
   };
 }
+
+/** Sommets d'un tronçon entre deux gares, avec la vitesse maximale de chaque portion. */
+interface IntervalVertices {
+  lon: number[];
+  lat: number[];
+  z: number[];
+  /** Distance depuis la première gare, en mètres. */
+  along: number[];
+  /** Vitesse maximale (km/h, 0 : inconnue) de chaque portion entre deux sommets. */
+  limits: number[];
+  real: boolean;
+}
+
+/** Marche des trains : vitesse maximale du matériel (km/h), accélération et freinage (m/s²). */
+const RUNNING: Record<Family, { vmax: number; accel: number; brake: number }> = {
+  'grande-vitesse': { vmax: 320, accel: 0.4, brake: 0.5 },
+  intercites: { vmax: 200, accel: 0.5, brake: 0.6 },
+  ter: { vmax: 160, accel: 0.7, brake: 0.7 },
+};
+/** Matériels plus lents que leur famille. */
+const VMAX_BY_CATEGORY: Record<string, number> = { TramTrain: 100, 'INTERCITES de nuit': 160 };
+/** Vitesse supposée là où OSM ne la donne pas. */
+const DEFAULT_LIMIT_KMH = 100;
+/** Pas de calcul du profil de vitesse. */
+const PROFILE_STEP_M = 400;
+
+interface Profiled {
+  lon: number[];
+  my: number[];
+  z: number[];
+  times: number[];
+  /** Vitesse estimée en chaque sommet (km/h). */
+  speeds: number[];
+  /** Vitesse maximale de la portion qui part de chaque sommet (km/h, 0 : inconnue). */
+  limits: number[];
+}
+
+/**
+ * Heure de passage en chaque point d'un tronçon entre deux gares, avec un profil de
+ * vitesse réaliste : le train accélère au départ, roule à la vitesse permise (celle de
+ * la voie, sans dépasser celle du matériel), et freine pour s'arrêter à la gare
+ * suivante. Ce profil « au plus vite » est ensuite étiré pour tomber pile sur
+ * l'horaire (les horaires comportent toujours une marge).
+ *
+ * Le calcul se fait tous les 400 m ; on garde les sommets du tracé, plus les points
+ * des phases d'accélération et de freinage (là où la vitesse change, l'interpolation
+ * linéaire entre sommets ne suffirait pas).
+ */
+function profileInterval(
+  v: IntervalVertices,
+  leave: number,
+  reach: number,
+  running: { vmax: number; accel: number; brake: number },
+): Profiled {
+  // 1. Points fins : sommets du tracé, plus des points intermédiaires tous les 400 m.
+  const lon: number[] = [];
+  const my: number[] = [];
+  const z: number[] = [];
+  const d: number[] = [];
+  const cap: number[] = []; // vitesse maximale au point, en m/s
+  const limitOut: number[] = []; // vitesse maximale (km/h OSM) de la portion qui part du point
+  const original: boolean[] = [];
+  const allowed = (limitKmh: number) => Math.min(limitKmh > 0 ? limitKmh : DEFAULT_LIMIT_KMH, running.vmax) / 3.6;
+  const n = v.lon.length;
+  for (let e = 0; e + 1 < n; e++) {
+    const length = v.along[e + 1]! - v.along[e]!;
+    const steps = Math.max(1, Math.ceil(length / PROFILE_STEP_M));
+    const speed = allowed(v.limits[e] ?? 0);
+    const previous = e > 0 ? allowed(v.limits[e - 1] ?? 0) : speed;
+    const my0 = mercatorY(v.lat[e]!);
+    const my1 = mercatorY(v.lat[e + 1]!);
+    for (let q = 0; q < steps; q++) {
+      const f = q / steps;
+      lon.push(v.lon[e]! + (v.lon[e + 1]! - v.lon[e]!) * f);
+      my.push(my0 + (my1 - my0) * f);
+      z.push(v.z[e]! + (v.z[e + 1]! - v.z[e]!) * f);
+      d.push(v.along[e]! + length * f);
+      cap.push(q === 0 ? Math.min(speed, previous) : speed);
+      limitOut.push(v.limits[e] ?? 0);
+      original.push(q === 0);
+    }
+  }
+  lon.push(v.lon[n - 1]!);
+  my.push(mercatorY(v.lat[n - 1]!));
+  z.push(v.z[n - 1]!);
+  d.push(v.along[n - 1]!);
+  cap.push(0);
+  limitOut.push(v.limits[n - 2] ?? 0);
+  original.push(true);
+
+  // 2. Vitesses : on accélère depuis l'arrêt (passe avant), on freine jusqu'à l'arrêt (passe arrière).
+  const m = d.length;
+  const speed = new Array<number>(m).fill(0);
+  for (let j = 1; j < m - 1; j++) {
+    speed[j] = Math.min(cap[j]!, Math.sqrt(speed[j - 1]! ** 2 + 2 * running.accel * (d[j]! - d[j - 1]!)));
+  }
+  for (let j = m - 2; j >= 0; j--) {
+    speed[j] = Math.min(speed[j]!, Math.sqrt(speed[j + 1]! ** 2 + 2 * running.brake * (d[j + 1]! - d[j]!)));
+  }
+
+  // 3. Temps « au plus vite », puis étirement pour respecter l'horaire.
+  const cumulative = [0];
+  for (let j = 1; j < m; j++) {
+    const mean = (speed[j - 1]! + speed[j]!) / 2;
+    cumulative.push(cumulative[j - 1]! + (mean > 0.01 ? (d[j]! - d[j - 1]!) / mean : 0));
+  }
+  const fastest = cumulative[m - 1]!;
+  const scale = fastest > 0 ? (reach - leave) / fastest : 1;
+
+  // 4. On garde les sommets du tracé et les points où le train accélère ou freine.
+  const out: Profiled = { lon: [], my: [], z: [], times: [], speeds: [], limits: [] };
+  for (let j = 0; j < m; j++) {
+    const cruising = speed[j]! >= cap[j]! - 0.5;
+    if (!original[j] && cruising) continue;
+    out.lon.push(lon[j]!);
+    out.my.push(my[j]!);
+    out.z.push(z[j]!);
+    out.times.push(fastest > 0 ? leave + cumulative[j]! * scale : j === m - 1 ? reach : leave);
+    out.speeds.push(scale > 0 && fastest > 0 ? (speed[j]! / scale) * 3.6 : 0);
+    out.limits.push(limitOut[j]!);
+  }
+  return out;
+}
+
+/** Ce qui coûte cher à calculer pour un train : son chemin et son profil de vitesse. */
+type TrainGeometry = Pick<
+  Train,
+  'onTracks' | 'lon' | 'my' | 'zRail' | 'times' | 'speeds' | 'limits' | 'angles' | 'stopVertex' | 'flatPath' | 'timestamps'
+> & {
+  /** Exagération du relief appliquée à `flatPath` (−1 : jamais calculé). */
+  pathExaggeration: number;
+};
+
+/**
+ * Le temps réel est rechargé chaque minute, mais les tracés ne changent pas et la
+ * plupart des trains gardent leurs horaires : on réutilise ce qui a déjà été calculé.
+ */
+let trackCache = new Map<string, Track>();
+let geometryCache = new Map<string, TrainGeometry>();
+/** Origine fixe des horodatages de traînée, pour que les chemins mis en cache restent valables. */
+let timeBase: number | undefined;
 
 function stationKey(s: ApiStation): string {
   return `${s.name}|${s.lon.toFixed(4)}|${s.lat.toFixed(4)}`;
 }
 
 function parse(json: ApiResponse): TrainsData {
-  const tracks = (json.tracks ?? []).map(decodeTrack);
+  const started = performance.now();
+  const base = (timeBase ??= json.from);
+  const nextTrackCache = new Map<string, Track>();
+  const tracks = (json.tracks ?? []).map((encoded) => {
+    const track = trackCache.get(encoded) ?? decodeTrack(encoded);
+    nextTrackCache.set(encoded, track);
+    return track;
+  });
+  trackCache = nextTrackCache;
+  const nextGeometryCache = new Map<string, TrainGeometry>();
+  const geometries: TrainGeometry[] = [];
+  let reused = 0;
   const stations: Station[] = json.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [] }));
   const trains: Train[] = [];
   let canceled = 0;
@@ -378,44 +553,21 @@ function parse(json: ApiResponse): TrainsData {
     const arr = slice(api.arrRt ?? api.arr);
     const dep = slice(api.depRt ?? api.dep);
 
-    // Chemin complet : pour chaque tronçon, les points de voie avec leur heure de passage
-    // (vitesse constante le long du tracé entre deux gares).
-    const lon: number[] = [];
-    const lat: number[] = [];
-    const z: number[] = [];
-    const times: number[] = [];
-    const stopVertex = [0];
-    let realLength = 0;
-    let totalLength = 0;
-    for (let i = 0; i + 1 < stops.length; i++) {
-      const ref = api.tracks?.[first + i] ?? 0;
-      const vertices = intervalVertices(ref, tracks, stops[i]!, stops[i + 1]!);
-      const leave = dep[i] ?? 0;
-      const reach = arr[i + 1] ?? leave;
-      const length = vertices.along[vertices.along.length - 1] ?? 0;
-      totalLength += length;
-      if (vertices.real) realLength += length;
-      vertices.lon.forEach((value, k) => {
-        lon.push(value);
-        lat.push(vertices.lat[k]!);
-        z.push(vertices.z[k]!);
-        times.push(length > 0 ? leave + ((reach - leave) * vertices.along[k]!) / length : k === 0 ? leave : reach);
-      });
-      stopVertex.push(lon.length - 1);
-    }
-
-    const count = lon.length;
-    const my = Float64Array.from(lat, mercatorY);
-    const lonArray = Float64Array.from(lon);
-    // Cap de chaque sommet : celui du premier tronçon de longueur non nulle qui en part.
-    const angles = new Float32Array(count);
-    let nextAngle = 0;
-    for (let k = count - 1; k >= 0; k--) {
-      if (k + 1 < count && (lonArray[k + 1] !== lonArray[k] || my[k + 1] !== my[k])) {
-        nextAngle = heading(lonArray[k]!, my[k]!, lonArray[k + 1]!, my[k + 1]!);
-      }
-      angles[k] = nextAngle;
-    }
+    // Même train, mêmes arrêts, mêmes horaires, mêmes tracés : même chemin qu'au chargement précédent.
+    const trackRefs = api.tracks ?? [];
+    const key = [
+      api.id,
+      first,
+      last,
+      dep.join(','),
+      arr.join(','),
+      trackRefs.map((ref) => (ref === 0 ? 0 : Math.sign(ref) * (json.tracks?.[Math.abs(ref) - 1]?.length ?? 0))).join(','),
+    ].join('|');
+    let geometry = geometryCache.get(key);
+    if (geometry) reused++;
+    else geometry = computeGeometry(api, first, stops, dep, arr, tracks, family, base);
+    nextGeometryCache.set(key, geometry);
+    geometries.push(geometry);
 
     const train = {
       ...common,
@@ -427,15 +579,17 @@ function parse(json: ApiResponse): TrainsData {
       realtime: api.arrRt !== undefined,
       canceled: false,
       skipped: new Set([...skippedAll].filter((i) => i > first && i < last).map((i) => i - first)),
-      onTracks: totalLength > 0 ? realLength / totalLength : 0,
-      lon: lonArray,
-      my,
-      zRail: Float32Array.from(z),
-      times: Float64Array.from(times),
-      angles,
-      stopVertex,
-      flatPath: new Float64Array(count * 3),
-      timestamps: Float32Array.from(times, (t) => t - json.from),
+      onTracks: geometry.onTracks,
+      lon: geometry.lon,
+      my: geometry.my,
+      zRail: geometry.zRail,
+      times: geometry.times,
+      speeds: geometry.speeds,
+      limits: geometry.limits,
+      angles: geometry.angles,
+      stopVertex: geometry.stopVertex,
+      flatPath: geometry.flatPath,
+      timestamps: geometry.timestamps,
     } as Omit<Train, 'head'> as Train;
     train.head = {
       train,
@@ -446,45 +600,127 @@ function parse(json: ApiResponse): TrainsData {
       atStop: null,
       nextStop: null,
       speed: 0,
+      limit: 0,
     };
     stops.forEach((station, stop) => station.visits.push({ run: train, stop }));
     trains.push(train);
   }
 
+  geometryCache = nextGeometryCache;
+  if (import.meta.env.DEV) {
+    const ms = Math.round(performance.now() - started);
+    console.info(`[trains] ${trains.length} trains analysés en ${ms} ms (${reused} chemins réutilisés)`);
+  }
+
   return {
     from: json.from,
     to: json.to,
-    base: json.from,
+    base,
     realtimeAt: json.realtime?.feedTimestamp ?? null,
     stations,
     stationByKey: new Map(stations.map((s) => [s.key, s])),
     trains,
     trainById: new Map(trains.map((t) => [t.id, t])),
     canceled,
+    geometries,
     exaggeration: -1,
     pathVersion: 0,
+  };
+}
+
+/** Chemin d'un train sur les voies et heure de passage en chaque point (profil de vitesse). */
+function computeGeometry(
+  api: ApiTrain,
+  first: number,
+  stops: Station[],
+  dep: number[],
+  arr: number[],
+  tracks: Track[],
+  family: Family,
+  base: number,
+): TrainGeometry {
+  // Chemin complet : pour chaque tronçon, les points de voie avec leur heure de passage,
+  // selon un profil de vitesse réaliste (accélération, vitesse de la ligne, freinage).
+  const running = { ...RUNNING[family], vmax: VMAX_BY_CATEGORY[api.category] ?? RUNNING[family].vmax };
+  const lon: number[] = [];
+  const myList: number[] = [];
+  const z: number[] = [];
+  const times: number[] = [];
+  const speeds: number[] = [];
+  const limits: number[] = [];
+  const stopVertex = [0];
+  let realLength = 0;
+  let totalLength = 0;
+  for (let i = 0; i + 1 < stops.length; i++) {
+    const ref = api.tracks?.[first + i] ?? 0;
+    const vertices = intervalVertices(ref, tracks, stops[i]!, stops[i + 1]!);
+    const leave = dep[i] ?? 0;
+    const reach = arr[i + 1] ?? leave;
+    const length = vertices.along[vertices.along.length - 1] ?? 0;
+    totalLength += length;
+    if (vertices.real) realLength += length;
+    const profiled = profileInterval(vertices, leave, reach, running);
+    for (let k = 0; k < profiled.lon.length; k++) {
+      lon.push(profiled.lon[k]!);
+      myList.push(profiled.my[k]!);
+      z.push(profiled.z[k]!);
+      times.push(profiled.times[k]!);
+      speeds.push(profiled.speeds[k]!);
+      limits.push(profiled.limits[k]!);
+    }
+    stopVertex.push(lon.length - 1);
+  }
+
+  const count = lon.length;
+  const my = Float64Array.from(myList);
+  const lonArray = Float64Array.from(lon);
+  // Cap de chaque sommet : celui du premier tronçon de longueur non nulle qui en part.
+  const angles = new Float32Array(count);
+  let nextAngle = 0;
+  for (let k = count - 1; k >= 0; k--) {
+    if (k + 1 < count && (lonArray[k + 1] !== lonArray[k] || my[k + 1] !== my[k])) {
+      nextAngle = heading(lonArray[k]!, my[k]!, lonArray[k + 1]!, my[k + 1]!);
+    }
+    angles[k] = nextAngle;
+  }
+
+  return {
+    onTracks: totalLength > 0 ? realLength / totalLength : 0,
+    lon: lonArray,
+    my,
+    zRail: Float32Array.from(z),
+    times: Float64Array.from(times),
+    speeds: Float32Array.from(speeds),
+    limits: Float32Array.from(limits),
+    angles,
+    stopVertex,
+    flatPath: new Float64Array(count * 3),
+    timestamps: Float32Array.from(times, (t) => t - base),
+    pathExaggeration: -1,
   };
 }
 
 // --- Calculs à l'instant t ---
 
 /** Altitude affichée d'un sommet : celle du rail × exagération du relief, sinon celle du relief affiché. */
-function displayedZ(train: Train, k: number, terrain: TerrainSampler): number {
-  const rail = train.zRail[k]!;
+function displayedZ(geometry: TrainGeometry, k: number, terrain: TerrainSampler): number {
+  const rail = geometry.zRail[k]!;
   if (terrain.exaggeration === 0) return 0;
   if (!Number.isNaN(rail)) return rail * terrain.exaggeration;
-  return terrain.elevation(train.lon[k]!, latitudeFromMercatorY(train.my[k]!));
+  return terrain.elevation(geometry.lon[k]!, latitudeFromMercatorY(geometry.my[k]!));
 }
 
-/** Recalcule les sommets de la traînée quand l'exagération du relief change (activation, désactivation). */
+/** Calcule les sommets de la traînée des nouveaux chemins, ou de tous si l'exagération du relief a changé. */
 function refreshPaths(data: TrainsData, terrain: TerrainSampler): void {
   if (data.exaggeration === terrain.exaggeration) return;
-  for (const train of data.trains) {
-    for (let k = 0; k < train.lon.length; k++) {
-      train.flatPath[k * 3] = train.lon[k]!;
-      train.flatPath[k * 3 + 1] = latitudeFromMercatorY(train.my[k]!);
-      train.flatPath[k * 3 + 2] = displayedZ(train, k, terrain);
+  for (const geometry of data.geometries) {
+    if (geometry.pathExaggeration === terrain.exaggeration) continue;
+    for (let k = 0; k < geometry.lon.length; k++) {
+      geometry.flatPath[k * 3] = geometry.lon[k]!;
+      geometry.flatPath[k * 3 + 1] = latitudeFromMercatorY(geometry.my[k]!);
+      geometry.flatPath[k * 3 + 2] = displayedZ(geometry, k, terrain);
     }
+    geometry.pathExaggeration = terrain.exaggeration;
   }
   data.exaggeration = terrain.exaggeration;
   data.pathVersion++;
@@ -524,11 +760,9 @@ function updateHead(train: Train, t: number): boolean {
   head.position[1] = latitudeFromMercatorY(train.my[k]! + (train.my[k + 1]! - train.my[k]!) * f);
   head.position[2] = flat[k * 3 + 2]! + (flat[(k + 1) * 3 + 2]! - flat[k * 3 + 2]!) * f;
   head.angle = train.angles[k]!;
-  // Vitesse moyenne sur la portion en cours (nulle à quai : les deux sommets coïncident).
-  const lat0 = latitudeFromMercatorY(train.my[k]!);
-  const lat1 = latitudeFromMercatorY(train.my[k + 1]!);
-  const meters = Math.hypot((train.lon[k + 1]! - train.lon[k]!) * Math.cos(lat0 * DEG) * 111_320, (lat1 - lat0) * 110_540);
-  head.speed = t1 > t0 ? (meters / (t1 - t0)) * 3.6 : 0;
+  // Vitesse estimée (profil de marche) et vitesse maximale de la ligne à cet endroit.
+  head.speed = train.speeds[k]! + (train.speeds[k + 1]! - train.speeds[k]!) * f;
+  head.limit = train.limits[k]!;
 
   // Arrêt en cours ou prochain, et retard à cet instant (pour la fiche et la couleur).
   const { arr, dep } = train;
@@ -670,7 +904,8 @@ function describeTrain(train: Train, t: number): InfoContent {
     fields.push(['État', t < departure ? `départ à ${hhmm(departure)}` : `arrivé à ${hhmm(train.arr[last])}`]);
   } else {
     fields.push(['Retard', delayText(head.delay)]);
-    fields.push(['Vitesse', head.atStop !== null ? 'à quai' : `≈ ${Math.round(head.speed)} km/h (moyenne estimée)`]);
+    fields.push(['Vitesse', head.atStop !== null ? 'à quai' : `≈ ${Math.round(head.speed)} km/h (estimée)`]);
+    if (head.atStop === null && head.limit > 0) fields.push(['Vitesse autorisée', `${head.limit} km/h`]);
     if (head.atStop !== null && head.atStop < last) {
       fields.push(['À quai', `${train.stations[head.atStop]!.name}, départ ${hhmm(train.dep[head.atStop])}`]);
     } else if (head.nextStop !== null) {

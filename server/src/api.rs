@@ -51,8 +51,9 @@ struct TrainsResponse<'a> {
     realtime: Option<RealtimeInfo>,
     /// Gares utilisées par les trains ci-dessous (les trains y renvoient par indice).
     stations: Vec<StationOut<'a>>,
-    /// Tracés sur les voies, au format « polyline » de Google étendu à l'altitude :
-    /// triplets (latitude × 10⁵, longitude × 10⁵, altitude en m), chacun codé en écart avec le précédent.
+    /// Tracés sur les voies, au format « polyline » de Google étendu : quadruplets
+    /// (latitude × 10⁵, longitude × 10⁵, altitude en m, vitesse maximale en km/h de la portion
+    /// qui part du point, 0 si inconnue), chacun codé en écart avec le précédent.
     tracks: Vec<String>,
     trains: Vec<TrainOut<'a>>,
 }
@@ -166,7 +167,7 @@ fn trains_json(
                 };
                 let local = *track_ids.entry(segment).or_insert_with(|| {
                     let s = &tracks.expect("tracés présents").segments[segment as usize];
-                    encoded_tracks.push(encode_track(&s.points, &s.heights));
+                    encoded_tracks.push(encode_track(&s.points, &s.heights, &s.limits));
                     encoded_tracks.len() as i32
                 });
                 if reversed { -local } else { local }
@@ -206,11 +207,11 @@ fn trains_json(
 
 /// Code un tracé au format « polyline » (voir `TrainsResponse::tracks`) : chaque valeur
 /// est l'écart avec le point précédent, écrit en caractères imprimables par paquets de 5 bits.
-fn encode_track(points: &[(f64, f64)], heights: &[f32]) -> String {
-    let mut out = String::with_capacity(points.len() * 10);
-    let mut previous = [0i64; 3];
-    for (&(lon, lat), &height) in points.iter().zip(heights) {
-        let current = [(lat * 1e5).round() as i64, (lon * 1e5).round() as i64, height.round() as i64];
+fn encode_track(points: &[(f64, f64)], heights: &[f32], limits: &[u16]) -> String {
+    let mut out = String::with_capacity(points.len() * 11);
+    let mut previous = [0i64; 4];
+    for ((&(lon, lat), &height), &limit) in points.iter().zip(heights).zip(limits) {
+        let current = [(lat * 1e5).round() as i64, (lon * 1e5).round() as i64, height.round() as i64, i64::from(limit)];
         for (value, last) in current.iter().zip(previous.iter_mut()) {
             encode_value(value - *last, &mut out);
             *last = *value;

@@ -88,6 +88,8 @@ pub struct RailGraph {
     targets: Vec<u32>,
     lengths: Vec<f32>,
     structures: Vec<Structure>,
+    /// Vitesse maximale de chaque arête en km/h (0 : inconnue), d'après la balise OSM `maxspeed`.
+    speeds: Vec<u16>,
     /// Index spatial : sommets par case de grille.
     grid: HashMap<(i32, i32), Vec<u32>>,
     /// Nombre de sommets du réseau connexe de chaque sommet.
@@ -116,6 +118,8 @@ pub struct RailPath {
     pub nodes: Vec<u32>,
     /// Ouvrage de chaque arête (`nodes.len() - 1` valeurs).
     pub structures: Vec<Structure>,
+    /// Vitesse maximale de chaque arête en km/h (0 : inconnue).
+    pub speeds: Vec<u16>,
     pub length_m: f64,
 }
 
@@ -204,13 +208,15 @@ impl RailGraph {
             node = parent;
         }
         nodes.reverse();
-        let structures = nodes.windows(2).map(|pair| self.structure_between(pair[0], pair[1])).collect();
-        RailPath { nodes, structures, length_m }
+        let edges: Vec<Option<usize>> = nodes.windows(2).map(|pair| self.edge_between(pair[0], pair[1])).collect();
+        let structures = edges.iter().map(|e| e.map_or(Structure::None, |e| self.structures[e])).collect();
+        let speeds = edges.iter().map(|e| e.map_or(0, |e| self.speeds[e])).collect();
+        RailPath { nodes, structures, speeds, length_m }
     }
 
-    fn structure_between(&self, a: u32, b: u32) -> Structure {
+    fn edge_between(&self, a: u32, b: u32) -> Option<usize> {
         let (start, end) = (self.offsets[a as usize] as usize, self.offsets[a as usize + 1] as usize);
-        (start..end).find(|&e| self.targets[e] == b).map_or(Structure::None, |e| self.structures[e])
+        (start..end).find(|&e| self.targets[e] == b)
     }
 }
 
@@ -390,11 +396,19 @@ struct Element {
 
 #[derive(Deserialize, Default)]
 struct Tags {
+    maxspeed: Option<String>,
     tunnel: Option<String>,
     bridge: Option<String>,
 }
 
 impl Tags {
+    /// « 160 », « 160 km/h », « 220;160 »… : on garde le premier nombre.
+    fn maxspeed(&self) -> u16 {
+        let text = self.maxspeed.as_deref().unwrap_or_default();
+        let digits: String = text.chars().skip_while(|c| !c.is_ascii_digit()).take_while(char::is_ascii_digit).collect();
+        digits.parse().unwrap_or(0)
+    }
+
     fn structure(&self) -> Structure {
         let yes = |v: &Option<String>| v.as_deref().is_some_and(|v| v != "no");
         if yes(&self.tunnel) {
@@ -412,7 +426,7 @@ pub fn load(dir: &Path) -> Result<RailGraph> {
     let mut index: HashMap<i64, u32> = HashMap::new();
     let mut lon = Vec::new();
     let mut lat = Vec::new();
-    let mut ways: Vec<(Vec<i64>, Structure)> = Vec::new();
+    let mut ways: Vec<(Vec<i64>, Structure, u16)> = Vec::new();
     let mut seen_ways = HashSet::new();
 
     for download in downloads() {
@@ -428,23 +442,25 @@ pub fn load(dir: &Path) -> Result<RailGraph> {
                         (lon.len() - 1) as u32
                     });
                 }
-                Kind::Way if seen_ways.insert(element.id) => ways.push((element.nodes, element.tags.structure())),
+                Kind::Way if seen_ways.insert(element.id) => {
+                    ways.push((element.nodes, element.tags.structure(), element.tags.maxspeed()));
+                }
                 _ => {}
             }
         }
     }
 
     // Arêtes dans les deux sens (les voies se parcourent dans les deux sens).
-    let mut edges: Vec<(u32, u32, f32, Structure)> = Vec::new();
-    for (nodes, structure) in &ways {
+    let mut edges: Vec<(u32, u32, f32, Structure, u16)> = Vec::new();
+    for (nodes, structure, speed) in &ways {
         for pair in nodes.windows(2) {
             let (Some(&a), Some(&b)) = (index.get(&pair[0]), index.get(&pair[1])) else { continue };
             if a == b {
                 continue;
             }
             let length = distance_m(lon[a as usize], lat[a as usize], lon[b as usize], lat[b as usize]) as f32;
-            edges.push((a, b, length, *structure));
-            edges.push((b, a, length, *structure));
+            edges.push((a, b, length, *structure, *speed));
+            edges.push((b, a, length, *structure, *speed));
         }
     }
     edges.sort_unstable_by_key(|e| e.0);
@@ -459,6 +475,7 @@ pub fn load(dir: &Path) -> Result<RailGraph> {
     let targets = edges.iter().map(|e| e.1).collect();
     let lengths = edges.iter().map(|e| e.2).collect();
     let structures = edges.iter().map(|e| e.3).collect();
+    let speeds = edges.iter().map(|e| e.4).collect();
 
     // Les gares ne s'accrochent qu'aux grands réseaux connexes : un bout de voie isolé
     // (voie à quai dont les aiguillages sont classés « garage », par exemple) mènerait
@@ -478,14 +495,14 @@ pub fn load(dir: &Path) -> Result<RailGraph> {
     }
 
     info!(points = lon.len(), troncons = ways.len(), points_isoles = isolated, "graphe des voies prêt");
-    Ok(RailGraph { lon, lat, offsets, targets, lengths, structures, grid, component_size })
+    Ok(RailGraph { lon, lat, offsets, targets, lengths, structures, speeds, grid, component_size })
 }
 
 /// Taille minimale d'un réseau connexe pour qu'une gare puisse s'y accrocher.
 pub const MIN_COMPONENT_NODES: u32 = 100;
 
 /// Pour chaque sommet, le nombre de sommets de son réseau connexe (union-find).
-fn component_sizes(count: usize, edges: &[(u32, u32, f32, Structure)]) -> Vec<u32> {
+fn component_sizes(count: usize, edges: &[(u32, u32, f32, Structure, u16)]) -> Vec<u32> {
     let mut parent: Vec<u32> = (0..count as u32).collect();
     fn find(parent: &mut [u32], mut node: u32) -> u32 {
         while parent[node as usize] != node {

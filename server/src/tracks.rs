@@ -30,6 +30,8 @@ pub struct Segment {
     pub points: Vec<(f64, f64)>,
     /// Altitude du rail en chaque point, en mètres.
     pub heights: Vec<f32>,
+    /// Vitesse maximale (km/h, 0 : inconnue) de la portion qui part de chaque point vers le suivant.
+    pub limits: Vec<u16>,
 }
 
 pub struct Tracks {
@@ -73,6 +75,7 @@ struct Routed {
     pair: (u32, u32),
     points: Vec<(f64, f64)>,
     structures: Vec<Structure>,
+    speeds: Vec<u16>,
 }
 
 pub async fn build(http: &reqwest::Client, data_dir: &Path, timetable: &std::sync::Arc<Timetable>) -> Result<Tracks> {
@@ -106,7 +109,7 @@ pub async fn build(http: &reqwest::Client, data_dir: &Path, timetable: &std::syn
             });
             let Some(path) = path else { continue };
             let points = path.nodes.iter().map(|&n| (graph.lon[n as usize], graph.lat[n as usize])).collect();
-            routed.push(Routed { pair: (a, b), points, structures: path.structures });
+            routed.push(Routed { pair: (a, b), points, structures: path.structures, speeds: path.speeds });
         }
         Ok(routed)
     })
@@ -131,15 +134,26 @@ pub async fn build(http: &reqwest::Client, data_dir: &Path, timetable: &std::syn
         let mut route_heights = heights[offset..offset + count].to_vec();
         offset += count;
         smooth_structures(&route.points, &mut route_heights, &route.structures);
-        let kept = simplify(&route.points, SIMPLIFY_M);
+        // Vitesse de la portion qui part de chaque point (le dernier reprend la précédente).
+        let limits: Vec<u16> = (0..count).map(|i| route.speeds[i.min(count - 2)]).collect();
+        // On garde toujours les points où la vitesse change : chaque portion simplifiée a une seule vitesse.
+        let must_keep: Vec<bool> = (0..count).map(|i| i > 0 && limits[i] != limits[i - 1]).collect();
+        let kept = simplify(&route.points, SIMPLIFY_M, &must_keep);
         kept_points += kept.len();
         by_pair.insert(route.pair, segments.len() as u32);
         segments.push(Segment {
             points: kept.iter().map(|&i| route.points[i]).collect(),
             heights: kept.iter().map(|&i| route_heights[i]).collect(),
+            limits: kept.iter().map(|&i| limits[i]).collect(),
         });
     }
-    info!(points = kept_points, duree_s = started.elapsed().as_secs(), "tracés des trains prêts");
+    let known = segments.iter().flat_map(|s| &s.limits).filter(|&&l| l > 0).count();
+    info!(
+        points = kept_points,
+        vitesse_connue_pct = known * 100 / kept_points.max(1),
+        duree_s = started.elapsed().as_secs(),
+        "tracés des trains prêts"
+    );
     Ok(Tracks { timetable_id: timetable.id, segments, by_pair, pair_count })
 }
 
@@ -183,8 +197,9 @@ fn smooth_structures(points: &[(f64, f64)], heights: &mut [f32], structures: &[S
 }
 
 /// Algorithme de Douglas-Peucker : garde les points qui s'écartent de plus de
-/// `tolerance_m` de la ligne droite entre leurs voisins gardés. Renvoie leurs indices.
-fn simplify(points: &[(f64, f64)], tolerance_m: f64) -> Vec<usize> {
+/// `tolerance_m` de la ligne droite entre leurs voisins gardés, plus ceux marqués dans
+/// `must_keep`. Renvoie leurs indices.
+fn simplify(points: &[(f64, f64)], tolerance_m: f64, must_keep: &[bool]) -> Vec<usize> {
     if points.len() <= 2 {
         return (0..points.len()).collect();
     }
@@ -192,10 +207,12 @@ fn simplify(points: &[(f64, f64)], tolerance_m: f64) -> Vec<usize> {
     let cos_lat = points[0].1.to_radians().cos();
     let xy: Vec<(f64, f64)> = points.iter().map(|&(lon, lat)| (lon * cos_lat * 111_320.0, lat * 110_540.0)).collect();
 
-    let mut keep = vec![false; points.len()];
+    let mut keep: Vec<bool> = (0..points.len()).map(|i| must_keep.get(i).copied().unwrap_or(false)).collect();
     keep[0] = true;
     keep[points.len() - 1] = true;
-    let mut stack = vec![(0, points.len() - 1)];
+    // Chaque intervalle entre deux points imposés est simplifié séparément.
+    let anchors: Vec<usize> = keep.iter().enumerate().filter_map(|(i, &k)| k.then_some(i)).collect();
+    let mut stack: Vec<(usize, usize)> = anchors.windows(2).map(|w| (w[0], w[1])).collect();
     while let Some((first, last)) = stack.pop() {
         let (ax, ay) = xy[first];
         let (bx, by) = xy[last];
@@ -229,10 +246,12 @@ mod tests {
     fn simplification_garde_les_virages() {
         // Une ligne droite avec un coude de 50 m au milieu.
         let points = [(2.0, 48.0), (2.001, 48.0), (2.002, 48.0005), (2.003, 48.0), (2.004, 48.0)];
-        assert_eq!(simplify(&points, 2.5), vec![0, 1, 2, 3, 4]);
+        assert_eq!(simplify(&points, 2.5, &[]), vec![0, 1, 2, 3, 4]);
         // Les points alignés disparaissent.
         let straight = [(2.0, 48.0), (2.001, 48.0), (2.002, 48.0), (2.003, 48.0)];
-        assert_eq!(simplify(&straight, 2.5), vec![0, 3]);
+        assert_eq!(simplify(&straight, 2.5, &[]), vec![0, 3]);
+        // Un point imposé (changement de vitesse) reste, même aligné.
+        assert_eq!(simplify(&straight, 2.5, &[false, true, false, false]), vec![0, 1, 3]);
     }
 
     #[test]

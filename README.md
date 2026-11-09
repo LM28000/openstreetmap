@@ -98,14 +98,21 @@ Options utiles :
 
 1. Le serveur charge les horaires théoriques (52 000 trajets) et interroge le temps réel SNCF toutes les 30 secondes.
 2. Pour chaque paire de gares consécutives, il cherche le chemin sur les voies OSM : c'est un plus court chemin sur un graphe d'environ un million de points (A*). Il attribue ensuite à chaque point l'altitude du relief. Sur les ponts et dans les tunnels, une pente régulière remplace le sol, qui n'y est pas à la hauteur du rail.
-3. Le site demande les trains de quelques heures autour de l'instant affiché. À chaque image, il calcule la position de chaque train le long de son tracé, en supposant une vitesse constante entre deux gares.
-4. Si un tronçon n'a pas de tracé (voie absente d'OSM, gare trop loin d'une voie), le train y va en ligne droite. La fiche du train l'indique.
+3. Le site demande les trains de quelques heures autour de l'instant affiché. Pour chaque tronçon entre deux gares, il calcule un **profil de vitesse** : le train accélère au départ, roule à la vitesse permise de la voie (balise OSM `maxspeed`, connue pour 96 % des points), sans dépasser celle de son matériel (320 km/h en grande vitesse, 200 en Intercités, 160 en TER), puis freine avant la gare. Ce profil « au plus vite » est ensuite étiré pour tomber pile sur l'horaire, réel ou prévu, car les horaires comportent toujours une marge.
+4. À chaque image, le site place chaque train le long de son tracé selon ce profil, et le dessine dans son sens de marche.
+5. Si un tronçon n'a pas de tracé (voie absente d'OSM, gare trop loin d'une voie), le train y va en ligne droite. La fiche du train l'indique.
+
+La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la position GPS de ses trains en open data.
+
+**Clic sur un train** : tout son trajet est surligné, avec la partie déjà faite en gris. Sa fiche liste les arrêts avec leurs horaires et retards, et donne la vitesse estimée et la vitesse autorisée de la ligne. Le bouton « Suivre » fait suivre le train par la caméra ; déplacer la carte arrête le suivi.
+
+**Clic sur une gare** (visibles à partir du zoom 8,5) : son tableau des départs et des arrivées, trains supprimés compris. Chaque ligne d'un tableau mène au train ou à la gare correspondante.
 
 ## Couches disponibles
 
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
-| Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards. Couleur par type ou par retard. | SNCF, OpenStreetMap |
+| Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Jour et nuit | L'ombre de la nuit et des crépuscules. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 
@@ -135,7 +142,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 | Phase | Contenu |
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
-| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude, couleur par type ou par retard. Reste : caméra qui suit un train, archivage sur le serveur maison, réponse plus légère |
+| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. Reste : archivage sur le serveur maison, réponse plus légère (à chaque rafraîchissement du temps réel, une image de ~150 ms le temps que deck.gl renvoie les traînées à la carte graphique) |
 | 2. Couches rapides | Carburants, rivières, qualité de l'air, incendies, vélos, réseau électrique |
 | 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |

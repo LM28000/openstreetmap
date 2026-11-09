@@ -12,7 +12,7 @@
  */
 import type { CanvasSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { DAY_SKY, firstSymbolLayerId } from '../map/baseMap';
 import { subsolarPoint, sunPosition } from './solar';
 
 const SIZE = 512;
@@ -23,8 +23,9 @@ const DEG = Math.PI / 180;
 const MAX_LAT = 85.051129;
 /** En dessous de ce zoom, on calcule le monde entier ; au-dessus, la zone autour de la vue. */
 const WORLD_MAX_ZOOM = 6;
-const NIGHT_COLOR = [8, 12, 38] as const;
-const MAX_OPACITY = 0.62;
+const NIGHT_COLOR = [12, 20, 56] as const;
+/** Assez sombre pour sentir la nuit, assez léger pour garder le relief et les bâtiments lisibles. */
+const MAX_OPACITY = 0.42;
 
 interface Box {
   west: number;
@@ -114,26 +115,44 @@ function toCoordinates(box: Box): [[number, number], [number, number], [number, 
  */
 const DAY_LIGHT = [255, 255, 255];
 const DUSK_LIGHT = [255, 190, 135];
-const NIGHT_LIGHT = [52, 62, 108];
+/** Clair de lune bleuté : assez lumineux pour que les faces des bâtiments restent distinctes. */
+const NIGHT_LIGHT = [118, 132, 186];
 const DEFAULT_LIGHT = { anchor: 'viewport', color: 'white', intensity: 0.5, position: [1.15, 210, 30] } as const;
+
+/** Couleurs du ciel : jour (celles du fond de carte) → nuit. */
+const SKY_DAY = { sky: [61, 111, 182], horizon: [207, 224, 243], fog: [230, 237, 245] };
+const SKY_NIGHT = { sky: [11, 18, 44], horizon: [44, 58, 98], fog: [52, 64, 104] };
 
 function mix(a: number[], b: number[], t: number): string {
   const c = a.map((value, i) => Math.round(value + ((b[i] ?? value) - value) * t));
   return `rgb(${c.join(', ')})`;
 }
 
+const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
+
+/** Éclairage des bâtiments et couleur du ciel selon le soleil au centre de la vue. */
 function applySunLight(map: MapLibreMap, time: number): void {
   const center = map.getCenter();
   const { elevation, azimuth } = sunPosition(center.lat, center.lng, time);
-  const clamp = (v: number) => Math.min(1, Math.max(0, v));
   const color =
-    elevation >= 0 ? mix(DAY_LIGHT, DUSK_LIGHT, clamp((8 - elevation) / 8)) : mix(DUSK_LIGHT, NIGHT_LIGHT, clamp(-elevation / 8));
+    elevation >= 0
+      ? mix(DAY_LIGHT, DUSK_LIGHT, clamp01((8 - elevation) / 8))
+      : mix(DUSK_LIGHT, NIGHT_LIGHT, clamp01(-elevation / 8));
   map.setLight({
     anchor: 'map', // la direction est relative au nord, comme le soleil
     color,
-    intensity: 0.4,
-    // [distance, direction depuis le nord, angle depuis le zénith] ; la nuit, lumière diffuse d'en haut
-    position: elevation > 0 ? [1.15, azimuth, Math.min(85, 90 - elevation)] : [1.15, 210, 30],
+    intensity: 0.45,
+    // [distance, direction depuis le nord, angle depuis le zénith] ; la nuit, lumière diffuse de biais
+    position: elevation > 0 ? [1.15, azimuth, Math.min(85, 90 - elevation)] : [1.15, 210, 40],
+  });
+
+  // Le ciel bascule pendant les crépuscules, entre +4° et -12° de hauteur du soleil.
+  const night = clamp01((4 - elevation) / 16);
+  map.setSky({
+    ...DAY_SKY,
+    'sky-color': mix(SKY_DAY.sky, SKY_NIGHT.sky, night),
+    'horizon-color': mix(SKY_DAY.horizon, SKY_NIGHT.horizon, night),
+    'fog-color': mix(SKY_DAY.fog, SKY_NIGHT.fog, night),
   });
 }
 
@@ -197,6 +216,7 @@ export const dayNight = defineModule<undefined>({
       if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
       map.setLight({ ...DEFAULT_LIGHT, position: [...DEFAULT_LIGHT.position] });
+      map.setSky(DAY_SKY);
     },
   },
 });

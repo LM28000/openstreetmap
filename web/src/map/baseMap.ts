@@ -2,7 +2,7 @@
  * Fond de carte : style OpenStreetMap (OpenFreeMap), globe, relief 3D,
  * ombrage des reliefs et atmosphère.
  */
-import type { Map as MapLibreMap, RasterDEMSourceSpecification } from 'maplibre-gl';
+import type { Map as MapLibreMap, RasterDEMSourceSpecification, SkySpecification } from 'maplibre-gl';
 
 /** Style OSM gratuit, sans clé, avec bâtiments 3D. © OpenMapTiles © OpenStreetMap. */
 export const BASE_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
@@ -31,6 +31,18 @@ const DEM_SOURCE: RasterDEMSourceSpecification = {
   attribution: '<a href="https://mapterhorn.com/attribution" target="_blank" rel="noreferrer">© Mapterhorn</a>',
 };
 
+/** Ciel de jour. Le module « Jour et nuit » l'assombrit selon la position du soleil. */
+export const DAY_SKY: SkySpecification = {
+  'sky-color': '#3d6fb6',
+  'horizon-color': '#cfe0f3',
+  'fog-color': '#e6edf5',
+  'sky-horizon-blend': 0.5,
+  'horizon-fog-blend': 0.6,
+  'fog-ground-blend': 0.7,
+  // Halo d'atmosphère autour du globe, qui s'efface quand on zoome.
+  'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 8, 0],
+};
+
 /** À appeler à chaque chargement de style. */
 export function setupBaseMap(map: MapLibreMap): void {
   map.setProjection({ type: 'globe' });
@@ -47,9 +59,10 @@ export function setupBaseMap(map: MapLibreMap): void {
         type: 'hillshade',
         source: HILLSHADE_SOURCE,
         paint: {
-          'hillshade-exaggeration': 0.35,
-          'hillshade-shadow-color': 'rgba(60, 48, 36, 0.55)',
-          'hillshade-highlight-color': 'rgba(255, 255, 255, 0.18)',
+          // Assez marqué pour lire le relief même sous l'ombre de la nuit.
+          'hillshade-exaggeration': 0.5,
+          'hillshade-shadow-color': 'rgba(45, 36, 28, 0.65)',
+          'hillshade-highlight-color': 'rgba(255, 255, 255, 0.25)',
         },
       },
       // Au-dessus de la végétation, sous l'eau et les routes.
@@ -59,16 +72,7 @@ export function setupBaseMap(map: MapLibreMap): void {
 
   map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
 
-  map.setSky({
-    'sky-color': '#3d6fb6',
-    'horizon-color': '#cfe0f3',
-    'fog-color': '#e6edf5',
-    'sky-horizon-blend': 0.5,
-    'horizon-fog-blend': 0.6,
-    'fog-ground-blend': 0.7,
-    // Halo d'atmosphère autour du globe, qui s'efface quand on zoome.
-    'atmosphere-blend': ['interpolate', ['linear'], ['zoom'], 0, 1, 5, 1, 8, 0],
-  });
+  map.setSky(DAY_SKY);
 }
 
 /** Première couche de texte : on insère nos couches dessous pour garder les noms lisibles. */

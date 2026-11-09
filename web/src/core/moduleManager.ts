@@ -7,7 +7,7 @@
  */
 import type { Layer, LayersList } from '@deck.gl/core';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import type { LayerModule, RenderContext, TerrainSampler } from './module';
+import type { InfoContent, LayerModule, RenderContext, TerrainSampler } from './module';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -38,6 +38,14 @@ interface Entry {
   nativeAdded: boolean;
 }
 
+/** L'objet sélectionné (un seul pour toute la carte), et si la caméra le suit. */
+export interface Selection {
+  moduleId: string;
+  /** Valeur renvoyée par `module.select` (ex. `{ type: 'train', id }`). */
+  value: unknown;
+  following: boolean;
+}
+
 const VISIBILITY_KEY = 'carte-vivante:couches-visibles';
 const SETTINGS_KEY = 'carte-vivante:reglages';
 /** Après un échec, délai avant de retenter un rechargement déclenché par un saut dans le temps. */
@@ -57,6 +65,7 @@ export class ModuleManager {
   /** Dernier instant simulé vu par `frame` (les chargements s'en servent). */
   private currentTime = Date.now();
   private lastSummaryAt = 0;
+  private selection: Selection | null = null;
   private readonly terrain: TerrainSampler = {
     elevation: (lon, lat) => this.map?.queryTerrainElevation([lon, lat]) ?? 0,
     exaggeration: 0,
@@ -91,6 +100,53 @@ export class ModuleManager {
 
   getSnapshot = (): Readonly<Record<string, ModuleRuntimeState>> => this.snapshot;
 
+  getSelection = (): Selection | null => this.selection;
+
+  // --- Sélection ---
+
+  /** Clic sur un objet deck.gl : le module propriétaire décide quoi sélectionner. */
+  pick(layerId: string | undefined, object: unknown): void {
+    const module = layerId ? this.layerOwners.get(layerId) : undefined;
+    const value = module && object != null ? module.select?.(object) : null;
+    this.setSelection(module && value != null ? module.id : null, value ?? null);
+  }
+
+  /** Sélectionne une valeur d'un module (ex. une ligne cliquée dans une fiche), ou rien. */
+  setSelection(moduleId: string | null, value: unknown): void {
+    const previous = this.selection;
+    this.selection = moduleId && value != null ? { moduleId, value, following: false } : null;
+    for (const id of [previous?.moduleId, moduleId]) {
+      const entry = id ? this.entries.get(id) : undefined;
+      if (entry) entry.version++; // redessiner : la sélection est mise en évidence
+    }
+    this.notify();
+  }
+
+  setFollowing(following: boolean): void {
+    if (!this.selection || this.selection.following === following) return;
+    this.selection = { ...this.selection, following };
+    this.notify();
+  }
+
+  /** Fiche de la sélection à l'instant t, ou `null` si elle n'existe plus. */
+  describeSelection(time: number): { moduleName: string; content: InfoContent; canFollow: boolean } | null {
+    const found = this.selectedEntry();
+    if (!found) return null;
+    const { entry, selection } = found;
+    const ctx = this.context(entry, time);
+    const content = entry.module.describe?.(selection.value, ctx);
+    // « Suivre » n'a de sens que pour ce qui a une position à suivre (un train, pas une gare).
+    const canFollow = entry.module.focus?.(selection.value, ctx) != null;
+    return content ? { moduleName: entry.module.name, content, canFollow } : null;
+  }
+
+  /** Position à suivre (si la caméra suit la sélection). */
+  followTarget(time: number): { lon: number; lat: number } | null {
+    const found = this.selectedEntry();
+    if (!found?.selection.following) return null;
+    return found.entry.module.focus?.(found.selection.value, this.context(found.entry, time)) ?? null;
+  }
+
   // --- Cycle de vie ---
 
   /** Branche la carte (style chargé) et active les modules visibles. */
@@ -112,6 +168,7 @@ export class ModuleManager {
     if (!entry || this.isVisible(entry) === visible) return;
     this.patch(id, { visible });
     writeStorage(VISIBILITY_KEY, mapValues(this.snapshot, (state) => state.visible));
+    if (!visible && this.selection?.moduleId === id) this.setSelection(null, null);
     if (!this.map) return;
     if (visible) this.activate(entry);
     else this.deactivate(entry);
@@ -160,7 +217,7 @@ export class ModuleManager {
       const state = this.snapshot[entry.module.id];
       if (!state?.visible) continue;
       const { module } = entry;
-      const ctx: RenderContext<unknown> = { data: entry.data, time, terrain: this.terrain, settings: state.settings };
+      const ctx = this.context(entry, time);
 
       // Saut dans le temps hors de la période chargée : on recharge (sans s'acharner en cas d'échec).
       if (
@@ -207,6 +264,28 @@ export class ModuleManager {
   }
 
   // --- Interne ---
+
+  private context(entry: Entry, time: number): RenderContext<unknown> {
+    const selection = this.selection?.moduleId === entry.module.id ? this.selection.value : null;
+    return {
+      data: entry.data,
+      time,
+      terrain: this.terrain,
+      settings: this.snapshot[entry.module.id]?.settings ?? {},
+      selection,
+      view: { zoom: this.map?.getZoom() ?? 0 },
+    };
+  }
+
+  private selectedEntry(): { entry: Entry; selection: Selection } | null {
+    const selection = this.selection;
+    const entry = selection ? this.entries.get(selection.moduleId) : undefined;
+    return selection && entry && this.isVisible(entry) ? { entry, selection } : null;
+  }
+
+  private notify(): void {
+    for (const listener of this.listeners) listener();
+  }
 
   private isVisible(entry: Entry): boolean {
     return this.snapshot[entry.module.id]?.visible ?? false;
@@ -277,7 +356,7 @@ export class ModuleManager {
     const current = this.snapshot[id];
     if (!current) return;
     this.snapshot = { ...this.snapshot, [id]: { ...current, ...patch } };
-    for (const listener of this.listeners) listener();
+    this.notify();
   }
 }
 

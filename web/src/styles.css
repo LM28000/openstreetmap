@@ -327,7 +327,9 @@ button {
 .info {
   top: var(--gutter);
   right: 60px; /* laisse la place aux boutons de la carte */
-  width: 300px;
+  width: 370px;
+  max-height: calc(100% - 190px); /* au-dessus de la frise temporelle */
+  overflow-y: auto;
   padding: 14px 16px 16px;
 }
 
@@ -336,6 +338,116 @@ button {
   align-items: center;
   justify-content: space-between;
   margin-bottom: 6px;
+}
+
+.info__actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.follow-button {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control-bg);
+  font-size: 12.5px;
+  font-weight: 560;
+  cursor: pointer;
+}
+
+.follow-button:hover {
+  background: var(--control-bg-hover);
+}
+
+.follow-button--on {
+  background: var(--accent);
+  color: #fff;
+}
+
+.info__table {
+  margin-top: 16px;
+}
+
+.info__table-title {
+  margin: 0 0 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.info__table table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12.5px;
+}
+
+.info__table th {
+  padding: 4px 6px;
+  color: var(--text-faint);
+  font-weight: 500;
+  text-align: left;
+  border-bottom: 1px solid var(--panel-border);
+}
+
+.info__table td {
+  padding: 5px 6px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.04);
+  font-variant-numeric: tabular-nums;
+  vertical-align: top;
+}
+
+.info__table td:first-child,
+.info__table th:first-child {
+  padding-left: 0;
+  white-space: nowrap;
+}
+
+.info__table td:last-child,
+.info__table th:last-child {
+  padding-right: 0;
+  text-align: right;
+  white-space: nowrap;
+}
+
+.row--muted td {
+  color: var(--text-faint);
+}
+
+.row--current td {
+  color: var(--text);
+  font-weight: 600;
+}
+
+.row--current td:first-child {
+  box-shadow: inset 3px 0 0 var(--accent);
+  padding-left: 8px;
+}
+
+.row--alert td {
+  color: var(--error);
+}
+
+.row--link {
+  cursor: pointer;
+}
+
+.row--link:hover td {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.row--link:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: -2px;
+}
+
+.info__empty {
+  margin: 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
 }
 
 .info__kicker {

@@ -176,8 +176,14 @@ export const earthquakes = defineModule<Quake[]>({
     ];
   },
 
-  describe(object) {
-    const q = object as Quake;
+  select(object) {
+    return { id: (object as Quake).id };
+  },
+
+  describe(selection, { data }) {
+    const id = (selection as { id: string }).id;
+    const q = data?.find((quake) => quake.id === id);
+    if (!q) return null;
     return {
       title: `Séisme de magnitude ${q.mag.toFixed(1)}`,
       subtitle: titleCase(q.region),
@@ -192,5 +198,11 @@ export const earthquakes = defineModule<Quake[]>({
         label: 'Fiche détaillée sur le site de l’EMSC',
       },
     };
+  },
+
+  focus(selection, { data }) {
+    const id = (selection as { id: string }).id;
+    const q = data?.find((quake) => quake.id === id);
+    return q ? { lon: q.lon, lat: q.lat } : null;
   },
 });

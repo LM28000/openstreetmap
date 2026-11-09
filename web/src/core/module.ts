@@ -41,6 +41,10 @@ export interface RenderContext<TData> {
   terrain: TerrainSampler;
   /** Valeur choisie pour chaque réglage du module (voir `settings`). */
   settings: Readonly<Record<string, string>>;
+  /** Objet sélectionné dans ce module (valeur renvoyée par `select`), sinon `null`. */
+  selection: unknown;
+  /** État de la vue : par exemple pour n'afficher les gares qu'à partir d'un certain zoom. */
+  view: { zoom: number };
 }
 
 export interface LoadContext {
@@ -84,7 +88,25 @@ export interface InfoContent {
   title: string;
   subtitle?: string;
   fields?: Array<[label: string, value: string]>;
+  /** Tableaux : arrêts d'un train, départs d'une gare… */
+  tables?: InfoTable[];
   link?: { href: string; label: string };
+}
+
+export interface InfoTable {
+  title: string;
+  columns: string[];
+  rows: InfoRow[];
+  /** Texte affiché quand le tableau est vide. */
+  empty?: string;
+}
+
+export interface InfoRow {
+  cells: string[];
+  /** `muted` : passé ; `current` : en cours ; `alert` : supprimé. */
+  tone?: 'muted' | 'current' | 'alert';
+  /** Sélection à ouvrir quand on clique sur la ligne (dans le même module). */
+  select?: unknown;
 }
 
 /**
@@ -149,8 +171,15 @@ export interface LayerModule<TData = unknown> {
   deckLayers?(ctx: RenderContext<TData>): LayersList;
   /** Couches MapLibre natives. */
   native?: NativeLayers<TData>;
-  /** Fiche d'un objet cliqué. Renvoie `null` si l'objet n'a rien à montrer. */
-  describe?(object: unknown): InfoContent | null;
+  /**
+   * Objet cliqué → ce qu'il faut en retenir pour le retrouver plus tard, même après
+   * un rechargement des données (par exemple `{ type: 'train', id }`). `null` : rien à sélectionner.
+   */
+  select?(object: unknown): unknown;
+  /** Fiche de la sélection à l'instant t (recalculée en continu). `null` : elle n'existe plus. */
+  describe?(selection: unknown, ctx: RenderContext<TData>): InfoContent | null;
+  /** Position de la sélection à l'instant t, pour que la caméra la suive (`null` : rien à suivre). */
+  focus?(selection: unknown, ctx: RenderContext<TData>): { lon: number; lat: number } | null;
 }
 
 /** Aide au typage : `defineModule<MesDonnées>({ ... })`. */

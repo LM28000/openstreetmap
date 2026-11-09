@@ -1,6 +1,5 @@
-import { useCallback, useState } from 'react';
 import { ModuleManager } from './core/moduleManager';
-import { MapView, type Pick } from './map/MapView';
+import { MapView } from './map/MapView';
 import { MODULES } from './modules';
 import { InfoPanel } from './ui/InfoPanel';
 import { LayerPanel } from './ui/LayerPanel';
@@ -10,14 +9,11 @@ import { TimeBar } from './ui/TimeBar';
 const manager = new ModuleManager(MODULES);
 
 export function App() {
-  const [pick, setPick] = useState<Pick | null>(null);
-  const closeInfo = useCallback(() => setPick(null), []);
-
   return (
     <div className="app">
-      <MapView manager={manager} onPick={setPick} />
+      <MapView manager={manager} />
       <LayerPanel manager={manager} />
-      {pick && <InfoPanel pick={pick} onClose={closeInfo} />}
+      <InfoPanel manager={manager} />
       <TimeBar />
     </div>
   );

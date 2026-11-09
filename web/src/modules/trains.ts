@@ -13,8 +13,8 @@
  */
 import type { Color } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
-import { IconLayer } from '@deck.gl/layers';
-import { defineModule, type TerrainSampler } from '../core/module';
+import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { defineModule, type InfoContent, type InfoTable, type TerrainSampler } from '../core/module';
 import { formatTime } from '../ui/format';
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
 
@@ -67,21 +67,45 @@ interface Track {
 type Family = 'ter' | 'grande-vitesse' | 'intercites';
 type DelayClass = 'inconnu' | 'heure' | 'retard' | 'gros-retard';
 
-interface Train {
+/** Une gare : sa position, et tous les passages de trains (pour son tableau d'affichage). */
+interface Station {
+  /** Identifiant stable d'un chargement à l'autre (nom + position). */
+  key: string;
+  name: string;
+  lon: number;
+  lat: number;
+  visits: Visit[];
+}
+
+/** Le passage d'une circulation à une gare. */
+interface Visit {
+  run: Run;
+  /** Indice de l'arrêt dans `run.stations`. */
+  stop: number;
+}
+
+/** Une circulation : ce qu'il faut pour les fiches et les tableaux, qu'elle roule ou soit supprimée. */
+interface Run {
   id: string;
   number: string;
   category: string;
   family: Family;
   line: string;
-  /** Noms des arrêts desservis, dans l'ordre. */
-  stopNames: string[];
+  /** Arrêts, dans l'ordre (seulement ceux desservis aux extrémités pour un train qui roule). */
+  stations: Station[];
   /** Horaires retenus : réels si connus, sinon prévus (secondes UTC). */
   arr: number[];
   dep: number[];
   plannedArr: number[];
   plannedDep: number[];
   realtime: boolean;
-  skippedCount: number;
+  canceled: boolean;
+  /** Indices (dans `stations`) des arrêts intermédiaires non desservis. */
+  skipped: Set<number>;
+}
+
+/** Un train qui roule : une circulation avec son chemin sur les voies. */
+interface Train extends Run {
   /** Proportion du trajet faite sur un tracé réel (1 = tout sur les voies). */
   onTracks: number;
   // Chemin complet, un sommet par point de voie, avec l'heure de passage.
@@ -93,6 +117,8 @@ interface Train {
   times: Float64Array;
   /** Cap (degrés deck.gl) du premier tronçon non nul partant de chaque sommet. */
   angles: Float32Array;
+  /** Sommet du chemin où se trouve chaque arrêt. */
+  stopVertex: number[];
   /** Pour la traînée : sommets [lon, lat, z] à plat, et horodatages relatifs à `TrainsData.base`. */
   flatPath: Float64Array;
   timestamps: Float32Array;
@@ -110,6 +136,8 @@ interface Head {
   /** Indice de l'arrêt où le train est à quai, sinon `null`. */
   atStop: number | null;
   nextStop: number | null;
+  /** Vitesse moyenne estimée sur la portion en cours, en km/h (0 à quai). */
+  speed: number;
 }
 
 interface TrainsData {
@@ -119,13 +147,19 @@ interface TrainsData {
   /** Origine des horodatages de la traînée : la précision des flottants GPU l'exige. */
   base: number;
   realtimeAt: number | null;
+  stations: Station[];
+  stationByKey: Map<string, Station>;
   trains: Train[];
+  trainById: Map<string, Train>;
   canceled: number;
   /** Exagération du relief appliquée à `flatPath` (−1 : pas encore calculé). */
   exaggeration: number;
   /** Change à chaque recalcul de `flatPath`, pour prévenir deck.gl. */
   pathVersion: number;
 }
+
+/** Ce que l'on retient d'un clic : un train ou une gare, retrouvés par identifiant après chaque rechargement. */
+type TrainsSelection = { type: 'train'; id: string } | { type: 'gare'; key: string };
 
 // --- Apparence (couleurs vérifiées pour le daltonisme, voir README) ---
 
@@ -295,27 +329,51 @@ function intervalVertices(
   };
 }
 
+function stationKey(s: ApiStation): string {
+  return `${s.name}|${s.lon.toFixed(4)}|${s.lat.toFixed(4)}`;
+}
+
 function parse(json: ApiResponse): TrainsData {
   const tracks = (json.tracks ?? []).map(decodeTrack);
+  const stations: Station[] = json.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [] }));
   const trains: Train[] = [];
   let canceled = 0;
 
   for (const api of json.trains) {
+    const family = FAMILY_OF[api.category] ?? 'ter';
+    const common = { id: api.id, number: api.number, category: api.category, family, line: api.line };
+
     if (api.canceled) {
+      // Un train supprimé ne roule pas, mais figure (supprimé) dans les tableaux des gares.
+      const runStations = api.stations.map((i) => stations[i]).filter((s): s is Station => s !== undefined);
+      if (runStations.length !== api.stations.length) continue;
+      const run: Run = {
+        ...common,
+        stations: runStations,
+        arr: api.arr,
+        dep: api.dep,
+        plannedArr: api.arr,
+        plannedDep: api.dep,
+        realtime: true,
+        canceled: true,
+        skipped: new Set(),
+      };
+      runStations.forEach((station, stop) => station.visits.push({ run, stop }));
       canceled++;
       continue;
     }
-    const skipped = new Set(api.skipped ?? []);
+
+    const skippedAll = new Set(api.skipped ?? []);
     // Un train peut partir plus loin ou terminer plus tôt que prévu : on garde les arrêts desservis aux extrémités.
     let first = 0;
-    while (first < api.stations.length && skipped.has(first)) first++;
+    while (first < api.stations.length && skippedAll.has(first)) first++;
     let last = api.stations.length - 1;
-    while (last > first && skipped.has(last)) last--;
+    while (last > first && skippedAll.has(last)) last--;
     if (last <= first) continue;
 
-    const stations = api.stations.slice(first, last + 1).map((i) => json.stations[i]);
-    if (stations.some((s) => s === undefined)) continue;
-    const stops = stations as ApiStation[];
+    const runStations = api.stations.slice(first, last + 1).map((i) => stations[i]);
+    if (runStations.some((s) => s === undefined)) continue;
+    const stops = runStations as Station[];
     const slice = (values: number[]) => values.slice(first, last + 1);
     const arr = slice(api.arrRt ?? api.arr);
     const dep = slice(api.depRt ?? api.dep);
@@ -326,6 +384,7 @@ function parse(json: ApiResponse): TrainsData {
     const lat: number[] = [];
     const z: number[] = [];
     const times: number[] = [];
+    const stopVertex = [0];
     let realLength = 0;
     let totalLength = 0;
     for (let i = 0; i + 1 < stops.length; i++) {
@@ -342,6 +401,7 @@ function parse(json: ApiResponse): TrainsData {
         z.push(vertices.z[k]!);
         times.push(length > 0 ? leave + ((reach - leave) * vertices.along[k]!) / length : k === 0 ? leave : reach);
       });
+      stopVertex.push(lon.length - 1);
     }
 
     const count = lon.length;
@@ -358,28 +418,36 @@ function parse(json: ApiResponse): TrainsData {
     }
 
     const train = {
-      id: api.id,
-      number: api.number,
-      category: api.category,
-      family: FAMILY_OF[api.category] ?? 'ter',
-      line: api.line,
-      stopNames: stops.map((s) => s.name),
+      ...common,
+      stations: stops,
       arr,
       dep,
       plannedArr: slice(api.arr),
       plannedDep: slice(api.dep),
       realtime: api.arrRt !== undefined,
-      skippedCount: [...skipped].filter((i) => i > first && i < last).length,
+      canceled: false,
+      skipped: new Set([...skippedAll].filter((i) => i > first && i < last).map((i) => i - first)),
       onTracks: totalLength > 0 ? realLength / totalLength : 0,
       lon: lonArray,
       my,
       zRail: Float32Array.from(z),
       times: Float64Array.from(times),
       angles,
+      stopVertex,
       flatPath: new Float64Array(count * 3),
       timestamps: Float32Array.from(times, (t) => t - json.from),
     } as Omit<Train, 'head'> as Train;
-    train.head = { train, position: [0, 0, 0], angle: 0, delay: null, delayClass: 'inconnu', atStop: null, nextStop: null };
+    train.head = {
+      train,
+      position: [0, 0, 0],
+      angle: 0,
+      delay: null,
+      delayClass: 'inconnu',
+      atStop: null,
+      nextStop: null,
+      speed: 0,
+    };
+    stops.forEach((station, stop) => station.visits.push({ run: train, stop }));
     trains.push(train);
   }
 
@@ -388,7 +456,10 @@ function parse(json: ApiResponse): TrainsData {
     to: json.to,
     base: json.from,
     realtimeAt: json.realtime?.feedTimestamp ?? null,
+    stations,
+    stationByKey: new Map(stations.map((s) => [s.key, s])),
     trains,
+    trainById: new Map(trains.map((t) => [t.id, t])),
     canceled,
     exaggeration: -1,
     pathVersion: 0,
@@ -453,6 +524,11 @@ function updateHead(train: Train, t: number): boolean {
   head.position[1] = latitudeFromMercatorY(train.my[k]! + (train.my[k + 1]! - train.my[k]!) * f);
   head.position[2] = flat[k * 3 + 2]! + (flat[(k + 1) * 3 + 2]! - flat[k * 3 + 2]!) * f;
   head.angle = train.angles[k]!;
+  // Vitesse moyenne sur la portion en cours (nulle à quai : les deux sommets coïncident).
+  const lat0 = latitudeFromMercatorY(train.my[k]!);
+  const lat1 = latitudeFromMercatorY(train.my[k + 1]!);
+  const meters = Math.hypot((train.lon[k + 1]! - train.lon[k]!) * Math.cos(lat0 * DEG) * 111_320, (lat1 - lat0) * 110_540);
+  head.speed = t1 > t0 ? (meters / (t1 - t0)) * 3.6 : 0;
 
   // Arrêt en cours ou prochain, et retard à cet instant (pour la fiche et la couleur).
   const { arr, dep } = train;
@@ -491,6 +567,201 @@ function delayText(delay: number | null): string {
 
 const hhmm = (seconds: number | undefined) => (seconds === undefined ? '?' : formatTime(seconds * 1000));
 const displayCategory = (category: string) => CATEGORY_NAMES[category] ?? category;
+
+// --- Sélection : trajet, arrêts, tableaux d'affichage ---
+
+/** Les gares apparaissent à partir de ce zoom (avant, elles encombreraient la carte). */
+const STATION_MIN_ZOOM = 8.5;
+const BOARD_ROWS = 10;
+const RING: Color = [22, 26, 38, 220];
+const ACCENT: Color = [79, 140, 255];
+const PASSED_GREY: Color = [150, 156, 170, 235];
+
+/** Un arrêt du train sélectionné, avec son étiquette. */
+interface StopMarker {
+  station: Station;
+  index: number;
+  position: [number, number, number];
+  label: string;
+}
+
+function selectedTrain(data: TrainsData | undefined, selection: unknown): Train | undefined {
+  const chosen = selection as TrainsSelection | null;
+  return chosen?.type === 'train' ? data?.trainById.get(chosen.id) : undefined;
+}
+
+function selectedStation(data: TrainsData | undefined, selection: unknown): Station | undefined {
+  const chosen = selection as TrainsSelection | null;
+  return chosen?.type === 'gare' ? data?.stationByKey.get(chosen.key) : undefined;
+}
+
+/** État d'un passage : supprimé, arrêt supprimé, retard, ou « — » sans temps réel. */
+function statusText(run: Run, stop: number, actual: number | undefined, planned: number | undefined) {
+  if (run.canceled) return { text: 'supprimé', alert: true };
+  if (run.skipped.has(stop)) return { text: 'arrêt supprimé', alert: true };
+  if (!run.realtime || actual === undefined || planned === undefined) return { text: '—', alert: false };
+  return { text: delayText(actual - planned), alert: false };
+}
+
+/** Tableau des départs (ou arrivées) d'une gare à partir de l'instant t, comme sur les écrans en gare. */
+function boardTable(station: Station, t: number, departures: boolean): InfoTable {
+  const entries = station.visits
+    .filter(({ run, stop }) => (departures ? stop < run.stations.length - 1 : stop > 0))
+    .map((visit) => {
+      const { run, stop } = visit;
+      const actual = (departures ? run.dep[stop] : run.arr[stop]) ?? 0;
+      const planned = departures ? run.plannedDep[stop] : run.plannedArr[stop];
+      return { visit, actual, planned };
+    })
+    .filter((entry) => entry.actual >= t - 60)
+    .sort((a, b) => a.actual - b.actual)
+    .slice(0, BOARD_ROWS);
+
+  return {
+    title: departures ? 'Départs' : 'Arrivées',
+    columns: ['Heure', 'Train', departures ? 'Destination' : 'Provenance', 'État'],
+    empty: departures ? 'Aucun départ dans les prochaines heures.' : 'Aucune arrivée dans les prochaines heures.',
+    rows: entries.map(({ visit: { run, stop }, actual, planned }) => {
+      const status = statusText(run, stop, actual, planned);
+      const other = departures ? run.stations[run.stations.length - 1] : run.stations[0];
+      const atStation = !run.canceled && (run.arr[stop] ?? Infinity) <= t && t <= (run.dep[stop] ?? -Infinity);
+      return {
+        cells: [hhmm(planned), `${displayCategory(run.category)} ${run.number}`, other?.name ?? '?', status.text],
+        tone: status.alert ? 'alert' : atStation ? 'current' : undefined,
+        select: run.canceled ? undefined : ({ type: 'train', id: run.id } satisfies TrainsSelection),
+      };
+    }),
+  };
+}
+
+/** Liste des arrêts d'un train, l'arrêt en cours (ou le prochain) mis en évidence. */
+function stopsTable(train: Train, t: number): InfoTable {
+  const last = train.stations.length - 1;
+  const { head } = train;
+  return {
+    title: 'Arrêts',
+    columns: ['Heure', 'Gare', 'Retard'],
+    rows: train.stations.map((station, i) => {
+      const planned = i === 0 ? train.plannedDep[0] : train.plannedArr[i];
+      const actual = i === 0 ? train.dep[0] : train.arr[i];
+      const leaves = (i === last ? train.arr[i] : train.dep[i]) ?? 0;
+      const status = statusText(train, i, actual, planned);
+      const running = isRunning(train, t);
+      const current = running && (head.atStop === i || (head.atStop === null && head.nextStop === i));
+      return {
+        cells: [hhmm(planned), station.name, status.text],
+        tone: status.alert ? 'alert' : current ? 'current' : leaves < t ? 'muted' : undefined,
+        select: { type: 'gare', key: station.key } satisfies TrainsSelection,
+      };
+    }),
+  };
+}
+
+function describeTrain(train: Train, t: number): InfoContent {
+  const running = updateHead(train, t);
+  const { head } = train;
+  const last = train.stations.length - 1;
+  const origin = train.stations[0]!;
+  const terminus = train.stations[last]!;
+  const fields: Array<[string, string]> = [];
+
+  if (!running) {
+    const departure = train.dep[0] ?? 0;
+    fields.push(['État', t < departure ? `départ à ${hhmm(departure)}` : `arrivé à ${hhmm(train.arr[last])}`]);
+  } else {
+    fields.push(['Retard', delayText(head.delay)]);
+    fields.push(['Vitesse', head.atStop !== null ? 'à quai' : `≈ ${Math.round(head.speed)} km/h (moyenne estimée)`]);
+    if (head.atStop !== null && head.atStop < last) {
+      fields.push(['À quai', `${train.stations[head.atStop]!.name}, départ ${hhmm(train.dep[head.atStop])}`]);
+    } else if (head.nextStop !== null) {
+      fields.push(['Prochain arrêt', `${train.stations[head.nextStop]!.name}, ${hhmm(train.arr[head.nextStop])}`]);
+    }
+  }
+  if (train.line) fields.push(['Ligne', train.line]);
+  if (!train.realtime) fields.push(['Source', 'horaire théorique']);
+  if (train.onTracks < 0.99) fields.push(['Tracé', `${Math.round(train.onTracks * 100)} % sur les voies réelles`]);
+
+  return {
+    title: `${displayCategory(train.category)} ${train.number}`,
+    subtitle: `${origin.name} → ${terminus.name}`,
+    fields,
+    tables: [stopsTable(train, t)],
+  };
+}
+
+function describeStation(station: Station, t: number): InfoContent {
+  return {
+    title: station.name,
+    subtitle: 'Gare · tableau d’affichage',
+    tables: [boardTable(station, t, true), boardTable(station, t, false)],
+  };
+}
+
+/** Arrêts du train sélectionné (gardés d'une image à l'autre tant que rien ne change). */
+let markerCache: { train: Train; pathVersion: number; markers: StopMarker[] } | undefined;
+
+function stopMarkers(train: Train, pathVersion: number): StopMarker[] {
+  if (markerCache?.train !== train || markerCache.pathVersion !== pathVersion) {
+    const markers = train.stations.map((station, index) => {
+      const k = train.stopVertex[index] ?? 0;
+      const planned = index === 0 ? train.plannedDep[0] : train.plannedArr[index];
+      const actual = index === 0 ? train.dep[0] : train.arr[index];
+      const delay = train.realtime && actual !== undefined && planned !== undefined ? Math.round((actual - planned) / 60) : 0;
+      const suffix = train.skipped.has(index) ? ' · supprimé' : delay > 0 ? ` +${delay}` : '';
+      return {
+        station,
+        index,
+        position: [train.flatPath[k * 3]!, train.flatPath[k * 3 + 1]!, train.flatPath[k * 3 + 2]!] as [number, number, number],
+        label: `${station.name} · ${hhmm(planned)}${suffix}`,
+      };
+    });
+    markerCache = { train, pathVersion, markers };
+  }
+  return markerCache.markers;
+}
+
+/** Le trajet entier du train sélectionné : un contour sombre, la partie faite en gris, le reste en couleur. */
+function routeLayers(train: Train, t: number, parameters: object) {
+  const path = train.flatPath;
+  const vertexCount = train.lon.length;
+  let passed: Float64Array;
+  let remaining: Float64Array;
+  if (t <= (train.dep[0] ?? 0)) {
+    passed = new Float64Array(0);
+    remaining = path;
+  } else if (t >= (train.arr[train.arr.length - 1] ?? 0)) {
+    passed = path;
+    remaining = new Float64Array(0);
+  } else {
+    const k = Math.min(vertexBefore(train.times, t), vertexCount - 2) + 1;
+    const here = train.head.position;
+    passed = new Float64Array(k * 3 + 3);
+    passed.set(path.subarray(0, k * 3));
+    passed.set(here, k * 3);
+    remaining = new Float64Array((vertexCount - k) * 3 + 3);
+    remaining.set(here);
+    remaining.set(path.subarray(k * 3), 3);
+  }
+  const common = {
+    getPath: (d: { path: Float64Array }) => d.path,
+    positionFormat: 'XYZ' as const,
+    widthUnits: 'pixels' as const,
+    capRounded: true,
+    jointRounded: true,
+    parameters,
+  };
+  return [
+    new PathLayer({ ...common, id: 'trains/selection/contour', data: [{ path }], getColor: RING, getWidth: 8 }),
+    new PathLayer({ ...common, id: 'trains/selection/fait', data: [{ path: passed }], getColor: PASSED_GREY, getWidth: 4.5 }),
+    new PathLayer({
+      ...common,
+      id: 'trains/selection/reste',
+      data: [{ path: remaining }],
+      getColor: [...FAMILY_STYLE[train.family].color, 255],
+      getWidth: 4.5,
+    }),
+  ];
+}
 
 // --- Module ---
 
@@ -547,15 +818,25 @@ export const trains = defineModule<TrainsData>({
     return `${running.toLocaleString('fr-FR')} trains en circulation${live}`;
   },
 
-  deckLayers({ data, time, terrain, settings }) {
+  deckLayers({ data, time, terrain, settings, selection, view }) {
     if (!data) return [];
     refreshPaths(data, terrain);
     const t = time / 1000;
     const byDelay = settings.couleur === 'retard';
     const heads = data.trains.filter((train) => updateHead(train, t)).map((train) => train.head);
     const icons = trainAtlas();
+    const chosenTrain = selectedTrain(data, selection);
+    const chosenStation = selectedStation(data, selection);
     // Toujours dessinés par-dessus le relief (les trains de montagne resteraient sinon cachés).
     const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const iconOf = (head: Head) =>
+      byDelay ? delayIcon(FAMILY_STYLE[head.train.family].nose, head.delayClass) : familyIcon(head.train.family);
+
+    const markers = chosenTrain ? stopMarkers(chosenTrain, data.pathVersion) : [];
+    const passedStops = chosenTrain ? markers.filter((m) => (chosenTrain.dep[m.index] ?? 0) < t).length : 0;
+    // Étiquettes : tous les arrêts vu de près, seulement départ, terminus et prochain arrêt vu de loin.
+    const nextStop = chosenTrain?.head.nextStop ?? null;
+    const labels = view.zoom >= 8 ? markers : markers.filter((_, i) => i === 0 || i === markers.length - 1 || i === nextStop);
 
     return [
       new TripsLayer<Train>({
@@ -576,13 +857,66 @@ export const trains = defineModule<TrainsData>({
         updateTriggers: { getPath: data.pathVersion, getColor: byDelay },
         parameters,
       }),
+      chosenTrain && routeLayers(chosenTrain, t, parameters),
+      view.zoom >= STATION_MIN_ZOOM &&
+        new ScatterplotLayer<Station>({
+          id: 'trains/gares',
+          data: data.stations,
+          getPosition: (s) => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)],
+          radiusUnits: 'meters',
+          getRadius: 70,
+          radiusMinPixels: 3,
+          radiusMaxPixels: 7,
+          getFillColor: [255, 255, 255],
+          stroked: true,
+          getLineColor: RING,
+          lineWidthUnits: 'pixels',
+          getLineWidth: 1.5,
+          billboard: true,
+          pickable: true,
+          autoHighlight: true,
+          highlightColor: [79, 140, 255, 200],
+          updateTriggers: { getPosition: terrain.version },
+          parameters,
+        }),
+      chosenStation &&
+        new ScatterplotLayer<Station>({
+          id: 'trains/gare-choisie',
+          data: [chosenStation],
+          getPosition: (s) => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)],
+          radiusUnits: 'pixels',
+          getRadius: 11,
+          filled: false,
+          stroked: true,
+          getLineColor: ACCENT,
+          lineWidthUnits: 'pixels',
+          getLineWidth: 3,
+          billboard: true,
+          parameters,
+        }),
+      chosenTrain &&
+        new ScatterplotLayer<StopMarker>({
+          id: 'trains/selection/arrets',
+          data: markers,
+          getPosition: (m) => m.position,
+          radiusUnits: 'pixels',
+          getRadius: (m) => (chosenTrain.skipped.has(m.index) ? 3.5 : 5),
+          getFillColor: (m) => (m.index < passedStops ? PASSED_GREY : [255, 255, 255]),
+          stroked: true,
+          getLineColor: RING,
+          lineWidthUnits: 'pixels',
+          getLineWidth: 2,
+          billboard: true,
+          pickable: true,
+          updateTriggers: { getFillColor: passedStops },
+          parameters,
+        }),
       new IconLayer<Head>({
         id: 'trains/positions',
         data: heads,
         iconAtlas: icons.atlas,
         iconMapping: icons.mapping,
-        getIcon: (head) =>
-          byDelay ? delayIcon(FAMILY_STYLE[head.train.family].nose, head.delayClass) : familyIcon(head.train.family),
+        getIcon: iconOf,
         getPosition: (head) => head.position,
         getAngle: (head) => head.angle,
         // À plat sur la carte : le train tourne avec elle et suit son sens de marche.
@@ -596,38 +930,68 @@ export const trains = defineModule<TrainsData>({
         highlightColor: [255, 255, 255, 110],
         parameters,
       }),
+      chosenTrain &&
+        isRunning(chosenTrain, t) &&
+        new IconLayer<Head>({
+          id: 'trains/selection/train',
+          data: [chosenTrain.head],
+          iconAtlas: icons.atlas,
+          iconMapping: icons.mapping,
+          getIcon: iconOf,
+          getPosition: (head) => head.position,
+          getAngle: (head) => head.angle,
+          billboard: false,
+          sizeUnits: 'meters',
+          getSize: TRAIN_SIZE_M * 1.6,
+          sizeMinPixels: TRAIN_MIN_PX * 1.7,
+          sizeMaxPixels: TRAIN_MAX_PX * 1.4,
+          pickable: true,
+          parameters,
+        }),
+      chosenTrain &&
+        new TextLayer<StopMarker>({
+          id: 'trains/selection/noms',
+          data: labels,
+          getPosition: (m) => m.position,
+          getText: (m) => m.label,
+          characterSet: 'auto',
+          fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
+          fontWeight: 600,
+          getSize: 12,
+          getColor: (m) => (m.index < passedStops ? [190, 195, 205] : [255, 255, 255]),
+          getPixelOffset: [0, -16],
+          background: true,
+          getBackgroundColor: [15, 18, 26, 225],
+          backgroundPadding: [5, 3],
+          billboard: true,
+          updateTriggers: { getColor: passedStops },
+          parameters,
+        }),
     ];
   },
 
-  describe(object) {
-    const head = object as Head;
-    const train = head.train;
-    const last = train.stopNames.length - 1;
-    const origin = train.stopNames[0]!;
-    const terminus = train.stopNames[last]!;
-    const fields: Array<[string, string]> = [['Retard', delayText(head.delay)]];
+  select(object) {
+    const picked = object as Partial<Head & StopMarker & Station>;
+    if (picked.train) return { type: 'train', id: picked.train.id } satisfies TrainsSelection;
+    if (picked.station) return { type: 'gare', key: picked.station.key } satisfies TrainsSelection;
+    if (typeof picked.key === 'string') return { type: 'gare', key: picked.key } satisfies TrainsSelection;
+    return null;
+  },
 
-    if (head.atStop !== null) {
-      const station = train.stopNames[head.atStop]!;
-      fields.push(
-        head.atStop === last
-          ? ['Arrivé', `${station}, ${hhmm(train.arr[last])}`]
-          : ['À quai', `${station}, départ ${hhmm(train.dep[head.atStop])}`],
-      );
-    } else if (head.nextStop !== null) {
-      fields.push(['Prochain arrêt', `${train.stopNames[head.nextStop]!}, ${hhmm(train.arr[head.nextStop])}`]);
+  describe(selection, { data, time }) {
+    const t = time / 1000;
+    const train = selectedTrain(data, selection);
+    if (train) return describeTrain(train, t);
+    const station = selectedStation(data, selection);
+    return station ? describeStation(station, t) : null;
+  },
+
+  focus(selection, { data, time }) {
+    const train = selectedTrain(data, selection);
+    if (train) {
+      if (!updateHead(train, time / 1000)) return null;
+      return { lon: train.head.position[0], lat: train.head.position[1] };
     }
-    fields.push(['Départ', `${origin}, ${hhmm(train.dep[0])}`]);
-    fields.push(['Arrivée', `${terminus}, ${hhmm(train.arr[last])}`]);
-    if (train.line) fields.push(['Ligne', train.line]);
-    if (train.skippedCount > 0) fields.push(['Arrêts supprimés', String(train.skippedCount)]);
-    if (!train.realtime) fields.push(['Source', 'horaire théorique']);
-    if (train.onTracks < 0.99) fields.push(['Tracé', `${Math.round(train.onTracks * 100)} % sur les voies réelles`]);
-
-    return {
-      title: `${displayCategory(train.category)} ${train.number}`,
-      subtitle: `${origin} → ${terminus}`,
-      fields,
-    };
+    return null; // une gare ne bouge pas : rien à suivre
   },
 });

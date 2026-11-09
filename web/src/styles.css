@@ -1,0 +1,481 @@
+:root {
+  --bg: #0b0d12;
+  --panel-bg: rgba(15, 18, 26, 0.84);
+  --panel-border: rgba(255, 255, 255, 0.09);
+  --panel-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
+  --text: #eef1f6;
+  --text-muted: #9ba4b4;
+  --text-faint: #6c7586;
+  --accent: #4f8cff;
+  --live: #ff453a;
+  --error: #ff6b6b;
+  --warn: #ffb020;
+  --control-bg: rgba(255, 255, 255, 0.07);
+  --control-bg-hover: rgba(255, 255, 255, 0.13);
+  --radius: 14px;
+  --gutter: 16px;
+  color-scheme: dark;
+  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--text);
+  -webkit-font-smoothing: antialiased;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+  margin: 0;
+}
+
+body {
+  background: var(--bg);
+  overflow: hidden;
+}
+
+button {
+  font: inherit;
+  color: inherit;
+}
+
+.app {
+  position: relative;
+  height: 100%;
+}
+
+.map {
+  position: absolute;
+  inset: 0;
+}
+
+/* --- Panneaux --- */
+
+.panel {
+  position: absolute;
+  z-index: 2;
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  border-radius: var(--radius);
+  box-shadow: var(--panel-shadow);
+  backdrop-filter: blur(14px) saturate(1.2);
+  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+}
+
+.icon-button {
+  display: inline-grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 0;
+  border-radius: 8px;
+  background: var(--control-bg);
+  cursor: pointer;
+  flex: none;
+}
+
+.icon-button:hover {
+  background: var(--control-bg-hover);
+}
+
+.icon-button--large {
+  width: 38px;
+  height: 38px;
+  border-radius: 50%;
+}
+
+:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
+/* --- Panneau des couches --- */
+
+.layers {
+  top: var(--gutter);
+  left: var(--gutter);
+  width: 310px;
+  max-height: calc(100% - 180px);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+}
+
+.layers__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 14px 14px 12px 16px;
+}
+
+.layers__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.layers__subtitle {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.layers__body {
+  overflow-y: auto;
+  padding: 0 8px 10px;
+  border-top: 1px solid var(--panel-border);
+}
+
+.layers__category {
+  margin: 14px 8px 6px;
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.layer {
+  display: flex;
+  gap: 12px;
+  align-items: flex-start;
+  padding: 8px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.layer:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.layer__text {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+}
+
+.layer__name {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 8px;
+  font-weight: 560;
+}
+
+.layer__description {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.layer__meta {
+  color: var(--text-faint);
+  font-size: 11.5px;
+}
+
+.status {
+  font-size: 11.5px;
+  font-weight: 500;
+}
+
+.status--loading {
+  color: var(--text-muted);
+}
+
+.status--error {
+  color: var(--error);
+}
+
+/* Interrupteur */
+.switch {
+  appearance: none;
+  position: relative;
+  flex: none;
+  width: 34px;
+  height: 20px;
+  margin: 1px 0 0;
+  border-radius: 999px;
+  background: rgba(255, 255, 255, 0.16);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.switch::after {
+  content: '';
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
+  transition: transform 0.15s;
+}
+
+.switch:checked {
+  background: var(--accent);
+}
+
+.switch:checked::after {
+  transform: translateX(14px);
+}
+
+/* --- Fiche d'information --- */
+
+.info {
+  top: var(--gutter);
+  right: 60px; /* laisse la place aux boutons de la carte */
+  width: 300px;
+  padding: 14px 16px 16px;
+}
+
+.info__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  margin-bottom: 6px;
+}
+
+.info__kicker {
+  color: var(--text-faint);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+}
+
+.info__title {
+  margin: 0;
+  font-size: 17px;
+  font-weight: 650;
+  letter-spacing: -0.01em;
+}
+
+.info__subtitle {
+  margin: 2px 0 0;
+  color: var(--text-muted);
+}
+
+.info__fields {
+  display: grid;
+  gap: 6px;
+  margin: 14px 0 0;
+}
+
+.info__field {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.info__field dt {
+  color: var(--text-muted);
+}
+
+.info__field dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.info__link {
+  display: inline-block;
+  margin-top: 14px;
+  color: var(--accent);
+  text-decoration: none;
+  font-size: 13px;
+}
+
+.info__link:hover {
+  text-decoration: underline;
+}
+
+/* --- Frise temporelle --- */
+
+.timebar {
+  left: 50%;
+  bottom: 28px;
+  transform: translateX(-50%);
+  width: min(780px, calc(100% - 2 * var(--gutter)));
+  padding: 12px 16px 10px;
+}
+
+.timebar__row {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 12px;
+}
+
+.timebar__time {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-width: 170px;
+}
+
+.timebar__clock {
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+}
+
+.timebar__date {
+  color: var(--text-muted);
+  font-size: 12.5px;
+}
+
+.timebar__offset {
+  color: var(--warn);
+  font-variant-numeric: tabular-nums;
+}
+
+.live-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 32px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--control-bg);
+  font-size: 13px;
+  font-weight: 560;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.live-button:hover {
+  background: var(--control-bg-hover);
+}
+
+.live-button__dot {
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: var(--text-faint);
+}
+
+.live-button--on {
+  background: rgba(255, 69, 58, 0.16);
+  color: #ffd2cf;
+}
+
+.live-button--on .live-button__dot {
+  background: var(--live);
+  animation: pulse 1.6s ease-out infinite;
+}
+
+@keyframes pulse {
+  0% {
+    box-shadow: 0 0 0 0 rgba(255, 69, 58, 0.7);
+  }
+  100% {
+    box-shadow: 0 0 0 8px rgba(255, 69, 58, 0);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .live-button--on .live-button__dot {
+    animation: none;
+  }
+}
+
+.speeds {
+  display: flex;
+  gap: 2px;
+  padding: 3px;
+  border-radius: 10px;
+  background: var(--control-bg);
+}
+
+.speed {
+  padding: 5px 9px;
+  border: 0;
+  border-radius: 7px;
+  background: transparent;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.speed:hover {
+  color: var(--text);
+}
+
+.speed[aria-checked='true'] {
+  background: rgba(255, 255, 255, 0.16);
+  color: var(--text);
+}
+
+.timebar__slider {
+  width: 100%;
+  margin: 12px 0 2px;
+  accent-color: var(--accent);
+  cursor: pointer;
+}
+
+.timebar__scale {
+  display: flex;
+  justify-content: space-between;
+  color: var(--text-faint);
+  font-size: 11px;
+}
+
+/* --- Contrôles MapLibre --- */
+
+.maplibregl-ctrl-group {
+  background: var(--panel-bg);
+  border: 1px solid var(--panel-border);
+  box-shadow: var(--panel-shadow);
+}
+
+.maplibregl-ctrl-group button + button {
+  border-top-color: var(--panel-border);
+}
+
+.maplibregl-ctrl-group button .maplibregl-ctrl-icon {
+  filter: invert(1);
+}
+
+.maplibregl-ctrl-top-right {
+  top: 6px;
+  right: 6px;
+}
+
+/* --- Petits écrans --- */
+
+@media (max-width: 720px) {
+  .layers {
+    right: 60px;
+    width: auto;
+    max-height: 45%;
+  }
+
+  .info {
+    top: auto;
+    left: var(--gutter);
+    right: var(--gutter);
+    bottom: 200px;
+    width: auto;
+  }
+
+  .timebar {
+    bottom: 36px;
+  }
+
+  .speed {
+    padding: 5px 7px;
+  }
+}

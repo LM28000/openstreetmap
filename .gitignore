@@ -1,0 +1,13 @@
+# Dépendances et builds
+node_modules/
+dist/
+target/
+
+# Fichiers locaux
+.env
+.env.*
+*.local
+.DS_Store
+
+# Données téléchargées (volumineuses, jamais versionnées)
+data/

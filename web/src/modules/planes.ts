@@ -9,8 +9,12 @@
  *
  * Les avions sont tracés à leur altitude réelle (sans l'exagération du relief), vus de
  * dessus et tournés selon leur cap. La couleur suit l'altitude (une seule teinte, du
- * clair au foncé) ; la forme dit le genre d'appareil ; un anneau rouge signale une
- * urgence (squawk 7500, 7600 ou 7700), pour ne jamais reposer sur la couleur seule.
+ * clair au foncé) ; la forme dit le genre d'appareil (sept silhouettes, choisies d'après le type
+ * OACI : A320, B777, ATR 72…) ; un anneau rouge doublé de blanc signale une urgence (squawk 7500,
+ * 7600 ou 7700), pour ne jamais reposer sur la couleur seule.
+ *
+ * Taille : l'envergure réelle de l'appareil en mètres, avec un minimum en pixels pour rester
+ * lisible de loin (un peu plus grand pour un A380 que pour un Cessna).
  *
  * Cette couche n'a de sens qu'en direct : quand on rejoue le passé sur la frise, elle
  * se masque et le résumé l'explique (le serveur ne garde pas d'historique des avions).
@@ -20,7 +24,18 @@ import { IconLayer, LineLayer, ScatterplotLayer, TextLayer } from '@deck.gl/laye
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
-import { buildPlaneAtlas, ringDataUrl, type PlaneAtlas, type Shape } from './planeIcons';
+import {
+  buildPlaneAtlas,
+  planeClass,
+  planeSizing,
+  PLANE_CLASSES,
+  PLANE_NAMES,
+  ringDataUrl,
+  selectionRingDataUrl,
+  type PlaneAtlas,
+  type PlaneClass,
+  type Shape,
+} from './planeIcons';
 import { OVER_MAP } from '../map/parameters';
 
 interface ApiPlane {
@@ -61,8 +76,11 @@ interface Plane {
   squawk?: string;
   emergency?: string;
   ground: boolean;
-  shape: Shape;
+  /** Silhouette, d'après le type OACI (ou la catégorie ADS-B à défaut). */
+  cls: PlaneClass;
   band: Band;
+  /** Clé de l'icône dans l'atlas (silhouette et couleur d'altitude). */
+  icon: string;
   alert: boolean;
   /** Instant de l'observation (ms) : celui de la réception, moins l'âge de la position. */
   observedAt: number;
@@ -115,9 +133,12 @@ const GROUND_COLOR = '#cfcdc6';
 const BAND_LABELS = ['Moins de 1 000 m', '1 000 à 3 000 m', '3 000 à 6 000 m', '6 000 à 9 000 m', '9 000 m et plus'] as const;
 const ALERT_COLOR: Color = [229, 72, 77];
 const ALERT_CSS = '#e5484d';
-const SELECTION_COLOR: Color = [79, 140, 255];
-const SHAPES: readonly Shape[] = ['jet', 'light', 'heli'];
-const SHAPE_SCALE: Record<Shape, number> = { jet: 1, light: 0.8, heli: 0.8 };
+const WHITE: Color = [255, 255, 255, 240];
+const INK: Color = [20, 26, 38, 235];
+/** Mètres par pixel à l'équateur au zoom 0 (tuiles de 512 px, comme MapLibre). */
+const METERS_PER_PIXEL_ZOOM0 = 78_271.517;
+/** Rayon des anneaux d'état, en fraction de l'envergure affichée. */
+const RING_RADIUS = 0.72;
 
 const EMERGENCY_SQUAWKS: Record<string, string> = {
   '7500': 'détournement (intervention illicite)',
@@ -129,8 +150,8 @@ const EMERGENCY_STATES = new Set(['general', 'nordo', 'unlawful', 'downed']);
 let atlasCache: PlaneAtlas | undefined;
 function atlas(): PlaneAtlas {
   atlasCache ??= buildPlaneAtlas([
-    ...SHAPES.flatMap((shape) => BAND_COLORS.map((color, band) => ({ key: `${shape}-${band}`, shape, color }))),
-    ...SHAPES.map((shape) => ({ key: `${shape}-ground`, shape, color: GROUND_COLOR })),
+    ...PLANE_CLASSES.flatMap((cls) => BAND_COLORS.map((color, band) => ({ key: `${cls}-${band}`, cls, color }))),
+    ...PLANE_CLASSES.map((cls) => ({ key: `${cls}-ground`, cls, color: GROUND_COLOR })),
   ]);
   return atlasCache;
 }
@@ -144,7 +165,7 @@ function bandOf(altM: number | null, ground: boolean): Band {
   return 4;
 }
 
-/** Forme de l'icône d'après la catégorie ADS-B, à défaut d'après la vitesse. */
+/** Indice de silhouette d'après la catégorie ADS-B, à défaut d'après la vitesse : sert quand le type OACI manque. */
 function shapeOf(category: string | undefined, speedKt: number): Shape {
   switch (category) {
     case 'A7':
@@ -201,6 +222,23 @@ function screenAngle(track: number, bearing: number, pitch: number): number {
   return Math.atan2(up, x) / rad;
 }
 
+/** Mètres par pixel d'écran à cette latitude et à ce zoom (tuiles de 512 px, comme MapLibre). */
+function metersPerPixel(lat: number, zoom: number): number {
+  return (METERS_PER_PIXEL_ZOOM0 * Math.max(0.05, Math.cos((lat * Math.PI) / 180))) / 2 ** zoom;
+}
+
+const SIZING = Object.fromEntries(PLANE_CLASSES.map((cls) => [cls, planeSizing(cls)])) as Record<PlaneClass, ReturnType<typeof planeSizing>>;
+
+/**
+ * Taille d'un avion à l'écran : son envergure réelle, mais pas moins que le minimum en pixels de sa
+ * silhouette. Rend la taille de l'icône (case entière de l'atlas) et l'envergure affichée, en mètres.
+ */
+function displayed(plane: Plane, zoom: number): { cellMeters: number; spanMeters: number } {
+  const { cellMeters, spanMeters, minSpanPx } = SIZING[plane.cls];
+  const grow = Math.max(1, (minSpanPx * metersPerPixel(plane.lat, zoom)) / spanMeters);
+  return { cellMeters: cellMeters * grow, spanMeters: spanMeters * grow };
+}
+
 async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
   const response = await fetch('/api/avions', { signal });
   if (response.status === 503) throw new Error('le serveur n’a pas encore reçu les positions, nouvel essai dans quelques secondes');
@@ -215,6 +253,7 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
     const altM = p.altGeom !== undefined ? p.altGeom * FT : (altBaroM ?? null);
     const speedKt = p.speed ?? 0;
     const band = bandOf(altM, p.ground);
+    const cls = planeClass(p.type, shapeOf(p.category, speedKt));
     return {
       hex: p.hex,
       callsign: p.callsign,
@@ -230,8 +269,9 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
       squawk: p.squawk,
       emergency: p.emergency,
       ground: p.ground,
-      shape: shapeOf(p.category, speedKt),
+      cls,
       band,
+      icon: `${cls}-${band}`,
       alert: isAlert(p.squawk, p.emergency),
       observedAt: receivedAt - (collectionAgeS + p.seenPos) * 1000,
       offLon: 0,
@@ -314,9 +354,12 @@ export const planes = defineModule<PlanesData>({
     const items: LegendItem[] = BAND_COLORS.map((color, band) => ({ color, label: BAND_LABELS[band]!, size: 'small' }));
     items.push({ color: GROUND_COLOR, label: 'Au sol (ou altitude inconnue)', size: 'small' });
     items.push({ color: 'transparent', icon: ringDataUrl(ALERT_CSS), label: 'Urgence (anneau rouge) : squawk 7500, 7600, 7700' });
-    items.push({ color: 'transparent', icon: icons.dataUrl('jet-2'), label: 'Avion de ligne ou jet' });
-    items.push({ color: 'transparent', icon: icons.dataUrl('light-2'), label: 'Avion léger ou planeur' });
-    items.push({ color: 'transparent', icon: icons.dataUrl('heli-2'), label: 'Hélicoptère' });
+    items.push({ color: 'transparent', icon: selectionRingDataUrl(), label: 'Avion sélectionné (anneau blanc)' });
+    // Une ligne par silhouette, à la couleur de la croisière moyenne : la forme dit le type d'appareil.
+    for (const cls of PLANE_CLASSES) {
+      const { name, examples } = PLANE_NAMES[cls];
+      items.push({ color: 'transparent', icon: icons.dataUrl(`${cls}-2`), label: `${name} (${examples})` });
+    }
     return items;
   },
 
@@ -363,9 +406,12 @@ export const planes = defineModule<PlanesData>({
     const chosen = selection ? data.byHex.get((selection as PlanesSelection).hex) : undefined;
     const alerts = shown.filter((p) => p.alert);
     const flying = shown.filter((p) => !p.ground && p.altM !== null);
-    const iconOf = (p: Plane) => `${p.shape}-${p.band}`;
     const showLabels = view.zoom >= LABEL_MIN_ZOOM;
-    const { bearing, pitch } = view;
+    const { bearing, pitch, zoom } = view;
+    // Les tailles dépendent de l'échelle (mètres réels, avec un minimum en pixels) : on les recalcule quand le zoom change.
+    const sizeTrigger = zoom.toFixed(2);
+    const iconSize = (p: Plane) => displayed(p, zoom).cellMeters;
+    const ringRadius = (p: Plane) => RING_RADIUS * displayed(p, zoom).spanMeters;
 
     return [
       // Ombre au sol : donne la hauteur quand la caméra est inclinée (confondue avec l'avion en vue de dessus).
@@ -374,76 +420,99 @@ export const planes = defineModule<PlanesData>({
         data: flying,
         iconAtlas: icons.atlas,
         iconMapping: icons.mapping,
-        getIcon: iconOf,
+        getIcon: (p) => p.icon,
         getPosition: (p) => p.shadow,
         getAngle: (p) => p.angle,
         getColor: [0, 0, 0, 70],
         billboard: false,
         sizeUnits: 'meters',
-        getSize: (p) => 3000 * SHAPE_SCALE[p.shape],
-        sizeMinPixels: 12,
-        sizeMaxPixels: 26,
+        getSize: iconSize,
+        updateTriggers: { getSize: sizeTrigger },
         parameters,
       }),
       chosen &&
         !chosen.ground &&
-        new LineLayer<Plane>({
-          id: 'avions/hauteur',
-          data: [chosen],
-          getSourcePosition: (p) => p.shadow,
-          getTargetPosition: (p) => p.position,
-          getColor: [...SELECTION_COLOR, 200],
-          getWidth: 1.5,
-          widthUnits: 'pixels',
-          parameters,
-        }),
+        // Hauteur de l'avion choisi : un trait blanc cerné de sombre, jamais bleu.
+        [
+          ['avions/hauteur-contour', INK, 4],
+          ['avions/hauteur', WHITE, 1.8],
+        ].map(
+          ([id, color, width]) =>
+            new LineLayer<Plane>({
+              id: id as string,
+              data: [chosen],
+              getSourcePosition: (p) => p.shadow,
+              getTargetPosition: (p) => p.position,
+              getColor: color as Color,
+              getWidth: width as number,
+              widthUnits: 'pixels',
+              parameters,
+            }),
+        ),
       new IconLayer<Plane>({
         id: 'avions/positions',
         data: shown,
         iconAtlas: icons.atlas,
         iconMapping: icons.mapping,
-        getIcon: iconOf,
+        getIcon: (p) => p.icon,
         getPosition: (p) => p.position,
         getAngle: (p) => screenAngle(p.track, bearing, pitch),
         // Face à la caméra, à l'altitude de l'avion, pointant vers son cap tel qu'on le voit.
         billboard: true,
         sizeUnits: 'meters',
-        getSize: (p) => 3000 * SHAPE_SCALE[p.shape],
-        sizeMinPixels: 16,
-        sizeMaxPixels: 32,
+        getSize: iconSize,
         pickable: true,
+        updateTriggers: { getSize: sizeTrigger },
         parameters,
       }),
       alerts.length > 0 &&
-        new ScatterplotLayer<Plane>({
-          id: 'avions/urgences',
-          data: alerts,
-          getPosition: (p) => p.position,
-          radiusUnits: 'pixels',
-          getRadius: 20,
-          filled: false,
-          stroked: true,
-          getLineColor: ALERT_COLOR,
-          lineWidthUnits: 'pixels',
-          getLineWidth: 4,
-          billboard: true,
-          parameters,
-        }),
+        // Urgence : anneau rouge doublé de blanc (le blanc dessous), pour se lire sur toute carte.
+        [
+          ['avions/urgences-blanc', WHITE, 4.5],
+          ['avions/urgences', ALERT_COLOR, 2.5],
+        ].map(
+          ([id, color, width]) =>
+            new ScatterplotLayer<Plane>({
+              id: id as string,
+              data: alerts,
+              getPosition: (p) => p.position,
+              radiusUnits: 'meters',
+              getRadius: ringRadius,
+              radiusMinPixels: 9,
+              filled: false,
+              stroked: true,
+              getLineColor: color as Color,
+              lineWidthUnits: 'pixels',
+              getLineWidth: width as number,
+              billboard: true,
+              updateTriggers: { getRadius: sizeTrigger },
+              parameters,
+            }),
+        ),
       chosen &&
-        new ScatterplotLayer<Plane>({
-          id: 'avions/choisi',
-          data: [chosen],
-          getPosition: (p) => p.position,
-          radiusUnits: 'pixels',
-          getRadius: 17,
-          filled: false,
-          stroked: true,
-          getLineColor: SELECTION_COLOR,
-          lineWidthUnits: 'pixels',
-          getLineWidth: 2.5,
-          billboard: true,
-          parameters,
-        }),
+        // Sélection : anneau blanc cerné de sombre.
+        [
+          ['avions/choisi-blanc', WHITE, 4.5],
+          ['avions/choisi', INK, 1.8],
+        ].map(
+          ([id, color, width]) =>
+            new ScatterplotLayer<Plane>({
+              id: id as string,
+              data: [chosen],
+              getPosition: (p) => p.position,
+              radiusUnits: 'meters',
+              getRadius: ringRadius,
+              radiusMinPixels: 9,
+              filled: false,
+              stroked: true,
+              getLineColor: color as Color,
+              lineWidthUnits: 'pixels',
+              getLineWidth: width as number,
+              billboard: true,
+              updateTriggers: { getRadius: sizeTrigger },
+              parameters,
+            }),
+        ),
       showLabels &&
         new TextLayer<Plane>({
           id: 'avions/indicatifs',
@@ -457,15 +526,17 @@ export const planes = defineModule<PlanesData>({
           getColor: [255, 255, 255],
           getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
-          getPixelOffset: [14, 0],
+          // À droite de l'anneau d'état, qui grandit avec l'avion de près.
+          getPixelOffset: (p) => [Math.max(18, ringRadius(p) / metersPerPixel(p.lat, zoom) + 6), 0],
           background: true,
           getBackgroundColor: [15, 18, 26, 215],
           backgroundPadding: [5, 2],
           backgroundBorderRadius: 4,
           billboard: true,
+          updateTriggers: { getPixelOffset: sizeTrigger },
           parameters,
         }),
-    ];
+    ].flat();
   },
 
   select(object) {

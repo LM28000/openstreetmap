@@ -15,12 +15,12 @@
  * une tige : l'ordre des altitudes se lit, l'échelle non (la légende le dit). Vue de
  * dessus, la hauteur disparaît et le satellite est exactement à la verticale de son point.
  *
- * Identité : quatre familles, distinguées par la forme et par la couleur (jamais la
- * couleur seule) ; les stations portent en plus leur nom. Un satellite pâle est dans
- * l'ombre de la Terre (donc invisible à l'œil nu).
+ * Identité : quatre familles, distinguées par la silhouette (station, navigation, météo,
+ * brillants : voir `satelliteIcons.ts`), toutes neutres, blanc et gris ; les stations portent
+ * en plus leur nom. Un satellite pâle est dans l'ombre de la Terre (donc invisible à l'œil nu).
  */
 import type { Color, Position } from '@deck.gl/core';
-import { PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent } from '../core/module';
 import { formatDateTime, formatRelative } from '../ui/format';
@@ -34,18 +34,14 @@ import {
   toSatellite,
   visibilityFrom,
 } from './orbits';
-import { type Shape, ShapeExtension } from './shapeExtension';
+import { buildSatelliteAtlas, FAMILY_ORDER, satelliteSizing, type Family, type SatelliteAtlas } from './satelliteIcons';
 import { OVER_MAP } from '../map/parameters';
-
-type Family = 'station' | 'nav' | 'weather' | 'bright';
 
 interface SatSet {
   satellites: Satellite[];
   sampler: OrbitSampler;
   byId: Map<number, Satellite>;
   families: Family[];
-  /** Satellites de chaque famille (une couche par famille, donc une forme par famille). */
-  members: Record<Family, Satellite[]>;
 }
 
 interface SatellitesData extends SatSet {
@@ -58,13 +54,12 @@ interface ApiResponse {
   satellites: ApiSatellite[];
 }
 
-const FAMILIES: Record<Family, { label: string; color: string; rgb: Color; size: number; shape: Shape }> = {
-  station: { label: 'Station spatiale (ISS, Tiangong)', color: '#e5622f', rgb: [229, 98, 47], size: 30, shape: 'star' },
-  nav: { label: 'Navigation (GPS, Galileo)', color: '#2a78d6', rgb: [42, 120, 214], size: 17, shape: 'diamond' },
-  weather: { label: 'Météo', color: '#17a574', rgb: [23, 165, 116], size: 17, shape: 'triangle' },
-  bright: { label: 'Autre satellite brillant', color: '#d03d9a', rgb: [208, 61, 154], size: 16, shape: 'square' },
+const FAMILIES: Record<Family, { label: string }> = {
+  station: { label: 'Station spatiale (ISS, Tiangong)' },
+  nav: { label: 'Navigation (GPS, Galileo)' },
+  weather: { label: 'Météo' },
+  bright: { label: 'Autre satellite brillant' },
 };
-const FAMILY_ORDER: Family[] = ['station', 'nav', 'weather', 'bright'];
 const GROUP_FAMILY: Record<string, Family> = {
   stations: 'station',
   'gps-ops': 'nav',
@@ -74,7 +69,8 @@ const GROUP_FAMILY: Record<string, Family> = {
 };
 const STARLINK_COLOR = '#6c7586';
 const STARLINK_RGB: Color = [108, 117, 134, 215];
-const OUTLINE = '#161a26';
+/** Trace au sol : blanc cassé, comme les silhouettes (aucune couleur de famille). */
+const TRACK_RGB: Color = [238, 241, 246];
 const PARAMETERS = OVER_MAP;
 /** Mètres par pixel à l'équateur au zoom 0 (tuiles de 512 px, comme MapLibre). */
 const METERS_PER_PIXEL_ZOOM0 = 78_271.517;
@@ -83,6 +79,9 @@ const DEG = Math.PI / 180;
 const STARLINK_MAX_SPEED = 120;
 const STARLINK_REFRESH_MS = 3 * 3_600_000;
 const STARLINK_RETRY_MS = 60_000;
+
+/** Opacité (0 à 255) d'un satellite dans l'ombre de la Terre. */
+const SHADOWED_ALPHA = 140;
 
 const withAlpha = (rgb: Color, alpha: number): Color => [rgb[0]!, rgb[1]!, rgb[2]!, alpha];
 
@@ -99,14 +98,11 @@ function buildSet(list: readonly ApiSatellite[]): SatSet {
     if (satellite) satellites.push(satellite);
   }
   const families = satellites.map(familyOf);
-  const members: Record<Family, Satellite[]> = { station: [], nav: [], weather: [], bright: [] };
-  satellites.forEach((s, i) => members[families[i]!].push(s));
   return {
     satellites,
     sampler: new OrbitSampler(satellites),
     byId: new Map(satellites.map((s) => [s.id, s])),
     families,
-    members,
   };
 }
 
@@ -156,55 +152,11 @@ function simulatedSpeed(time: number): number {
   return speedProbe.speed;
 }
 
-// --- Icônes de la légende : les mêmes formes que sur la carte (voir shapeExtension.ts), dessinées une fois ---
+// --- Icônes : l'atlas des silhouettes, et les images de la légende ---
 
-const ICON = 64;
-
-function shapePath(ctx: CanvasRenderingContext2D, family: Family): void {
-  const c = ICON / 2;
-  ctx.beginPath();
-  switch (family) {
-    case 'station': // étoile à cinq branches
-      for (let i = 0; i < 10; i++) {
-        const radius = i % 2 === 0 ? 27 : 12;
-        const angle = -Math.PI / 2 + (i * Math.PI) / 5;
-        ctx.lineTo(c + radius * Math.cos(angle), c + radius * Math.sin(angle));
-      }
-      break;
-    case 'nav': // losange
-      ctx.moveTo(c, c - 25);
-      ctx.lineTo(c + 22, c);
-      ctx.lineTo(c, c + 25);
-      ctx.lineTo(c - 22, c);
-      break;
-    case 'weather': // triangle
-      ctx.moveTo(c, c - 24);
-      ctx.lineTo(c + 24, c + 19);
-      ctx.lineTo(c - 24, c + 19);
-      break;
-    case 'bright': // carré
-      ctx.roundRect(c - 19, c - 19, 38, 38, 5);
-      break;
-  }
-  ctx.closePath();
-}
-
-function drawIcon(ctx: CanvasRenderingContext2D, family: Family, color: string, alpha = 1): void {
-  ctx.save();
-  ctx.globalAlpha = alpha;
-  shapePath(ctx, family);
-  ctx.fillStyle = color;
-  ctx.fill();
-  ctx.lineWidth = 5;
-  ctx.lineJoin = 'round';
-  ctx.strokeStyle = OUTLINE;
-  ctx.stroke();
-  // Liseré clair à l'intérieur : la forme reste lisible sur la carte claire comme sur la nuit.
-  ctx.lineWidth = 1.5;
-  ctx.strokeStyle = 'rgba(255, 255, 255, 0.55)';
-  ctx.stroke();
-  ctx.restore();
-}
+let atlasCache: SatelliteAtlas | undefined;
+const atlas = (): SatelliteAtlas => (atlasCache ??= buildSatelliteAtlas());
+const SIZING = Object.fromEntries(FAMILY_ORDER.map((family) => [family, satelliteSizing(family)])) as Record<Family, ReturnType<typeof satelliteSizing>>;
 
 interface Icons {
   legend(family: Family): string;
@@ -216,20 +168,8 @@ let iconsCache: Icons | undefined;
 
 function icons(): Icons {
   if (iconsCache) return iconsCache;
-  const legend = new Map<Family, string>();
-  for (const family of FAMILY_ORDER) {
-    const single = document.createElement('canvas');
-    single.width = single.height = ICON;
-    const singleContext = single.getContext('2d');
-    if (singleContext) drawIcon(singleContext, family, FAMILIES[family].color);
-    legend.set(family, single.toDataURL());
-  }
-
-  // « Dans l'ombre » : une forme estompée, sans couleur de famille.
-  const shadow = document.createElement('canvas');
-  shadow.width = shadow.height = ICON;
-  const shadowContext = shadow.getContext('2d');
-  if (shadowContext) drawIcon(shadowContext, 'bright', '#9ba4b4', 0.42);
+  const { legend } = atlas();
+  const ICON = 64;
 
   // Trace au sol : un trait plein (futur) prolongé d'un trait pâle (passé).
   const track = document.createElement('canvas');
@@ -252,8 +192,9 @@ function icons(): Icons {
   }
 
   iconsCache = {
-    legend: (family) => legend.get(family) ?? '',
-    shadowLegend: shadow.toDataURL(),
+    legend: (family) => legend(family),
+    // « Dans l'ombre » : la même silhouette, estompée.
+    shadowLegend: legend('bright', SHADOWED_ALPHA / 255),
     trackLegend: track.toDataURL(),
   };
   return iconsCache;
@@ -396,7 +337,7 @@ export const satellites = defineModule<SatellitesData>({
     const { legend, shadowLegend, trackLegend } = icons();
     return [
       ...FAMILY_ORDER.map((family) => ({
-        color: FAMILIES[family].color,
+        color: 'transparent',
         label: FAMILIES[family].label,
         icon: legend(family),
       })),
@@ -468,7 +409,7 @@ export const satellites = defineModule<SatellitesData>({
     // Trace au sol de l'objet sélectionné : demi-orbite passée (pâle) et à venir (pleine).
     if (chosen) {
       const track = trackOf(chosen.satellite, time);
-      const color = chosen.family ? FAMILIES[chosen.family].rgb : STARLINK_RGB;
+      const color = chosen.family ? TRACK_RGB : STARLINK_RGB;
       layers.push(
         new PathLayer<Array<[number, number]>>({
           id: 'satellites/trace-passee',
@@ -520,41 +461,28 @@ export const satellites = defineModule<SatellitesData>({
       }),
     );
 
-    // Un contour sombre un peu plus grand sous chaque forme, pour qu'elle reste lisible sur la carte claire comme sur la nuit.
-    for (const family of FAMILY_ORDER) {
-      const { rgb, size, shape } = FAMILIES[family];
-      const members = data.members[family];
-      const radius = (s: Satellite) => (positions.state[s.index] === 0 || hidden(s.index) ? 0 : size / 2);
-      const extensions = [new ShapeExtension({ shape })];
-      layers.push(
-        new ScatterplotLayer<Satellite>({
-          id: `satellites/contour-${family}`,
-          data: members,
-          getPosition: position as never,
-          getRadius: (s) => radius(s) + 2.4,
-          radiusUnits: 'pixels',
-          getFillColor: (s) => [22, 26, 38, positions.state[s.index] === 1 ? 120 : 235],
-          billboard: true,
-          extensions,
-          updateTriggers: { getPosition: trigger, getRadius: trigger, getFillColor: trigger },
-          parameters: PARAMETERS,
-        }),
-        new ScatterplotLayer<Satellite>({
-          id: `satellites/${family}`,
-          data: members,
-          getPosition: position as never,
-          getRadius: radius,
-          radiusUnits: 'pixels',
-          // Dans l'ombre de la Terre : estompé.
-          getFillColor: (s) => withAlpha(rgb, positions.state[s.index] === 1 ? 140 : 255),
-          billboard: true,
-          pickable: true,
-          extensions,
-          updateTriggers: { getPosition: trigger, getRadius: trigger, getFillColor: trigger },
-          parameters: PARAMETERS,
-        }),
-      );
-    }
+    // Les silhouettes : une seule couche, une icône par famille. Contour sombre et halo clair sont dans l'atlas.
+    const sprites = atlas();
+    const shown = (index: number) => positions.state[index] !== 0 && !hidden(index);
+    layers.push(
+      new IconLayer<Satellite>({
+        id: 'satellites/silhouettes',
+        data: list,
+        iconAtlas: sprites.atlas,
+        iconMapping: sprites.mapping,
+        getIcon: (s) => families[s.index]!,
+        getPosition: position as never,
+        // Taille nulle : position inconnue, ou de l'autre côté de la Terre sur le globe.
+        getSize: (s) => (shown(s.index) ? SIZING[families[s.index]!].cellPx : 0),
+        sizeUnits: 'pixels',
+        // Dans l'ombre de la Terre : estompé.
+        getColor: (s) => [255, 255, 255, positions.state[s.index] === 1 ? SHADOWED_ALPHA : 255],
+        billboard: true,
+        pickable: true,
+        updateTriggers: { getPosition: trigger, getSize: trigger, getColor: trigger },
+        parameters: PARAMETERS,
+      }),
+    );
 
     // Étiquettes : les stations, et l'objet sélectionné. Peu nombreuses : pas besoin de désencombrer.
     const labelled = list.filter((_, i) => families[i] === 'station' && positions.state[i] !== 0);
@@ -573,7 +501,7 @@ export const satellites = defineModule<SatellitesData>({
           getColor: [255, 255, 255, 255],
           getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
-          getPixelOffset: (s) => [(FAMILIES[families[s.index]!].size >> 1) + 6, 0],
+          getPixelOffset: (s) => [SIZING[families[s.index]!].radiusPx + 6, 0],
           background: true,
           getBackgroundColor: [22, 26, 38, 215],
           backgroundPadding: [6, 3],
@@ -591,9 +519,11 @@ export const satellites = defineModule<SatellitesData>({
       const set = chosen.set === data ? positions : starlink.set?.sampler.at(time);
       if (set && set.state[index] !== 0 && !behindGlobe(set)(index)) {
         const at = placed(set, index, zoom, [0, 0, 0]);
+        // L'anneau enveloppe la silhouette (plus large pour la station) ; un Starlink n'est qu'un point.
+        const ringRadius = chosen.family ? SIZING[chosen.family].radiusPx + 5 : 9;
         for (const [id, radius, color, width] of [
-          ['satellites/choisi-ombre', 15, [22, 26, 38, 230], 6],
-          ['satellites/choisi', 15, [255, 255, 255, 255], 2.5],
+          ['satellites/choisi-ombre', ringRadius, [22, 26, 38, 230], 6],
+          ['satellites/choisi', ringRadius, [255, 255, 255, 255], 2.5],
         ] as const) {
           layers.push(
             new ScatterplotLayer<Position>({

@@ -1,7 +1,7 @@
 import { useEffect, useSyncExternalStore } from 'react';
 import type { InfoTable } from '../core/module';
 import type { ModuleManager } from '../core/moduleManager';
-import { useClockTime } from './hooks';
+import { useClockTime, useModuleStates } from './hooks';
 
 /**
  * Fiche de l'objet sélectionné. Elle est recalculée en continu : un train avance,
@@ -9,6 +9,8 @@ import { useClockTime } from './hooks';
  */
 export function InfoPanel({ manager }: { manager: ModuleManager }) {
   const selection = useSyncExternalStore(manager.subscribe, manager.getSelection);
+  // Recalculer aussi quand de nouvelles données arrivent (horloge en pause, saut dans le temps…).
+  useModuleStates(manager);
   const time = useClockTime(500);
   const info = selection ? manager.describeSelection(time) : null;
   const close = () => manager.setSelection(null, null);
@@ -61,6 +63,7 @@ export function InfoPanel({ manager }: { manager: ModuleManager }) {
           ))}
         </dl>
       )}
+      {content.note && <p className="info__note">{content.note}</p>}
       {content.tables?.map((table) => (
         <Table key={table.title} table={table} onSelect={select} />
       ))}

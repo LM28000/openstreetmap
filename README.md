@@ -142,7 +142,10 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
 | Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
+| Vigilance crues | Niveau de vigilance des 337 tronçons de rivières surveillés, de vert à rouge (épaisseur du trait selon le niveau). Couche MapLibre drapée sur le relief. | [Vigicrues](https://www.vigicrues.gouv.fr) |
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
+| Électricité | Sur chaque région, une colonne 3D empile la production par filière, et un anneau blanc marque la consommation. Au quart d'heure, et suit la frise temporelle. | RTE éCO2mix via [ODRÉ](https://odre.opendatasoft.com) |
+| Carburants | Prix actuels dans les 9 800 stations-service, colorés par rapport au reste de la France (bleu moins cher, rouge plus cher), au choix du carburant. Vu de près, une étiquette de prix ; la moins chère l'emporte quand deux étiquettes se gêneraient. | [prix-carburants.gouv.fr](https://www.prix-carburants.gouv.fr) |
 | Jour et nuit | L'ombre de la nuit et des crépuscules. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 
 Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles (TER, grande vitesse, Intercités) reprennent les trois premières couleurs de la palette de référence. Le mode « retard » utilise une seule teinte, de plus en plus sombre, car le vert et le rouge sont confondus par les daltoniens.
@@ -156,6 +159,9 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Horaires et temps réel | SNCF, via [transport.data.gouv.fr](https://transport.data.gouv.fr) | ODbL |
 | Relief | [Mapterhorn](https://mapterhorn.com/attribution) | attribution |
 | Séismes | EMSC | attribution |
+| Vigilance crues | Vigicrues (SCHAPI) | licence ouverte |
+| Électricité | RTE éCO2mix, via ODRÉ | licence ouverte |
+| Carburants | prix-carburants.gouv.fr (ministère de l'Économie) | licence ouverte |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.
 
@@ -172,7 +178,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
 | **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. Reste : archivage sur le serveur maison, réponse plus légère (à chaque rafraîchissement du temps réel, une image de ~150 ms le temps que deck.gl renvoie les traînées à la carte graphique) |
-| 2. Couches rapides | Carburants, rivières, qualité de l'air, incendies, vélos, réseau électrique |
+| **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues, électricité par région. Reste : qualité de l'air, incendies, vélos en libre-service |
 | 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |
 | 5. Rendu avancé | Vent animé, radar de pluie, ombres, LiDAR, photos anciennes |

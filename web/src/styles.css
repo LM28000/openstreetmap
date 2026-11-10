@@ -444,6 +444,13 @@ button {
   outline-offset: -2px;
 }
 
+.info__note {
+  margin: 12px 0 0;
+  color: var(--text-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
 .info__empty {
   margin: 0;
   color: var(--text-muted);

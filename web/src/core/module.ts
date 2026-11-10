@@ -10,7 +10,7 @@
  * C'est ce qui rend le replay et la frise temporelle possibles.
  */
 import type { LayersList } from '@deck.gl/core';
-import type { Map as MapLibreMap } from 'maplibre-gl';
+import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
 
 export type Category = 'transport' | 'environnement' | 'energie' | 'territoire' | 'ciel' | 'histoire';
 
@@ -88,6 +88,8 @@ export interface InfoContent {
   title: string;
   subtitle?: string;
   fields?: Array<[label: string, value: string]>;
+  /** Paragraphe d'explication (par exemple le sens d'un niveau d'alerte). */
+  note?: string;
   /** Tableaux : arrêts d'un train, départs d'une gare… */
   tables?: InfoTable[];
   link?: { href: string; label: string };
@@ -120,6 +122,11 @@ export interface NativeLayers<TData> {
   update?(map: MapLibreMap, ctx: RenderContext<TData>): void;
   /** Retire sources et couches. Appelé quand on masque le module. */
   remove(map: MapLibreMap): void;
+  /** Couches natives cliquables : l'objet cliqué est passé à `select` du module. */
+  pickable?: {
+    layerIds: string[];
+    toObject(feature: MapGeoJSONFeature): unknown;
+  };
 }
 
 export interface LayerModule<TData = unknown> {
@@ -144,8 +151,8 @@ export interface LayerModule<TData = unknown> {
 
   /** Réglages proposés à l'utilisateur (ex. mode de couleur). */
   settings?: readonly ModuleSetting[];
-  /** Légende affichée sous la couche quand elle est visible. */
-  legend?(settings: Readonly<Record<string, string>>): LegendItem[];
+  /** Légende affichée sous la couche quand elle est visible (elle peut dépendre des données). */
+  legend?(settings: Readonly<Record<string, string>>, data: TData | undefined): LegendItem[];
   /** Résumé court affiché sous la couche, recalculé chaque seconde (ex. « 812 trains en circulation »). */
   summary?(ctx: RenderContext<TData>): string | null;
 
@@ -166,6 +173,11 @@ export interface LayerModule<TData = unknown> {
    * après chaque déplacement de la carte.
    */
   followsView?: boolean;
+  /**
+   * Seuils de zoom où l'affichage change (ex. `[13]` : étiquettes à partir du zoom 13).
+   * Le module est redessiné dès qu'on franchit un seuil, sans attendre la fin du mouvement.
+   */
+  zoomBreaks?: readonly number[];
 
   /** Couches deck.gl (objets animés, points cliquables…) pour l'instant t. */
   deckLayers?(ctx: RenderContext<TData>): LayersList;

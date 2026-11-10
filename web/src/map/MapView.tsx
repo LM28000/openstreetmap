@@ -21,6 +21,8 @@ import {
   setupBaseMap,
 } from './baseMap';
 
+/** Tolérance de clic, en pixels : les points, étiquettes et trains vus de loin sont petits. */
+const PICKING_RADIUS = 5;
 /** Au plus une notification « la vue a changé » par seconde (la caméra qui suit un train bouge sans arrêt). */
 const VIEW_NOTIFY_INTERVAL_MS = 1_000;
 
@@ -76,7 +78,22 @@ export function MapView({ manager }: { manager: ModuleManager }) {
     const overlay = new MapboxOverlay({
       interleaved: true,
       layers: [],
-      onClick: (info: PickingInfo) => manager.pick(info.layer?.id, info.object),
+      pickingRadius: PICKING_RADIUS,
+      onClick: (info: PickingInfo) => {
+        if (info.object != null) {
+          manager.pick(info.layer?.id, info.object);
+          return;
+        }
+        // Rien sous le pointeur côté deck.gl : peut-être un objet d'une couche MapLibre native (rivières…).
+        const layers = manager.nativePickLayerIds().filter((id) => map.getLayer(id));
+        const box: [[number, number], [number, number]] = [
+          [info.x - 4, info.y - 4],
+          [info.x + 4, info.y + 4],
+        ];
+        const feature = layers.length > 0 ? map.queryRenderedFeatures(box, { layers })[0] : undefined;
+        if (feature) manager.pickFeature(feature);
+        else manager.pick(undefined, null);
+      },
       getCursor: ({ isDragging, isHovering }) => (isDragging ? 'grabbing' : isHovering ? 'pointer' : 'grab'),
     });
 
@@ -105,7 +122,11 @@ export function MapView({ manager }: { manager: ModuleManager }) {
       clearTimeout(terrainTimer);
       clearTimeout(viewTimer);
       manager.detachMap();
+      // En se détruisant, MapLibre efface la vue de l'adresse. Or React détruit et recrée
+      // la carte en développement (double montage, rechargement à chaud) : on la remet.
+      const hash = window.location.hash;
       map.remove();
+      window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${hash}`);
     };
   }, [manager]);
 

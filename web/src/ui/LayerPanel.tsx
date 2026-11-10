@@ -57,7 +57,7 @@ interface LayerRowProps {
 }
 
 function LayerRow({ module, state, now, manager }: LayerRowProps) {
-  const legend = state.visible ? (module.legend?.(state.settings) ?? []) : [];
+  const legend = state.visible ? manager.legendOf(module.id) : [];
   return (
     <div className="layer">
       <label className="layer__main">

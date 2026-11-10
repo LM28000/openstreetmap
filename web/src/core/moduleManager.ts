@@ -6,8 +6,8 @@
  * des couches.
  */
 import type { Layer, LayersList } from '@deck.gl/core';
-import type { Map as MapLibreMap } from 'maplibre-gl';
-import type { InfoContent, LayerModule, RenderContext, TerrainSampler } from './module';
+import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
+import type { InfoContent, LayerModule, LegendItem, RenderContext, TerrainSampler } from './module';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -111,6 +111,21 @@ export class ModuleManager {
     this.setSelection(module && value != null ? module.id : null, value ?? null);
   }
 
+  /** Couches natives cliquables des modules visibles (pour chercher sous le pointeur). */
+  nativePickLayerIds(): string[] {
+    return [...this.entries.values()]
+      .filter((entry) => entry.nativeAdded && this.isVisible(entry))
+      .flatMap((entry) => entry.module.native?.pickable?.layerIds ?? []);
+  }
+
+  /** Clic sur un objet d'une couche native : le module propriétaire décide quoi sélectionner. */
+  pickFeature(feature: MapGeoJSONFeature): void {
+    const entry = [...this.entries.values()].find((e) => e.module.native?.pickable?.layerIds.includes(feature.layer.id));
+    const pickable = entry?.module.native?.pickable;
+    const value = entry && pickable ? entry.module.select?.(pickable.toObject(feature)) : null;
+    this.setSelection(entry && value != null ? entry.module.id : null, value ?? null);
+  }
+
   /** Sélectionne une valeur d'un module (ex. une ligne cliquée dans une fiche), ou rien. */
   setSelection(moduleId: string | null, value: unknown): void {
     const previous = this.selection;
@@ -193,6 +208,13 @@ export class ModuleManager {
     this.viewVersion++;
   }
 
+  /** Légende d'un module, d'après ses réglages et ses données actuelles. */
+  legendOf(id: string): LegendItem[] {
+    const entry = this.entries.get(id);
+    const state = this.snapshot[id];
+    return entry && state ? (entry.module.legend?.(state.settings, entry.data) ?? []) : [];
+  }
+
   /** Module propriétaire d'une couche deck.gl (pour le clic). */
   ownerOf(layerId: string): LayerModule | undefined {
     return this.layerOwners.get(layerId);
@@ -238,7 +260,8 @@ export class ModuleManager {
       const step = module.timeStepMs > 0 ? Math.floor(time / module.timeStepMs) : `image-${this.frameCount}`;
       const terrainVersion = module.followsTerrain ? this.terrain.version : 0;
       const viewVersion = module.followsView ? this.viewVersion : 0;
-      const key = `${entry.version}:${step}:${terrainVersion}:${viewVersion}`;
+      const zoomBand = module.zoomBreaks?.filter((z) => ctx.view.zoom >= z).length ?? 0;
+      const key = `${entry.version}:${step}:${terrainVersion}:${viewVersion}:${zoomBand}`;
       if (key === entry.renderedKey) continue;
       entry.renderedKey = key;
 

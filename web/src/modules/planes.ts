@@ -37,6 +37,9 @@ import {
   type Shape,
 } from './planeIcons';
 import { OVER_MAP } from '../map/parameters';
+import { aircraftMeshes, groundClearance } from '../models/aircraft';
+import { orientation } from '../models/mesh';
+import { meshLayer, RENDER_SETTING, wants3d } from '../models/meshLayer';
 
 interface ApiPlane {
   hex: string;
@@ -92,6 +95,8 @@ export interface Plane {
   position: [number, number, number];
   shadow: [number, number, number];
   angle: number;
+  /** Inclinaison latérale (degrés, positive vers la droite), déduite du virage entre deux collectes. */
+  bank: number;
   groundZ: number;
   groundAt: number;
   groundVersion: number;
@@ -139,6 +144,12 @@ const INK: Color = [20, 26, 38, 235];
 const METERS_PER_PIXEL_ZOOM0 = 78_271.517;
 /** Rayon des anneaux d'état, en fraction de l'envergure affichée. */
 const RING_RADIUS = 0.72;
+
+/** « #rrggbb » → couleur deck.gl. */
+function hexColor(hex: string): Color {
+  const n = Number.parseInt(hex.slice(1), 16);
+  return [(n >> 16) & 255, (n >> 8) & 255, n & 255];
+}
 
 const EMERGENCY_SQUAWKS: Record<string, string> = {
   '7500': 'détournement (intervention illicite)',
@@ -204,6 +215,35 @@ function extrapolate(plane: Plane, time: number): { lon: number; lat: number; al
 }
 
 let previous: PlanesData | undefined;
+
+const G = 9.81;
+/** Au-delà, l'écart de cap vient d'un trou dans les données plutôt que d'un virage. */
+const MAX_TURN_DEG_S = 6;
+
+/**
+ * Inclinaison d'un virage coordonné, d'après le changement de cap entre deux observations :
+ * tan(inclinaison) = vitesse × taux de virage / g. Bornée à 30° (un avion de ligne vire à 25° au plus).
+ */
+function bankAngle(before: Plane, after: Plane): number {
+  if (after.ground || after.speedKt < 60) return 0;
+  const dt = (after.observedAt - before.observedAt) / 1000;
+  if (dt < 3) return before.bank;
+  const dTrack = ((after.track - before.track + 540) % 360) - 180;
+  const rate = dTrack / dt;
+  if (Math.abs(rate) > MAX_TURN_DEG_S) return 0;
+  const bank = (Math.atan((after.speedKt * KT * rate * Math.PI) / 180 / G) * 180) / Math.PI;
+  return Math.max(-30, Math.min(30, bank));
+}
+
+/** Assiette (degrés, positive en montée) d'après le taux de montée et la vitesse ; bornée à ±15°. */
+function climbAngle(plane: Plane): number {
+  if (plane.ground || plane.speedKt < 30) return 0;
+  const angle = (Math.atan((plane.climbFpm * FT) / 60 / (plane.speedKt * KT)) * 180) / Math.PI;
+  return Math.max(-15, Math.min(15, angle));
+}
+
+/** En dessous de ce zoom, les maquettes ne seraient qu'une tache : on garde les silhouettes à plat. */
+const MESH_MIN_ZOOM = 6.5;
 
 /**
  * Angle d'icône (degrés, sens trigonométrique depuis la droite de l'écran) d'un avion de cap
@@ -301,6 +341,7 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
       position: [p.lon, p.lat, 0],
       shadow: [p.lon, p.lat, 0],
       angle: 90 - (p.track ?? 0),
+      bank: 0,
       groundZ: 0,
       groundAt: 0,
       groundVersion: -1,
@@ -313,6 +354,7 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
     for (const plane of list) {
       const old = previous.byHex.get(plane.hex);
       if (!old) continue;
+      plane.bank = bankAngle(old, plane);
       const before = extrapolate(old, receivedAt);
       const after = extrapolate(plane, receivedAt);
       const dLon = before.lon - after.lon;
@@ -367,8 +409,9 @@ export const planes = defineModule<PlanesData>({
   attribution: 'adsb.lol (récepteurs ADS-B de la communauté, licence ODbL)',
   refreshIntervalMs: 10_000,
   timeStepMs: 0, // les avions avancent à chaque image
-  zoomBreaks: halfZoomBreaks(LABEL_MIN_ZOOM),
+  zoomBreaks: [...halfZoomBreaks(LABEL_MIN_ZOOM), MESH_MIN_ZOOM].sort((a, b) => a - b),
   followsTerrain: true,
+  settings: [RENDER_SETTING],
 
   legend(): LegendItem[] {
     const icons = atlas();
@@ -400,7 +443,7 @@ export const planes = defineModule<PlanesData>({
     return parts.join(', ') + stale;
   },
 
-  deckLayers({ data, time, terrain, selection, view }) {
+  deckLayers({ data, time, terrain, selection, view, settings }) {
     if (!data || !isLive(time)) return [];
     const parameters = OVER_MAP;
     const icons = atlas();
@@ -432,6 +475,10 @@ export const planes = defineModule<PlanesData>({
     // Les tailles dépendent de l'échelle (mètres réels, avec un minimum en pixels) : on les recalcule quand le zoom change.
     const sizeTrigger = zoom.toFixed(2);
     const iconSize = (p: Plane) => displayed(p, zoom).cellMeters;
+    const models = wants3d(settings) && zoom >= MESH_MIN_ZOOM;
+    const meshes = models ? aircraftMeshes() : undefined;
+    const grow = (p: Plane) => displayed(p, zoom).spanMeters / SIZING[p.cls].spanMeters;
+    const bandColor = (p: Plane): Color => hexColor(p.band === 'ground' ? GROUND_COLOR : BAND_COLORS[p.band]);
     const ringRadius = (p: Plane) => RING_RADIUS * displayed(p, zoom).spanMeters;
 
     return [
@@ -470,6 +517,26 @@ export const planes = defineModule<PlanesData>({
               parameters,
             }),
         ),
+      meshes &&
+        PLANE_CLASSES.map((cls) =>
+          meshLayer<Plane>({
+            id: `avions/maquettes/${cls}`,
+            data: shown.filter((p) => p.cls === cls),
+            mesh: meshes[cls],
+            getPosition: (p) => p.position,
+            getOrientation: (p) => orientation(p.track, climbAngle(p), p.bank),
+            getScale: (p) => {
+              const g = grow(p);
+              return [g, g, g];
+            },
+            // Au sol, l'avion repose sur son train ; agrandi de loin, il ne doit pas non plus s'enfoncer dans le relief.
+            getTranslation: (p) => [0, 0, Math.max(0, p.groundZ + groundClearance(p.cls) * grow(p) - p.position[2])],
+            getColor: bandColor,
+            pickable: true,
+            updateTriggers: { getScale: sizeTrigger, getTranslation: [sizeTrigger, time] },
+          }),
+        ),
+      !meshes &&
       new IconLayer<Plane>({
         id: 'avions/positions',
         data: shown,

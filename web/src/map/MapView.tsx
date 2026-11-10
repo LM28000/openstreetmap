@@ -12,6 +12,7 @@ import { MapboxOverlay } from '@deck.gl/mapbox';
 import type { PickingInfo } from '@deck.gl/core';
 import { clock } from '../core/clock';
 import type { ModuleManager } from '../core/moduleManager';
+import { sunEffects } from '../models/sunLight';
 import {
   BASE_STYLE_URL,
   INITIAL_VIEW,
@@ -121,11 +122,24 @@ export function MapView({ manager }: { manager: ModuleManager }) {
     if (import.meta.env.DEV) Object.assign(window, { __carte: { map, overlay, clock, manager } });
 
     let frameRequest = 0;
+    let frameCount = 0;
+    let effects: ReturnType<typeof sunEffects> | undefined;
     const tick = () => {
       const time = clock.now();
       const target = manager.followTarget(time);
       if (target) map.jumpTo({ center: [target.lon, target.lat] });
       const layers = manager.frame(time);
+      // Maquettes 3D éclairées par le soleil du centre de la vue (vérifié quelques fois par seconde).
+      if (frameCount++ % 15 === 0) {
+        const center = map.getCenter();
+        // Comme les bâtiments : le vrai soleil seulement quand la couche « Jour et nuit » est affichée.
+        const followSun = manager.getSnapshot()['jour-nuit']?.visible === true;
+        const next = sunEffects(center.lat, center.lng, time, followSun);
+        if (next !== effects) {
+          effects = next;
+          overlay.setProps({ effects });
+        }
+      }
       if (layers) overlay.setProps({ layers });
       frameRequest = requestAnimationFrame(tick);
     };

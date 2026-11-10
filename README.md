@@ -157,6 +157,7 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Électricité | Sur chaque région, une colonne 3D empile la production par filière, et un anneau blanc marque la consommation. Au quart d'heure, et suit la frise temporelle. | RTE éCO2mix via [ODRÉ](https://odre.opendatasoft.com) |
 | Carburants | Prix actuels dans les 9 800 stations-service, colorés par rapport au reste de la France (bleu moins cher, rouge plus cher), au choix du carburant. Vu de près, une étiquette de prix ; la moins chère l'emporte quand deux étiquettes se gêneraient. | [prix-carburants.gouv.fr](https://www.prix-carburants.gouv.fr) |
+| Satellites | Stations spatiales (ISS, Tiangong), satellites de navigation, météo et les plus brillants, à leur position calculée pour l'instant affiché (replay compris) ; Starlink en option. Altitude figurée par une tige (échelle non respectée), trace au sol de l'orbite au clic, visibilité de l'ISS depuis le centre de la carte. | [CelesTrak](https://celestrak.org) |
 | Jour et nuit | L'ombre de la nuit et des crépuscules. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 
 Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles (TER, grande vitesse, Intercités) reprennent les trois premières couleurs de la palette de référence. Le mode « retard » utilise une seule teinte, de plus en plus sombre, car le vert et le rouge sont confondus par les daltoniens.
@@ -177,6 +178,7 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Feux | NASA FIRMS (capteurs VIIRS) | libre, citer la NASA |
 | Avions | adsb.lol (récepteurs ADS-B de la communauté) | ODbL |
 | Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
+| Satellites | CelesTrak (éléments orbitaux GP) | libre ; au plus un téléchargement par groupe toutes les 2 h |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.
 
@@ -195,7 +197,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
 | **1. Trains** (fait) | Horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit, voies ferrées par vitesse. Le réseau est mis en cache par le navigateur et le rafraîchissement ne fige plus l'animation. Le serveur maison archive aussi le temps réel brut. |
 | **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues, électricité par région, vélos en libre-service, feux. Reste : qualité de l'air (l'API d'Atmo France demande un compte) |
-| 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
+| **3. Tout ce qui bouge** (en cours) | Fait : avions, bateaux, satellites. Reste : bus, métros et trams |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |
 | 5. Rendu avancé | Vent animé, radar de pluie, ombres, LiDAR, photos anciennes |
 | 6. Intelligence | Isochrones, replay d'une journée, croisement des couches, questions en langage naturel, visite guidée |

@@ -16,7 +16,8 @@ import { formatTime } from '../ui/format';
 
 const EXPORT_URL = 'https://odre.opendatasoft.com/api/explore/v2.1/catalog/datasets/eco2mix-regional-tr/exports/json';
 const QUARTER_MS = 15 * 60_000;
-const MAX_READING_AGE_MS = 2 * 3600_000;
+/** Le flux régional « temps réel » d’éCO2mix arrive avec environ deux heures de retard : on montre le dernier relevé jusqu’à 3 h 30 (son heure est affichée). */
+const MAX_READING_AGE_MS = 3.5 * 3600_000;
 /** Période chargée avant l'instant affiché (les données temps réel arrivent avec ~30 min de retard). */
 const WINDOW_MS = 6 * 3600_000;
 

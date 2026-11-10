@@ -167,6 +167,17 @@ function atlas(): PlaneAtlas {
   return atlasCache;
 }
 
+let shadowMappingCache: PlaneAtlas['mapping'] | undefined;
+/**
+ * Les mêmes cases de l'atlas, lues comme des masques : l'ombre prend la forme de l'icône (halo
+ * compris) mais une couleur unie, sombre. Lue en couleurs, elle montrerait le halo blanc et
+ * deviendrait un fantôme clair sur le fond de nuit.
+ */
+function shadowMapping(): PlaneAtlas['mapping'] {
+  shadowMappingCache ??= Object.fromEntries(Object.entries(atlas().mapping).map(([key, cell]) => [key, { ...cell, mask: true }]));
+  return shadowMappingCache;
+}
+
 function bandOf(altM: number | null, ground: boolean): Band {
   if (ground || altM === null) return 'ground';
   if (altM < 1000) return 0;
@@ -487,11 +498,11 @@ export const planes = defineModule<PlanesData>({
         id: 'avions/ombres',
         data: flying,
         iconAtlas: icons.atlas,
-        iconMapping: icons.mapping,
+        iconMapping: shadowMapping(),
         getIcon: (p) => p.icon,
         getPosition: (p) => p.shadow,
         getAngle: (p) => p.angle,
-        getColor: [0, 0, 0, 70],
+        getColor: [0, 0, 0, 56],
         billboard: false,
         sizeUnits: 'meters',
         getSize: iconSize,

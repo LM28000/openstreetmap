@@ -8,8 +8,9 @@
  * sa puissance radiative.
  */
 import { IconLayer, ScatterplotLayer } from '@deck.gl/layers';
+import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
-import { formatDateTime } from '../ui/format';
+import { formatDateTime, formatRelative, formatTime } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
 import { HALO, ink, type IconSheet, KEY, packIcons, selectionRing, zoomRamp } from './symbols';
 
@@ -212,18 +213,24 @@ export const fires = defineModule<FiresData>({
     const fire = data?.byKey.get((selection as { key: string }).key);
     if (!fire) return null;
     return {
-      title: 'Point chaud détecté par satellite',
+      kind: 'Point chaud · satellite',
+      title: 'Point chaud détecté',
       subtitle: formatDateTime(fire.time * 1000),
-      fields: [
-        ['Puissance radiative', `${fire.frp.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} MW`],
-        ['Fiabilité', CONFIDENCE[fire.confidence] ?? fire.confidence],
-        ['Détection', `${fire.day ? 'de jour' : 'de nuit'}, satellite ${fire.satellite}`],
+      // Les passages de satellite se succèdent à quelques heures d'écart : ce n'est pas du direct.
+      status: plainStatus(`Détecté ${formatRelative(fire.time * 1000)}`),
+      figures: [
+        { value: fire.frp.toLocaleString('fr-FR', { maximumFractionDigits: 1 }), unit: 'MW', label: 'puissance radiative' },
+        { value: formatTime(fire.time * 1000), label: fire.day ? 'détection de jour' : 'détection de nuit' },
+        { value: fire.satellite, label: 'satellite' },
       ],
+      fields: [['Fiabilité', CONFIDENCE[fire.confidence] ?? fire.confidence]],
       note: 'Un point chaud est une zone de 375 m plus chaude que son entourage : un incendie, mais aussi un brûlage agricole, une torchère ou un site industriel.',
-      link: {
-        href: `https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs,7days;@${fire.lon.toFixed(3)},${fire.lat.toFixed(3)},11.0z`,
-        label: 'Voir sur la carte FIRMS de la NASA',
-      },
+      actions: [
+        {
+          label: 'Source',
+          href: `https://firms.modaps.eosdis.nasa.gov/map/#d:24hrs,7days;@${fire.lon.toFixed(3)},${fire.lat.toFixed(3)},11.0z`,
+        },
+      ],
     };
   },
 });

@@ -11,10 +11,12 @@
  */
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
+import { selectionRing } from './symbols';
 
 const EXPORT_URL =
   'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/exports/json';
@@ -83,6 +85,7 @@ const LABEL_BOX_PX = { width: 74, height: 28 };
 const LABEL_CHARACTERS = '0123456789, €';
 const shortEuros = (price: number) => `${price.toFixed(3).replace('.', ',')} €`;
 
+const litre = new Intl.NumberFormat('fr-FR', { minimumFractionDigits: 3, maximumFractionDigits: 3 });
 const euros = new Intl.NumberFormat('fr-FR', { style: 'currency', currency: 'EUR', minimumFractionDigits: 3 });
 
 function quantile(sorted: number[], q: number): number {
@@ -220,6 +223,7 @@ export const fuel = defineModule<FuelData>({
     const priced = data.stations.filter((s) => recentPrice(s, fuelId) !== undefined);
     const chosen = selection ? data.byId.get((selection as { id: number }).id) : undefined;
     const onGround = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
+    const far = view.zoom < 9;
     return [
       new ScatterplotLayer<Station>({
         id: 'carburants/stations',
@@ -227,10 +231,11 @@ export const fuel = defineModule<FuelData>({
         getPosition: onGround,
         radiusUnits: 'meters',
         getRadius: 250,
-        radiusMinPixels: 2.5,
-        radiusMaxPixels: 8,
+        // De loin (France entière), 7 900 contours sombres font un tapis : points petits, sans contour.
+        radiusMinPixels: far ? 1.5 : 2.5,
+        radiusMaxPixels: far ? 2.5 : 8,
         getFillColor: (s) => CLASSES[classOf(recentPrice(s, fuelId)!, sorted)]!.color,
-        stroked: true,
+        stroked: !far,
         getLineColor: RING,
         lineWidthUnits: 'pixels',
         getLineWidth: 1,
@@ -267,21 +272,7 @@ export const fuel = defineModule<FuelData>({
           updateTriggers: { getText: fuelId, getColor: fuelId, getBackgroundColor: fuelId, getPosition: terrain.version },
           parameters: OVER_MAP,
         }),
-      chosen &&
-        new ScatterplotLayer<Station>({
-          id: 'carburants/choisie',
-          data: [chosen],
-          getPosition: onGround,
-          radiusUnits: 'pixels',
-          getRadius: 11,
-          filled: false,
-          stroked: true,
-          getLineColor: [79, 140, 255],
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
-          billboard: true,
-          parameters: OVER_MAP,
-        }),
+      chosen && selectionRing('carburants/choisie', [chosen], onGround, 11, OVER_MAP),
     ];
   },
 
@@ -293,20 +284,29 @@ export const fuel = defineModule<FuelData>({
     const station = data?.byId.get((selection as { id: number }).id);
     if (!station || !data) return null;
     const fuelId = settings.carburant as FuelId;
-    const fields: Array<[string, string]> = [];
     const price = recentPrice(station, fuelId);
-    if (price !== undefined) {
-      const share = Math.round(cheaperThan(price, data.sorted[fuelId]) * 100);
-      fields.push([
-        `${fuelLabel(fuelId)} en France`,
-        share >= 50 ? `moins cher que ${share} % des stations` : `plus cher que ${100 - share} % des stations`,
-      ]);
-    }
-    fields.push(['Automate 24 h/24', station.automat ? 'oui' : 'non']);
+    const entry = station.prices[fuelId];
+    const share = price !== undefined ? Math.round(cheaperThan(price, data.sorted[fuelId]) * 100) : undefined;
     return {
-      title: station.city ? `Station-service · ${station.city}` : 'Station-service',
+      kind: 'Station-service',
+      // Le type est déjà dans `kind` : le titre est le nom du lieu.
+      title: station.city || 'Station-service',
       subtitle: [station.address, station.postcode].filter(Boolean).join(', '),
-      fields,
+      // Les prix sont déclarés par les stations, pas mesurés en direct : jamais de point rouge ici.
+      status: plainStatus(entry ? `${fuelLabel(fuelId)} relevé ${formatRelative(entry.updated)}` : `Pas de prix ${fuelLabel(fuelId)} récent`),
+      figures: [
+        price !== undefined
+          ? { value: litre.format(price), unit: '€/L', label: fuelLabel(fuelId) }
+          : { value: '–', label: `${fuelLabel(fuelId)} non publié` },
+        // Le rang parmi toutes les stations de France, dans le sens le plus parlant.
+        share === undefined
+          ? { value: '–', label: 'rang en France' }
+          : share >= 50
+            ? { value: String(share), unit: '%', label: 'stations plus chères' }
+            : { value: String(100 - share), unit: '%', label: 'stations moins chères' },
+        { value: station.automat ? 'Oui' : 'Non', label: 'automate 24 h/24' },
+      ],
+      actions: [{ label: 'Source', href: 'https://www.prix-carburants.gouv.fr/' }],
       tables: [
         {
           title: 'Prix',

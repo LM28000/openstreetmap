@@ -13,7 +13,7 @@ import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
-import { formatRelative } from '../ui/format';
+import { measuredStatus } from '../core/infoStatus';
 import { OVER_MAP } from '../map/parameters';
 import { HALO, ink, type IconSheet, KEY, packIcons, selectionRing, zoomRamp } from './symbols';
 
@@ -347,17 +347,24 @@ export const bikes = defineModule<BikesData>({
     return { key: (object as Station).key };
   },
 
-  describe(selection, { data }) {
+  describe(selection, { data, time }) {
     const station = data?.byKey.get((selection as { key: string }).key);
     if (!station) return null;
-    const electric = station.ebikes !== null && station.bikes > 0 ? ` (dont ${station.ebikes} électrique${station.ebikes > 1 ? 's' : ''})` : '';
-    const fields: Array<[string, string]> = [
-      ['État', station.renting ? 'en service' : 'hors service'],
-      ['Vélos disponibles', `${station.bikes}${electric}`],
-      ['Places libres', String(station.docks)],
-    ];
-    if (station.capacity) fields.push(['Capacité', `${station.capacity} places`]);
-    if (station.reportedAt) fields.push(['Mise à jour', formatRelative(station.reportedAt * 1000)]);
-    return { title: station.name || 'Station', subtitle: station.network, fields };
+    const electric = station.ebikes !== null && station.bikes > 0 ? station.ebikes : null;
+    return {
+      kind: 'Station de vélos',
+      title: station.name || 'Station',
+      subtitle: station.network,
+      // Le réseau date son relevé ; à défaut, on dit seulement « en direct ».
+      status: measuredStatus(time, station.reportedAt ? station.reportedAt * 1000 : undefined),
+      figures: [
+        { value: String(station.bikes), label: electric !== null ? `vélos, dont ${electric} élec.` : 'vélos' },
+        { value: String(station.docks), label: 'places libres' },
+        // Sans capacité déclarée, on laisse la case de côté plutôt que d'inventer un total.
+        ...(station.capacity ? [{ value: String(station.capacity), label: 'capacité' }] : []),
+      ],
+      // Une station hors service n'a plus de vélos à prendre : c'est la seule chose à dire en plus.
+      fields: station.renting ? undefined : [['État', 'hors service']],
+    };
   },
 });

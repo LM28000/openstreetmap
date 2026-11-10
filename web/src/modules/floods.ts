@@ -10,6 +10,7 @@
  * l'épaisseur du trait augmente aussi avec le niveau, et la fiche donne le libellé.
  */
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
+import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { formatDateTime } from '../ui/format';
@@ -181,11 +182,15 @@ export const floods = defineModule<FloodData>({
     if (!section || !data) return null;
     const level = LEVELS[section.level] ?? LEVELS[1]!;
     return {
+      // Le niveau est l'essentiel : il est dans le type, avec sa couleur en toutes lettres.
+      kind: `Vigilance crues · ${level.name}`,
       title: section.name,
-      subtitle: `Vigilance crues · bulletin de ${formatDateTime(data.issuedAt)}`,
-      fields: [['Niveau', `Vigilance ${level.name.toLowerCase()}`]],
+      subtitle: 'Tronçon de rivière surveillé par l’État',
+      // Bulletin officiel émis au moins deux fois par jour : ni direct ni prévision.
+      status: plainStatus(`Bulletin de ${formatDateTime(data.issuedAt)}`),
+      figures: [{ value: level.name, label: 'niveau de vigilance' }],
       note: level.text,
-      link: { href: 'https://www.vigicrues.gouv.fr/', label: 'Carte et prévisions sur Vigicrues' },
+      actions: [{ label: 'Carte et prévisions sur Vigicrues', href: 'https://www.vigicrues.gouv.fr/' }],
     };
   },
 });

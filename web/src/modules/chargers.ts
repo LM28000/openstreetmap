@@ -11,6 +11,7 @@
  * existe dans la base nationale « dynamique », mais elle n'est pas reprise ici.
  */
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { OVER_MAP } from '../map/parameters';
@@ -165,11 +166,21 @@ function filtered(data: ChargersData, settings: Readonly<Record<string, string>>
   return filterCache.list;
 }
 
-let labelCache: { list: Station[]; band: number; stations: Station[] } | undefined;
+/** Seuil des recharges rapides : elles seules ont droit à leur étiquette tant que la ville est dense. */
+const FAST_KW = 50;
+/** À partir de ce zoom, toutes les bornes ont leur étiquette ; avant, seulement les rapides. */
+const ALL_LABELS_ZOOM = 15;
+/** Sous ce zoom, un point par station ne se distingue plus : on le dessine petit, sans contour ni halo. */
+const DOT_DETAIL_ZOOM = 9;
+
+let labelCache: { list: Station[]; band: number; fastOnly: boolean; stations: Station[] } | undefined;
+/** Étiquettes de puissance désencombrées (une par case) ; les bornes rapides seules sous `ALL_LABELS_ZOOM`. */
 function labelled(list: Station[], zoom: number): Station[] {
   const band = zoomBand(zoom);
-  if (labelCache?.list !== list || labelCache.band !== band) {
-    labelCache = { list, band, stations: declutter(list, zoom, { lon: (s) => s.lon, lat: (s) => s.lat, rank: (s) => -s.kw, box: LABEL_BOX_PX }) };
+  const fastOnly = zoom < ALL_LABELS_ZOOM;
+  if (labelCache?.list !== list || labelCache.band !== band || labelCache.fastOnly !== fastOnly) {
+    const candidates = fastOnly ? list.filter((s) => s.kw >= FAST_KW) : list;
+    labelCache = { list, band, fastOnly, stations: declutter(candidates, zoom, { lon: (s) => s.lon, lat: (s) => s.lat, rank: (s) => -s.kw, box: LABEL_BOX_PX }) };
   }
   return labelCache.stations;
 }
@@ -225,8 +236,10 @@ export const chargers = defineModule<ChargersData>({
     const onGround = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
     const trigger = `${settings.puissance}|${settings.acces}`;
     const plugged = view.zoom >= PLUG_MIN_ZOOM;
+    const far = view.zoom < DOT_DETAIL_ZOOM;
     const dotScale = zoomRamp(view.zoom, 5, 10, 0.65, 1);
-    const dotRadius = (s: Station) => CLASSES[classOf(s.kw)]!.dot;
+    // De très loin : 1,5 à 2,5 px selon la classe, pour que la puissance reste lisible sans tapis de confettis.
+    const dotRadius = (s: Station) => (far ? 1.5 + classOf(s.kw) * 0.35 : CLASSES[classOf(s.kw)]!.dot);
     const iconSize = (s: Station) => CLASSES[classOf(s.kw)]!.icon;
     const sheet = plugged ? plugSheet() : undefined;
     return [
@@ -252,17 +265,18 @@ export const chargers = defineModule<ChargersData>({
           getPosition: onGround,
           radiusUnits: 'pixels',
           getRadius: dotRadius,
-          radiusScale: dotScale,
+          radiusScale: far ? 1 : dotScale,
           getFillColor: (s) => CLASSES[classOf(s.kw)]!.color,
           stroked: true,
           getLineColor: KEY,
           lineWidthUnits: 'pixels',
-          getLineWidth: 0.8,
+          // De loin, un contour très fin pour les seules recharges rapides : elles ressortent du tapis.
+          getLineWidth: far ? (s: Station) => (s.kw >= FAST_KW ? 0.6 : 0) : 0.8,
           billboard: true,
           pickable: true,
           autoHighlight: view.zoom < LABEL_MIN_ZOOM,
           highlightColor: [255, 255, 255, 160],
-          updateTriggers: { getPosition: terrain.version, getFillColor: trigger },
+          updateTriggers: { getPosition: terrain.version, getFillColor: trigger, getRadius: far, getLineWidth: far },
           parameters: OVER_MAP,
         }),
       // De près : le pictogramme d'une prise, à la couleur et à la taille de la classe.
@@ -319,21 +333,35 @@ export const chargers = defineModule<ChargersData>({
     const station = data?.byId.get((selection as { id: string }).id);
     if (!station) return null;
     const plugs = PLUGS.filter(([bit]) => station.plugs & bit).map(([, label]) => label);
+    // Puissance, points et accès sont dans les chiffres, le statut dit la date : ils ne reviennent pas ici.
     const fields: Array<[string, string]> = [
       ['Opérateur', station.operator || 'non renseigné'],
-      ['Puissance maximale', kwLabel(station.kw)],
-      ['Points de charge', String(station.pdc)],
       ['Prises', plugs.length ? plugs.join(', ') : 'non renseignées'],
       ['Paiement', station.free === true ? 'gratuit' : station.free === false ? 'payant' : 'non renseigné'],
-      ['Accès', station.restricted ? 'réservé (clientèle, résidents…)' : 'ouvert à tous'],
     ];
     if (station.hours) fields.push(['Horaires', station.hours === '24/7' ? '24 h/24, 7 j/7' : station.hours]);
     if (station.tariff) fields.push(['Tarification', station.tariff]);
-    if (station.updated) fields.push(['Données mises à jour le', station.updated.split('-').reverse().join('/')]);
     return {
+      kind: 'Borne de recharge',
       title: station.name || 'Station de recharge',
       subtitle: station.address || undefined,
+      // Le fichier national est mis à jour par les opérateurs, pas en temps réel : on ne dit pas « direct ».
+      status: plainStatus(station.updated ? `Donnée du ${station.updated.split('-').reverse().join('/')}` : 'Fichier national des bornes'),
+      figures: [
+        // Une puissance à 0 est une valeur absente du fichier : on ne l'affiche pas comme une donnée.
+        station.kw > 0
+          ? { value: kwLabel(station.kw).replace(' kW', ''), unit: 'kW', label: 'puissance maximale' }
+          : { value: '–', label: 'puissance non renseignée' },
+        { value: String(station.pdc), label: station.pdc > 1 ? 'points de charge' : 'point de charge' },
+        { value: station.restricted ? 'Réservé' : 'Ouvert', label: station.restricted ? 'clientèle, résidents…' : 'à tous' },
+      ],
       fields,
+      actions: [
+        {
+          label: 'Source',
+          href: 'https://transport.data.gouv.fr/datasets/fichier-consolide-des-bornes-de-recharge-pour-vehicules-electriques',
+        },
+      ],
       tables: [
         {
           title: 'Points de charge par puissance',

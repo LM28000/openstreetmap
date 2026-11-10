@@ -483,7 +483,12 @@ fn prune_cache(data_dir: &Path, sources: &[Source]) {
 }
 
 /// Le zip du GTFS d'une ressource : celui du cache s'il a moins d'un jour, sinon retéléchargé (le cache périmé sert de secours).
-async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, url: &str, prim: bool) -> Result<PathBuf> {
+/// Le GTFS d'Île-de-France est aussi lu par les isochrones (`multimodal/load.rs`) : un seul des deux le télécharge à la fois,
+/// l'autre trouve alors le fichier frais.
+static PRIM_DOWNLOAD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+pub(crate) async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, url: &str, prim: bool) -> Result<PathBuf> {
+    let _exclusive = if prim { Some(PRIM_DOWNLOAD.lock().await) } else { None };
     // Le GTFS d'Île-de-France (115 Mo) a son dossier et ses plafonds : il ne doit ni remplir le cache des autres réseaux ni en être refusé.
     let (dir, max_zip, cache_limit) = if prim { (prim_cache_dir(data_dir), PRIM_MAX_ZIP_BYTES, PRIM_MAX_ZIP_BYTES + (50 << 20)) } else { (cache_dir(data_dir), MAX_ZIP_BYTES, CACHE_LIMIT_BYTES) };
     let path = dir.join(cache_path(data_dir, resource_id).file_name().unwrap_or_default());
@@ -501,7 +506,7 @@ async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, 
     }
 }
 
-async fn download(http: &reqwest::Client, dir: &Path, path: &Path, url: &str, max_zip: u64, cache_limit: u64) -> Result<()> {
+pub(crate) async fn download(http: &reqwest::Client, dir: &Path, path: &Path, url: &str, max_zip: u64, cache_limit: u64) -> Result<()> {
     tokio::fs::create_dir_all(dir).await?;
     let mut response = http.get(url).timeout(Duration::from_secs(300)).send().await?.error_for_status()?;
     let announced = response.content_length();

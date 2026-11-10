@@ -44,6 +44,20 @@
 //!   Nord ↔ Est, voisines, est la plus courte. Même chose entre Lyon Part-Dieu et Perrache
 //!   (métro A).
 //!
+//! # Plusieurs modes de transport (isochrones multimodales)
+//!
+//! L'algorithme ne sait pas ce qu'est un train : il manipule des *arrêts*, des *lignes* qui les relient
+//! et des *marches*. On lui donne donc, dans un même espace d'indices, les gares du réseau ferré
+//! (indices `0..S`, ceux de `/api/reseau`) puis des arrêts supplémentaires (cars, métros, RER d'Île-de-France :
+//! indices `S..`, voir `multimodal.rs`). Chaque ligne porte un *groupe de modes* (`MODE_TRAIN`, `MODE_CAR`,
+//! `MODE_IDF`) : une requête choisit les groupes permis (`modes`), et les lignes des autres groupes sont
+//! simplement ignorées au moment de les parcourir. Le délai de correspondance dépend du groupe
+//! (`min_change`) : 8 minutes pour un train, 5 pour un car, 4 pour le métro.
+//!
+//! Les marches relient les arrêts voisins : gare ↔ gare (1,2 km), gare ↔ arrêt supplémentaire (1 km),
+//! arrêt supplémentaire ↔ arrêt supplémentaire (500 m). Les temps fixes entre terminus parisiens ne servent
+//! que lorsque le métro et le RER ne sont pas dans le calcul : sinon on prend le vrai métro (voir `Gate`).
+//!
 //! # Temps réel
 //!
 //! Si l'heure de départ est proche de maintenant (de 2 h avant à 6 h après), les retards et
@@ -64,8 +78,28 @@ use crate::timetable::{Run, Station, Timetable, Trip};
 const INF: i32 = i32::MAX;
 /// Délai minimum entre l'arrivée d'un train et le départ de la correspondance dans la même gare (secondes).
 pub const MIN_CHANGE: i32 = 8 * 60;
+/// Groupes de modes : les trains (SNCF), les cars (TER et réseaux régionaux), les transports d'Île-de-France
+/// (métro, RER, Transilien, tramway). Un arrêt ou une ligne appartient à un seul groupe ; une requête en choisit plusieurs.
+pub const MODE_TRAIN: u8 = 1;
+pub const MODE_CAR: u8 = 2;
+pub const MODE_IDF: u8 = 4;
+pub const MODE_ALL: u8 = MODE_TRAIN | MODE_CAR | MODE_IDF;
+
+/// Délai minimum de correspondance (secondes) pour le groupe de modes `mode`. Quand on descend d'une ligne
+/// d'un groupe pour monter dans une autre, le plus long des deux délais s'applique : un car qui rejoint un
+/// train attend 8 minutes, deux métros se suivent à 4.
+pub fn min_change(mode: u8) -> i32 {
+    match mode {
+        MODE_IDF => 4 * 60,
+        MODE_CAR => 5 * 60,
+        _ => MIN_CHANGE,
+    }
+}
 /// Deux gares plus proches que cela (à vol d'oiseau) sont reliées par une marche.
 const WALK_RADIUS_M: f64 = 1200.0;
+/// Entre une gare et un arrêt supplémentaire (gare routière, entrée de métro), et entre deux arrêts supplémentaires.
+const WALK_RADIUS_EXTRA_M: f64 = 1000.0;
+const WALK_RADIUS_EXTRA_EXTRA_M: f64 = 500.0;
 /// Marge d'une correspondance à pied (sortir, traverser, rentrer), en secondes.
 const WALK_BUFFER: f64 = 180.0;
 /// Les rues ne vont pas droit : la distance réelle est environ 30 % plus longue.
@@ -117,11 +151,54 @@ const CITY_TRANSFERS: &[(&str, &str, i32)] = &[
     ("87723197", "87722025", 25), // Lyon Part-Dieu ↔ Lyon Perrache : métro A
 ];
 
-/// Une marche (ou un métro) entre deux gares.
+/// Quand une marche est utilisable.
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum Gate {
+    /// Toujours.
+    Always,
+    /// Seulement si le métro et le RER d'Île-de-France ne sont pas dans le calcul : c'est un temps fixe
+    /// (porte à porte, métro compris) qui remplace le vrai trajet, absent des horaires SNCF.
+    WithoutIdf,
+    /// Seulement s'ils y sont : la marche directe entre deux terminus voisins, que le temps fixe masquait.
+    WithIdf,
+}
+
+/// Une marche (ou un métro, sous forme de temps fixe) entre deux arrêts.
 #[derive(Clone, Copy)]
 struct Foot {
     to: u32,
     seconds: i32,
+    gate: Gate,
+}
+
+/// Un arrêt à donner à `Raptor::build_multi`.
+pub struct InStop<'a> {
+    pub lon: f64,
+    pub lat: f64,
+    /// Groupe de modes de l'arrêt (`MODE_CAR`, `MODE_IDF`), ou 0 pour une gare du réseau ferré, toujours permise.
+    pub group: u8,
+    /// Code UIC des gares (pour les temps fixes de correspondance), vide pour les autres arrêts.
+    pub code: &'a str,
+}
+
+/// Un passage à un arrêt.
+#[derive(Clone, Copy, Debug)]
+pub struct Call {
+    pub stop: u32,
+    /// Secondes depuis le début du jour de service.
+    pub arrival: i32,
+    pub departure: i32,
+}
+
+/// Une circulation à donner à `Raptor::build_multi`.
+pub struct InTrip<'a> {
+    /// Identifiant de la circulation, que `Leg::Train` rendra : indice dans `Timetable::trips` pour le rail,
+    /// au-delà, dans les circulations supplémentaires.
+    pub id: u32,
+    /// Calendrier : indice dans ceux des horaires du rail, ou à partir de `rail_services`, dans ceux de l'index.
+    pub service: u32,
+    pub mode: u8,
+    pub calls: &'a [Call],
 }
 
 /// Une ligne : une suite de gares, et tous les trains qui la parcourent, du plus tôt au plus tard.
@@ -130,6 +207,8 @@ struct Route {
     stops: u32,
     /// Nombre de gares.
     len: u16,
+    /// Groupe de modes de la ligne.
+    mode: u8,
     /// Début des horaires dans `Raptor::times` : (arrivée, départ) à chaque gare, train après train.
     times: u32,
     /// Début des circulations dans `Raptor::trips`, et leur nombre.
@@ -144,8 +223,18 @@ pub struct Raptor {
     stops: Vec<u32>,
     /// Horaires (secondes depuis le début du jour de service), arrivée puis départ, train par train puis gare par gare.
     times: Vec<i32>,
-    /// Indice dans `Timetable::trips` de chaque circulation de chaque ligne.
+    /// Identifiant de chaque circulation de chaque ligne (voir `InTrip::id`).
     trips: Vec<u32>,
+    /// Calendrier de chaque circulation, même rangement.
+    trip_service: Vec<u32>,
+    /// Groupe de modes de chaque arrêt (0 : gare du réseau ferré).
+    stop_group: Vec<u8>,
+    /// Calendriers des circulations supplémentaires (jours depuis le début des horaires, triés) : ils portent
+    /// les numéros `rail_services..`. Ceux du rail sont dans `Timetable`.
+    extra_services: Vec<Vec<u16>>,
+    rail_services: u32,
+    /// Les horaires d'Île-de-France sont-ils dans l'index ? (Sinon les temps fixes entre terminus parisiens restent seuls.)
+    idf_present: bool,
     /// Pour chaque gare, les lignes qui y passent, et à quelle position : `stop_routes[stop_routes_from[s]..stop_routes_from[s + 1]]`.
     stop_routes_from: Vec<u32>,
     stop_routes: Vec<(u32, u16)>,
@@ -155,16 +244,33 @@ pub struct Raptor {
 }
 
 impl Raptor {
-    /// Groupe les trains en lignes et prépare les correspondances à pied.
+    /// Index du seul réseau ferré : les trains des horaires SNCF, les marches entre gares.
     pub fn build(stations: &[Station], trips: &[Trip]) -> Self {
-        // 1. Les trains qui desservent les mêmes gares dans le même ordre forment une famille.
-        let mut families: HashMap<Vec<u32>, Vec<u32>> = HashMap::new();
+        let stops: Vec<InStop> = stations.iter().map(|s| InStop { lon: s.lon, lat: s.lat, group: 0, code: &s.code }).collect();
+        let calls: Vec<Vec<Call>> = trips
+            .iter()
+            .map(|t| t.stops.iter().map(|s| Call { stop: s.station, arrival: s.arrival, departure: s.departure }).collect())
+            .collect();
+        // Le rail a un seul groupe de modes ; ses calendriers sont ceux des horaires.
+        let input: Vec<InTrip> =
+            trips.iter().zip(&calls).enumerate().map(|(id, (t, calls))| InTrip { id: id as u32, service: t.service, mode: MODE_TRAIN, calls }).collect();
+        Self::build_multi(&stops, &input, u32::MAX, Vec::new(), false)
+    }
+
+    /// Groupe les circulations en lignes et prépare les correspondances à pied.
+    ///
+    /// `stops` : tous les arrêts (les gares du rail d'abord). `trips` : toutes les circulations, d'où qu'elles viennent.
+    /// `rail_services` : nombre de calendriers des horaires du rail ; `extra_services` : les calendriers suivants.
+    /// `idf_present` : les horaires d'Île-de-France font-ils partie des circulations ?
+    pub fn build_multi(stops: &[InStop], trips: &[InTrip], rail_services: u32, extra_services: Vec<Vec<u16>>, idf_present: bool) -> Self {
+        // 1. Les circulations d'un même groupe de modes qui desservent les mêmes arrêts dans le même ordre forment une famille.
+        let mut families: HashMap<(u8, Vec<u32>), Vec<u32>> = HashMap::new();
         for (index, trip) in trips.iter().enumerate() {
-            let sequence: Vec<u32> = trip.stops.iter().map(|s| s.station).collect();
-            families.entry(sequence).or_default().push(index as u32);
+            let sequence: Vec<u32> = trip.calls.iter().map(|c| c.stop).collect();
+            families.entry((trip.mode, sequence)).or_default().push(index as u32);
         }
         // Ordre déterministe : les mêmes horaires donnent le même index.
-        let mut families: Vec<(Vec<u32>, Vec<u32>)> = families.into_iter().collect();
+        let mut families: Vec<((u8, Vec<u32>), Vec<u32>)> = families.into_iter().collect();
         families.sort_unstable_by_key(|(_, members)| members[0]);
 
         let mut raptor = Raptor {
@@ -172,20 +278,25 @@ impl Raptor {
             stops: Vec::new(),
             times: Vec::new(),
             trips: Vec::new(),
+            trip_service: Vec::new(),
+            stop_group: stops.iter().map(|s| s.group).collect(),
+            extra_services,
+            rail_services,
+            idf_present,
             stop_routes_from: Vec::new(),
             stop_routes: Vec::new(),
             foot_from: Vec::new(),
             foot: Vec::new(),
         };
 
-        // 2. Dans chaque famille, on range les trains par heure de départ, puis on les répartit en
-        //    lignes où aucun train n'en double un autre (condition pour que « le premier train
+        // 2. Dans chaque famille, on range les circulations par heure de départ, puis on les répartit en
+        //    lignes où aucune n'en double une autre (condition pour que « le premier train
         //    possible » soit aussi « le premier arrivé »).
-        for (sequence, mut members) in families {
-            members.sort_by_key(|&t| trips[t as usize].stops[0].departure);
+        for ((mode, sequence), mut members) in families {
+            members.sort_by_key(|&t| trips[t as usize].calls[0].departure);
             let mut lanes: Vec<Vec<u32>> = Vec::new();
             for trip in members {
-                let lane = lanes.iter_mut().find(|lane| !overtakes(&trips[trip as usize], &trips[*lane.last().unwrap() as usize]));
+                let lane = lanes.iter_mut().find(|lane| !overtakes(trips[trip as usize].calls, trips[*lane.last().unwrap() as usize].calls));
                 match lane {
                     Some(lane) => lane.push(trip),
                     None => lanes.push(vec![trip]),
@@ -195,16 +306,19 @@ impl Raptor {
                 raptor.routes.push(Route {
                     stops: raptor.stops.len() as u32,
                     len: sequence.len() as u16,
+                    mode,
                     times: raptor.times.len() as u32,
                     trips: raptor.trips.len() as u32,
                     trip_count: lane.len() as u32,
                 });
                 raptor.stops.extend(&sequence);
                 for &t in &lane {
-                    raptor.trips.push(t);
-                    for stop in &trips[t as usize].stops {
-                        raptor.times.push(stop.arrival);
-                        raptor.times.push(stop.departure);
+                    let trip = &trips[t as usize];
+                    raptor.trips.push(trip.id);
+                    raptor.trip_service.push(trip.service);
+                    for call in trip.calls {
+                        raptor.times.push(call.arrival);
+                        raptor.times.push(call.departure);
                     }
                 }
             }
@@ -213,9 +327,10 @@ impl Raptor {
         raptor.stops.shrink_to_fit();
         raptor.times.shrink_to_fit();
         raptor.trips.shrink_to_fit();
+        raptor.trip_service.shrink_to_fit();
 
-        // 3. Pour chaque gare, les lignes qui y passent (tableau « compressé par lignes »).
-        let mut per_station: Vec<Vec<(u32, u16)>> = vec![Vec::new(); stations.len()];
+        // 3. Pour chaque arrêt, les lignes qui y passent (tableau « compressé par lignes »).
+        let mut per_station: Vec<Vec<(u32, u16)>> = vec![Vec::new(); stops.len()];
         for (r, route) in raptor.routes.iter().enumerate() {
             for pos in 0..route.len {
                 let station = raptor.stops[(route.stops + u32::from(pos)) as usize];
@@ -230,10 +345,10 @@ impl Raptor {
         raptor.stop_routes.shrink_to_fit();
 
         // 4. Les marches.
-        let mut feet: Vec<Vec<Foot>> = vec![Vec::new(); stations.len()];
-        for (a, b, seconds) in walking_pairs(stations) {
-            feet[a as usize].push(Foot { to: b, seconds });
-            feet[b as usize].push(Foot { to: a, seconds });
+        let mut feet: Vec<Vec<Foot>> = vec![Vec::new(); stops.len()];
+        for (a, b, seconds, gate) in walking_edges(stops, idf_present) {
+            feet[a as usize].push(Foot { to: b, seconds, gate });
+            feet[b as usize].push(Foot { to: a, seconds, gate });
         }
         for list in &feet {
             raptor.foot_from.push(raptor.foot.len() as u32);
@@ -251,6 +366,9 @@ impl Raptor {
             + self.stops.capacity() * 4
             + self.times.capacity() * 4
             + self.trips.capacity() * 4
+            + self.trip_service.capacity() * 4
+            + self.stop_group.capacity()
+            + self.extra_services.iter().map(|d| d.capacity() * 2 + 24).sum::<usize>()
             + self.stop_routes_from.capacity() * 4
             + self.stop_routes.capacity() * size_of::<(u32, u16)>()
             + self.foot_from.capacity() * 4
@@ -259,6 +377,16 @@ impl Raptor {
 
     pub fn route_count(&self) -> usize {
         self.routes.len()
+    }
+
+    /// Nombre d'arrêts (gares du rail, puis arrêts supplémentaires).
+    pub fn stop_count(&self) -> usize {
+        self.stop_routes_from.len() - 1
+    }
+
+    /// Nombre de circulations (tous jours confondus).
+    pub fn trip_count(&self) -> usize {
+        self.trips.len()
     }
 
     fn route_stops(&self, route: &Route) -> &[u32] {
@@ -282,39 +410,74 @@ impl Raptor {
     }
 }
 
-/// `a` double-t-il `b` (qui part avant lui) : arrive-t-il avant lui à une gare, ou part-il avant lui ?
-fn overtakes(a: &Trip, b: &Trip) -> bool {
-    a.stops.iter().zip(&b.stops).any(|(x, y)| x.arrival < y.arrival || x.departure < y.departure)
+/// `a` double-t-il `b` (qui part avant lui) : arrive-t-il avant lui à un arrêt, ou part-il avant lui ?
+fn overtakes(a: &[Call], b: &[Call]) -> bool {
+    a.iter().zip(b).any(|(x, y)| x.arrival < y.arrival || x.departure < y.departure)
 }
 
-/// Paires de gares reliées par une marche : (gare, gare, secondes).
+/// Paires de gares reliées par une marche : (gare, gare, secondes). Version « rail seul » de `walking_edges`.
+#[cfg(test)]
 fn walking_pairs(stations: &[Station]) -> Vec<(u32, u32, i32)> {
-    let mut pairs: HashMap<(u32, u32), i32> = HashMap::new();
+    let stops: Vec<InStop> = stations.iter().map(|s| InStop { lon: s.lon, lat: s.lat, group: 0, code: &s.code }).collect();
+    walking_edges(&stops, false).into_iter().map(|(a, b, seconds, _)| (a, b, seconds)).collect()
+}
 
-    // Gares proches : balayage par latitude croissante, pour ne comparer que les voisines.
-    let mut by_lat: Vec<u32> = (0..stations.len() as u32).collect();
-    by_lat.sort_by(|&a, &b| stations[a as usize].lat.total_cmp(&stations[b as usize].lat));
+/// Marches entre arrêts : (arrêt, arrêt, secondes, quand). Chaque paire n'est écrite qu'une fois (petit indice d'abord) ;
+/// elle vaut dans les deux sens.
+///
+/// 1. Les arrêts voisins sont reliés à pied : 3 minutes de marge, plus la distance × 1,3 à 4,5 km/h, jamais moins
+///    qu'une correspondance (`min_change`) ; le rayon dépend du genre des deux arrêts (gare, ou arrêt supplémentaire).
+/// 2. Les temps fixes entre terminus parisiens, et entre les gares lyonnaises, remplacent la marche. Si les horaires
+///    d'Île-de-France sont présents (`idf_present`), le métro et le RER font mieux : le temps fixe ne vaut alors
+///    que sans eux (`Gate::WithoutIdf`), et la marche qu'il masquait, si elle existait, ne vaut qu'avec (`Gate::WithIdf`).
+fn walking_edges(stops: &[InStop], idf_present: bool) -> Vec<(u32, u32, i32, Gate)> {
+    let mut pairs: HashMap<(u32, u32), (i32, Gate)> = HashMap::new();
+
+    // Arrêts proches : balayage par latitude croissante, pour ne comparer que les voisins.
+    let mut by_lat: Vec<u32> = (0..stops.len() as u32).collect();
+    by_lat.sort_by(|&a, &b| stops[a as usize].lat.total_cmp(&stops[b as usize].lat));
     let max_dlat = WALK_RADIUS_M / 111_000.0;
     for (i, &a) in by_lat.iter().enumerate() {
-        let sa = &stations[a as usize];
+        let sa = &stops[a as usize];
         for &b in &by_lat[i + 1..] {
-            let sb = &stations[b as usize];
+            let sb = &stops[b as usize];
             if sb.lat - sa.lat > max_dlat {
                 break;
             }
+            // Gare ↔ gare : 1,2 km ; gare ↔ arrêt supplémentaire : 1 km ; deux arrêts supplémentaires : 500 m.
+            let radius = match (sa.group, sb.group) {
+                (0, 0) => WALK_RADIUS_M,
+                (0, _) | (_, 0) => WALK_RADIUS_EXTRA_M,
+                _ => WALK_RADIUS_EXTRA_EXTRA_M,
+            };
             let meters = distance_m(sa, sb);
-            if meters <= WALK_RADIUS_M {
+            if meters <= radius {
                 let seconds = (WALK_BUFFER + meters * WALK_DETOUR / WALK_SPEED_MS).round() as i32;
                 // Jamais plus court qu'une correspondance dans la même gare.
-                pairs.insert((a.min(b), a.max(b)), seconds.max(MIN_CHANGE));
+                let floor = group_change(sa.group).max(group_change(sb.group));
+                pairs.insert((a.min(b), a.max(b)), (seconds.max(floor), Gate::Always));
             }
         }
     }
 
     // Les temps fixes (métro, RER) remplacent la marche : ils sont plus réalistes.
-    let by_code: HashMap<&str, u32> = stations.iter().enumerate().map(|(i, s)| (s.code.as_str(), i as u32)).collect();
+    let by_code: HashMap<&str, u32> = stops.iter().enumerate().filter(|(_, s)| !s.code.is_empty()).map(|(i, s)| (s.code, i as u32)).collect();
     let terminal_of = |code: &str| PARIS_TERMINALS.iter().position(|(_, codes)| codes.contains(&code));
-    let paris: Vec<(usize, u32)> = stations.iter().enumerate().filter_map(|(i, s)| Some((terminal_of(&s.code)?, i as u32))).collect();
+    let paris: Vec<(usize, u32)> =
+        stops.iter().enumerate().filter_map(|(i, s)| Some((terminal_of(s.code)?, i as u32))).collect();
+    let mut fixed_edges: Vec<((u32, u32), i32)> = Vec::new();
+    let mut fixed = |a: u32, b: u32, minutes: i32| {
+        let key = (a.min(b), a.max(b));
+        if idf_present {
+            // La marche directe (si elle existait) ne vaut qu'avec le métro ; le temps fixe, qu'à défaut de lui.
+            if let Some(walk) = pairs.get_mut(&key) {
+                walk.1 = Gate::WithIdf;
+            }
+            fixed_edges.push((key, minutes * 60));
+        } else {
+            pairs.insert(key, (minutes * 60, Gate::Always));
+        }
+    };
     for (x, &(ta, a)) in paris.iter().enumerate() {
         for &(tb, b) in &paris[x + 1..] {
             if ta == tb {
@@ -325,21 +488,27 @@ fn walking_pairs(stations: &[Station]) -> Vec<(u32, u32, i32)> {
                 .iter()
                 .find(|(p, q, _)| (*p == na && *q == nb) || (*p == nb && *q == na))
                 .map_or(PARIS_DEFAULT_MIN, |t| t.2);
-            pairs.insert((a.min(b), a.max(b)), minutes * 60);
+            fixed(a, b, minutes);
         }
     }
     for &(ca, cb, minutes) in CITY_TRANSFERS {
         if let (Some(&a), Some(&b)) = (by_code.get(ca), by_code.get(cb)) {
-            pairs.insert((a.min(b), a.max(b)), minutes * 60);
+            pairs.insert((a.min(b), a.max(b)), (minutes * 60, Gate::Always));
         }
     }
-    let mut out: Vec<_> = pairs.into_iter().map(|((a, b), s)| (a, b, s)).collect();
-    out.sort_unstable();
+    let mut out: Vec<_> = pairs.into_iter().map(|((a, b), (s, g))| (a, b, s, g)).collect();
+    out.extend(fixed_edges.into_iter().map(|((a, b), s)| (a, b, s, Gate::WithoutIdf)));
+    out.sort_unstable_by_key(|&(a, b, s, _)| (a, b, s));
     out
 }
 
+/// Délai de correspondance d'un arrêt : celui du train pour une gare du réseau ferré (groupe 0).
+fn group_change(group: u8) -> i32 {
+    if group == 0 { MIN_CHANGE } else { min_change(group) }
+}
+
 /// Distance à vol d'oiseau en mètres (approximation plane, très suffisante à cette échelle).
-fn distance_m(a: &Station, b: &Station) -> f64 {
+fn distance_m(a: &InStop, b: &InStop) -> f64 {
     let dx = (a.lon - b.lon) * ((a.lat + b.lat) / 2.0).to_radians().cos() * 111_320.0;
     let dy = (a.lat - b.lat) * 110_540.0;
     dx.hypot(dy)
@@ -398,6 +567,10 @@ pub enum Leg {
 /// Tout ce qu'il faut pour lire les horaires d'un jour de service : décalage, calendrier et temps réel.
 struct Schedule<'a> {
     timetable: &'a Timetable,
+    /// L'index utilisé : celui des horaires du rail seul, ou celui des isochrones multimodales.
+    raptor: &'a Raptor,
+    /// Groupes de modes permis.
+    modes: u8,
     /// Début de chaque jour de service considéré, en secondes après l'heure de départ (négatif pour la veille).
     offsets: [i32; DAYS],
     /// Pour chaque service, les jours (parmi `DAYS`) où il circule, en bits.
@@ -409,7 +582,7 @@ struct Schedule<'a> {
 
 impl Schedule<'_> {
     fn raptor(&self) -> &Raptor {
-        &self.timetable.raptor
+        self.raptor
     }
 
     /// Heure (secondes après le départ) d'arrivée ou de départ de la circulation à la position `pos`.
@@ -425,7 +598,7 @@ impl Schedule<'_> {
 
     fn is_active(&self, route: &Route, trip: u32, day: u8) -> bool {
         let id = self.raptor().trips[(route.trips + trip) as usize];
-        if self.active[self.timetable.trips[id as usize].service as usize] & (1 << day) == 0 {
+        if self.active[self.raptor().trip_service[(route.trips + trip) as usize] as usize] & (1 << day) == 0 {
             return false;
         }
         // Un train supprimé par le temps réel ne circule pas.
@@ -504,15 +677,27 @@ pub struct Reached {
     pub transfers: u8,
 }
 
-/// Calcule les arrivées au plus tôt depuis `params.origin`, avec RAPTOR.
+/// Calcule les arrivées au plus tôt depuis `params.origin`, avec RAPTOR, sur le seul réseau ferré.
 pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now: i64, params: &Params) -> Isochrone<'a> {
-    let raptor = &timetable.raptor;
-    let station_count = timetable.stations.len();
+    isochrone_with(timetable, &timetable.raptor, MODE_ALL, realtime, now, params)
+}
+
+/// Comme `isochrone`, avec l'index `raptor` (celui du rail seul, ou celui des isochrones multimodales,
+/// construit pour ces `timetable`) et les groupes de modes permis (`modes`, voir `MODE_ALL`).
+pub fn isochrone_with<'a>(
+    timetable: &'a Timetable,
+    raptor: &'a Raptor,
+    modes: u8,
+    realtime: Option<&Realtime>,
+    now: i64,
+    params: &Params,
+) -> Isochrone<'a> {
+    let station_count = raptor.stop_count();
     let max_trips = params.max_trips.clamp(1, MAX_ROUNDS);
     let bound = params.max_duration;
 
     let use_realtime = realtime.is_some() && params.depart >= now - REALTIME_BEFORE && params.depart <= now + REALTIME_AFTER;
-    let schedule = build_schedule(timetable, realtime.filter(|_| use_realtime), params.depart);
+    let schedule = build_schedule(timetable, raptor, modes, realtime.filter(|_| use_realtime), params.depart);
 
     let mut best = vec![INF; station_count];
     let mut best_round = vec![0u8; station_count];
@@ -525,7 +710,7 @@ pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now:
     arrival[0][origin] = 0;
     labels[0][origin] = Label::Origin;
     let mut marked = vec![params.origin];
-    relax_feet(raptor, &mut best, &mut best_round, &mut arrival[0], &mut labels[0], 0, &[params.origin], &mut marked, bound);
+    relax_feet(&schedule, &mut best, &mut best_round, &mut arrival[0], &mut labels[0], 0, &[params.origin], &mut marked, bound);
 
     // Plus petite position marquée de chaque ligne ce tour-ci (`u16::MAX` : ligne non concernée).
     let mut earliest_pos = vec![u16::MAX; raptor.routes.len()];
@@ -536,6 +721,10 @@ pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now:
         touched_routes.clear();
         for &station in &marked {
             for &(route, pos) in raptor.stop_routes_of(station) {
+                // Les lignes d'un groupe de modes écarté n'existent pas pour cette requête.
+                if raptor.routes[route as usize].mode & modes == 0 {
+                    continue;
+                }
                 let slot = &mut earliest_pos[route as usize];
                 if *slot == u16::MAX {
                     touched_routes.push(route);
@@ -578,8 +767,12 @@ pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now:
                 if pos + 1 < route.len {
                     let there = previous_arrival[station as usize];
                     if there != INF {
-                        // Arrivé en train, il faut le temps de changer ; arrivé à pied (ou au départ), non.
-                        let wait = if matches!(previous_labels[station as usize], Label::Transit { .. }) { MIN_CHANGE } else { 0 };
+                        // Arrivé en train, il faut le temps de changer (le plus long des deux délais, voir `min_change`) ;
+                        // arrivé à pied (ou au départ), non.
+                        let wait = match previous_labels[station as usize] {
+                            Label::Transit { route: from, .. } => min_change(raptor.routes[from as usize].mode).max(min_change(route.mode)),
+                            _ => 0,
+                        };
                         let ready = there + wait;
                         let riding_departure = riding.map(|(trip, day, _)| schedule.time(route, trip, day, pos, true));
                         if riding_departure.is_none_or(|d| ready < d)
@@ -597,7 +790,7 @@ pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now:
         improved.sort_unstable();
         improved.dedup();
         let mut next_marked = improved.clone();
-        relax_feet(raptor, &mut best, &mut best_round, current_arrival, current_labels, round as u8, &improved, &mut next_marked, bound);
+        relax_feet(&schedule, &mut best, &mut best_round, current_arrival, current_labels, round as u8, &improved, &mut next_marked, bound);
         next_marked.sort_unstable();
         next_marked.dedup();
         marked = next_marked;
@@ -612,7 +805,7 @@ pub fn isochrone<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, now:
 /// Propage les marches depuis `sources` : une gare voisine est améliorée si on y arrive plus tôt qu'avant.
 #[allow(clippy::too_many_arguments)]
 fn relax_feet(
-    raptor: &Raptor,
+    schedule: &Schedule,
     best: &mut [i32],
     best_round: &mut [u8],
     arrival: &mut [i32],
@@ -622,9 +815,22 @@ fn relax_feet(
     marked: &mut Vec<u32>,
     bound: i32,
 ) {
+    let raptor = schedule.raptor;
     for &from in sources {
         let start = arrival[from as usize];
         for foot in raptor.foot_of(from) {
+            // Un temps fixe de métro ne vaut que sans le métro, et inversement la marche qu'il masquait (voir `Gate`).
+            let idf = schedule.modes & MODE_IDF != 0;
+            match foot.gate {
+                Gate::WithoutIdf if idf => continue,
+                Gate::WithIdf if !idf => continue,
+                _ => {}
+            }
+            // On ne marche pas vers un arrêt dont aucune ligne n'est permise (arrêt d'un groupe de modes écarté).
+            let group = raptor.stop_group[foot.to as usize];
+            if group != 0 && group & schedule.modes == 0 {
+                continue;
+            }
             let at = start.saturating_add(foot.seconds);
             if at < best[foot.to as usize] && at <= bound {
                 best[foot.to as usize] = at;
@@ -638,7 +844,7 @@ fn relax_feet(
 }
 
 /// Prépare la lecture des horaires pour un départ : jours de service concernés, calendriers, temps réel.
-fn build_schedule<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, depart: i64) -> Schedule<'a> {
+fn build_schedule<'a>(timetable: &'a Timetable, raptor: &'a Raptor, modes: u8, realtime: Option<&Realtime>, depart: i64) -> Schedule<'a> {
     let today = timetable.local_date(depart);
     let dates: [Option<Date>; DAYS] = std::array::from_fn(|day| today.checked_add(Span::new().days(day as i64 - 1)).ok());
     let mut offsets = [0i32; DAYS];
@@ -647,13 +853,15 @@ fn build_schedule<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, dep
             offsets[day] = (start - depart).clamp(-10 * 86_400, 10 * 86_400) as i32;
         }
     }
-    let active: Vec<u8> = (0..timetable.service_count() as u32)
-        .map(|service| {
-            dates.iter().enumerate().fold(0u8, |mask, (day, date)| {
-                if date.is_some_and(|d| timetable.service_runs_on(service, d)) { mask | (1 << day) } else { mask }
-            })
-        })
-        .collect();
+    // Les calendriers du rail (dans les horaires), puis ceux des circulations supplémentaires (dans l'index).
+    let rail_services = if raptor.rail_services == u32::MAX { timetable.service_count() } else { raptor.rail_services as usize };
+    let active_on = |runs_on: &dyn Fn(Date) -> bool| {
+        dates.iter().enumerate().fold(0u8, |mask, (day, date)| if date.is_some_and(runs_on) { mask | (1 << day) } else { mask })
+    };
+    let mut active: Vec<u8> = (0..rail_services as u32).map(|service| active_on(&|d| timetable.service_runs_on(service, d))).collect();
+    active.extend(raptor.extra_services.iter().map(|days| {
+        active_on(&|d| timetable.day_offset(d).is_some_and(|offset| days.binary_search(&offset).is_ok()))
+    }));
 
     // Temps réel : horaires corrigés de toutes les circulations du jour qu'il concerne.
     let mut live = HashMap::new();
@@ -677,7 +885,7 @@ fn build_schedule<'a>(timetable: &'a Timetable, realtime: Option<&Realtime>, dep
             }
         }
     }
-    Schedule { timetable, offsets, active, live }
+    Schedule { timetable, raptor, modes, offsets, active, live }
 }
 
 impl Isochrone<'_> {

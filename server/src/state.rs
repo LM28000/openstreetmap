@@ -9,6 +9,7 @@ use std::sync::{Arc, Mutex, RwLock};
 use axum::body::Bytes;
 use tokio::sync::Notify;
 
+use crate::multimodal::Extras;
 use crate::network::Network;
 use crate::realtime::Realtime;
 use crate::timetable::Timetable;
@@ -22,6 +23,8 @@ struct Inner {
     /// Horaires, et tracés calculés pour eux : toujours de la même version.
     network: RwLock<Arc<Network>>,
     realtime: RwLock<Option<Arc<Realtime>>>,
+    /// Cars et transports d'Île-de-France des isochrones, construits pour une version des horaires du rail (voir `multimodal.rs`).
+    extras: RwLock<Option<Arc<Extras>>>,
     timetable_changed: Notify,
     /// Réponses JSON prêtes à servir, préparées par les collecteurs.
     bikes: RwLock<Option<Bytes>>,
@@ -49,6 +52,7 @@ impl AppState {
         Self(Arc::new(Inner {
             network: RwLock::new(Arc::new(Network::new(Arc::new(timetable), None))),
             realtime: RwLock::new(None),
+            extras: RwLock::new(None),
             timetable_changed: Notify::new(),
             bikes: RwLock::new(None),
             fires: RwLock::new(None),
@@ -99,6 +103,14 @@ impl AppState {
         if current.timetable.id == network.timetable.id {
             *current = network;
         }
+    }
+
+    pub fn extras(&self) -> Option<Arc<Extras>> {
+        self.0.extras.read().expect("verrou des isochrones multimodales").clone()
+    }
+
+    pub fn set_extras(&self, extras: Extras) {
+        *self.0.extras.write().expect("verrou des isochrones multimodales") = Some(Arc::new(extras));
     }
 
     pub fn realtime(&self) -> Option<Arc<Realtime>> {

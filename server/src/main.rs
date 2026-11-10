@@ -29,6 +29,7 @@ mod gtfs_compact;
 mod gtfs_rt;
 mod idf;
 mod irve;
+mod multimodal;
 mod network;
 mod planes;
 mod raptor;
@@ -110,6 +111,7 @@ async fn main() -> Result<()> {
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
     tokio::spawn(air::poll_forever(http.clone(), state.clone()));
     tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(multimodal::load::load_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     match &config.web_dir {
         Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),

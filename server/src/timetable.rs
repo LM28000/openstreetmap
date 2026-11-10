@@ -94,6 +94,11 @@ impl Timetable {
         Self { id, stations, stop_points, trips, feed_version, services, base_date, tz, raptor }
     }
 
+    /// Premier jour des calendriers : les jours de circulation se comptent depuis lui.
+    pub fn base_date(&self) -> Date {
+        self.base_date
+    }
+
     /// Le service `service` circule-t-il ce jour-là ?
     pub fn service_runs_on(&self, service: u32, date: Date) -> bool {
         self.day_offset(date).is_some_and(|offset| self.services[service as usize].binary_search(&offset).is_ok())
@@ -151,7 +156,7 @@ impl Timetable {
         Timestamp::from_second(seconds).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(self.tz.clone()).date()
     }
 
-    fn day_offset(&self, date: Date) -> Option<u16> {
+    pub(crate) fn day_offset(&self, date: Date) -> Option<u16> {
         let days = self.base_date.until(date).ok()?.get_days();
         u16::try_from(days).ok()
     }
@@ -194,7 +199,7 @@ pub async fn refresh_forever(http: reqwest::Client, data_dir: PathBuf, state: Ap
     }
 }
 
-fn gtfs_path(data_dir: &Path) -> PathBuf {
+pub(crate) fn gtfs_path(data_dir: &Path) -> PathBuf {
     data_dir.join("raw/sncf-gtfs/gtfs.zip")
 }
 

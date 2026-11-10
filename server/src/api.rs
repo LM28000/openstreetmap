@@ -42,6 +42,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .route("/api/avions", get(|State(state): State<AppState>| async move { prepared(state.planes(), "avions") }))
+        .route("/api/transports", get(|State(state): State<AppState>| async move { prepared(state.transit(), "transports") }))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

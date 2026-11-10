@@ -32,6 +32,9 @@ pub struct FeedEntity {
     pub is_deleted: Option<bool>,
     #[prost(message, optional, tag = "3")]
     pub trip_update: Option<TripUpdate>,
+    /// Position d'un véhicule (couche « Bus, trams et métros » : voir `transit.rs`).
+    #[prost(message, optional, tag = "4")]
+    pub vehicle: Option<VehiclePosition>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -54,6 +57,9 @@ pub struct TripDescriptor {
     /// Voir [`TRIP_CANCELED`] et [`TRIP_DELETED`].
     #[prost(int32, optional, tag = "4")]
     pub schedule_relationship: Option<i32>,
+    /// Ligne du trajet (`route_id` du GTFS statique) : renseignée par les flux de positions.
+    #[prost(string, optional, tag = "5")]
+    pub route_id: Option<String>,
 }
 
 #[derive(Clone, PartialEq, prost::Message)]
@@ -87,3 +93,41 @@ pub const TRIP_CANCELED: i32 = 3;
 pub const TRIP_DELETED: i32 = 7;
 /// `StopTimeUpdate.schedule_relationship` : arrêt non desservi.
 pub const STOP_SKIPPED: i32 = 1;
+
+/// Position d'un véhicule (message `VehiclePosition`, tags de la spécification officielle).
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VehiclePosition {
+    #[prost(message, optional, tag = "1")]
+    pub trip: Option<TripDescriptor>,
+    #[prost(message, optional, tag = "2")]
+    pub position: Option<Position>,
+    #[prost(message, optional, tag = "8")]
+    pub vehicle: Option<VehicleDescriptor>,
+    /// Instant de la mesure de la position, en secondes depuis 1970.
+    #[prost(uint64, optional, tag = "5")]
+    pub timestamp: Option<u64>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct Position {
+    /// Degrés décimaux (WGS 84).
+    #[prost(float, required, tag = "1")]
+    pub latitude: f32,
+    #[prost(float, required, tag = "2")]
+    pub longitude: f32,
+    /// Cap en degrés depuis le nord, dans le sens des aiguilles d'une montre.
+    #[prost(float, optional, tag = "3")]
+    pub bearing: Option<f32>,
+    /// Vitesse en mètres par seconde.
+    #[prost(float, optional, tag = "5")]
+    pub speed: Option<f32>,
+}
+
+#[derive(Clone, PartialEq, prost::Message)]
+pub struct VehicleDescriptor {
+    #[prost(string, optional, tag = "1")]
+    pub id: Option<String>,
+    /// Nom lisible du véhicule (souvent son numéro de parc).
+    #[prost(string, optional, tag = "2")]
+    pub label: Option<String>,
+}

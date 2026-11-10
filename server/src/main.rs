@@ -4,6 +4,7 @@
 //! - interroge le flux temps réel SNCF (GTFS-RT) toutes les 30 secondes, et l'archive si demandé ;
 //! - calcule le tracé réel des trains sur les voies OpenStreetMap, avec leur altitude ;
 //! - rassemble les vélos en libre-service de France (GBFS) et les feux détectés par satellite ;
+//! - rassemble les bus, trams et métros en direct des réseaux qui publient leurs positions ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -24,6 +25,7 @@ mod realtime;
 mod state;
 mod timetable;
 mod tracks;
+mod transit;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -76,6 +78,7 @@ async fn main() -> Result<()> {
     tokio::spawn(bikes::poll_forever(http.clone(), state.clone()));
     tokio::spawn(fires::poll_forever(http.clone(), state.clone()));
     tokio::spawn(planes::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(transit::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;

@@ -257,7 +257,8 @@ export class ModuleManager {
         if (summary !== state.summary) this.patch(module.id, { summary });
       }
 
-      const step = module.timeStepMs > 0 ? Math.floor(time / module.timeStepMs) : `image-${this.frameCount}`;
+      const stepMs = typeof module.timeStepMs === 'function' ? module.timeStepMs(ctx.view) : module.timeStepMs;
+      const step = stepMs > 0 ? Math.floor(time / stepMs) : `image-${this.frameCount}`;
       const terrainVersion = module.followsTerrain ? this.terrain.version : 0;
       const viewVersion = module.followsView ? this.viewVersion : 0;
       const zoomBand = module.zoomBreaks?.filter((z) => ctx.view.zoom >= z).length ?? 0;

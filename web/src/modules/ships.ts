@@ -19,7 +19,7 @@
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
-import { formatRelative } from '../ui/format';
+import { measuredStatus } from '../core/infoStatus';
 import { OVER_MAP } from '../map/parameters';
 import {
   CELL,
@@ -316,9 +316,6 @@ function placeLabels(data: ShipsData, zoom: number): Label[] {
   return labels;
 }
 
-const knots = (sog: number) =>
-  `${sog.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} nœuds (${Math.round(sog * 1.852).toLocaleString('fr-FR')} km/h)`;
-
 /** Les cellules de l'atlas ont la coque sur 208 px de leurs 256 : la taille d'une icône est celle de sa cellule. */
 const CELL_SCALE = CELL / HULL_LENGTH;
 
@@ -458,20 +455,34 @@ export const ships = defineModule<ShipsData>({
     const fields: Array<[string, string]> = [
       ['État', ship.status !== undefined ? (NAV_STATUS[ship.status] ?? (ship.moving ? 'en route' : 'à l’arrêt')) : ship.moving ? 'en route' : 'à l’arrêt'],
     ];
-    if (ship.sog !== undefined) fields.push(['Vitesse', knots(ship.sog)]);
-    if (ship.heading !== undefined || ship.cog !== undefined) fields.push(['Cap', `${Math.round(ship.bearing)}°`]);
     if (ship.destination) fields.push(['Destination annoncée', ship.destination]);
-    if (ship.length) fields.push(['Dimensions', `${ship.length} m${ship.width ? ` × ${ship.width} m` : ''}`]);
+    // La longueur est dans les chiffres clés : ici, seule la largeur reste à dire.
+    if (ship.width) fields.push(['Largeur', `${ship.width} m`]);
     if (ship.draught) fields.push(['Tirant d’eau', `${ship.draught.toLocaleString('fr-FR')} m`]);
     if (ship.callSign) fields.push(['Indicatif', ship.callSign]);
     if (ship.imo) fields.push(['N° OMI', String(ship.imo)]);
-    fields.push(['MMSI', String(ship.mmsi)], ['Position reçue', formatRelative(ship.at * 1000)]);
+    fields.push(['MMSI', String(ship.mmsi)]);
+    const hasBearing = ship.heading !== undefined || ship.cog !== undefined;
     return {
+      kind: `Navire · ${typeLabel(ship.kind).split(' (')[0]}`,
       title: ship.name ?? `Navire ${ship.mmsi}`,
-      subtitle: `${typeLabel(ship.kind)}${ship.classB ? ' · petit émetteur AIS (classe B)' : ''}`,
+      subtitle: ship.classB ? 'petit émetteur AIS (classe B)' : undefined,
+      // La position est celle que le navire a émise, donnée telle quelle (puis prolongée sur la carte).
+      status: measuredStatus(time, ship.at * 1000),
+      // Nœuds : l'unité de la mer, celle que le navire annonce.
+      figures: [
+        {
+          value: ship.sog !== undefined ? ship.sog.toLocaleString('fr-FR', { maximumFractionDigits: 1 }) : '—',
+          unit: ship.sog !== undefined ? 'nœuds' : undefined,
+          label: 'vitesse',
+        },
+        { value: hasBearing ? `${Math.round(ship.bearing)}°` : '—', label: 'cap' },
+        { value: ship.length ? String(ship.length) : '—', unit: ship.length ? 'm' : undefined, label: 'de long' },
+      ],
       fields,
       note: 'Position, cap et destination sont déclarés par le navire lui-même (AIS) ; la destination est saisie à la main par l’équipage.',
-      link: { href: `https://www.marinetraffic.com/fr/ais/details/ships/mmsi:${ship.mmsi}`, label: 'Voir sur MarineTraffic' },
+      // Page du navire par MMSI : seul lien stable sans IMO (VesselFinder en exige un).
+      actions: [{ label: 'MarineTraffic', href: `https://www.marinetraffic.com/fr/ais/details/ships/mmsi:${ship.mmsi}` }],
     };
   },
 

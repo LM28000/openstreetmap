@@ -10,7 +10,8 @@
  */
 import type { Color } from '@deck.gl/core';
 import { PathLayer } from '@deck.gl/layers';
-import { defineModule } from '../core/module';
+import { defineModule, type InfoFigure } from '../core/module';
+import { plainStatus } from '../core/infoStatus';
 import { fetchJson, loadNetwork, type RailNetwork, trackAt } from './railNetwork';
 import { OVER_MAP } from '../map/parameters';
 import { KEY } from './symbols';
@@ -254,20 +255,29 @@ export const railways = defineModule<RailsData>({
       (c) => `${lowerFirst(SPEEDS[c].label.replace(' (trait fin)', ''))} : ${Math.max(1, Math.round(((byClass.get(c) ?? 0) / total) * 100))} %`,
     );
     const lonLat = runs[Math.floor(runs.length / 2)]?.path;
+    const speed = (value: number, label: string): InfoFigure =>
+      value > 0 ? { value: String(value), unit: 'km/h', label } : { value: '—', label };
     return {
+      kind: 'Voie ferrée',
       title: from && to ? `${from} – ${to}` : 'Voie ferrée',
       subtitle: 'tronçon entre deux gares',
-      fields: [
-        ['Vitesse maximale ici', limit > 0 ? `${limit} km/h` : 'inconnue'],
-        ['Longueur', `${(total / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} km`],
-        ['Vitesse la plus haute du tronçon', top > 0 ? `${top} km/h` : 'inconnue'],
-        ['Répartition', shares.join(' · ')],
+      // Données d'OpenStreetMap, pas un relevé : pastille sans point.
+      status: plainStatus('Vitesses d’après OpenStreetMap'),
+      figures: [
+        speed(limit, 'vitesse max ici'),
+        { value: (total / 1000).toLocaleString('fr-FR', { maximumFractionDigits: 1 }), unit: 'km', label: 'de long' },
+        speed(top, 'max du tronçon'),
       ],
+      fields: [['Répartition', shares.join(' · ')]],
       note: 'Vitesses maximales de la ligne d’après OpenStreetMap : les trains roulent souvent moins vite (arrêts, matériel, horaires).',
-      link: lonLat && {
-        href: `https://www.openrailwaymap.org/?style=maxspeed&lat=${lonLat[1]!.toFixed(4)}&lon=${lonLat[0]!.toFixed(4)}&zoom=12`,
-        label: 'Voir sur OpenRailwayMap',
-      },
+      actions: lonLat
+        ? [
+            {
+              label: 'OpenRailwayMap',
+              href: `https://www.openrailwaymap.org/?style=maxspeed&lat=${lonLat[1]!.toFixed(4)}&lon=${lonLat[0]!.toFixed(4)}&zoom=12`,
+            },
+          ]
+        : undefined,
     };
   },
 });

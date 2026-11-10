@@ -483,4 +483,21 @@ mod tests {
         let years: Vec<u16> = pick_years(&resources).iter().map(|(y, _)| *y).collect();
         assert_eq!(years, vec![2020, 2021, 2022, 2023, 2024]);
     }
+
+    /// Mesure de mémoire à la main : `ACCIDENTS_DIR=/dossier cargo test --release mesure_memoire -- --ignored`, sous
+    /// `/usr/bin/time -l`. Le dossier contient c25.csv, l25.csv, u25.csv et v25.csv ; l'année est lue cinq fois.
+    #[test]
+    #[ignore = "demande les vrais fichiers (34 Mo)"]
+    fn mesure_memoire() {
+        let dir = std::path::PathBuf::from(std::env::var("ACCIDENTS_DIR").expect("ACCIDENTS_DIR"));
+        let open = |name: &str| csv::ReaderBuilder::new().delimiter(b';').flexible(true).from_path(dir.join(name)).unwrap();
+        let mut all = Vec::new();
+        for _ in 0..5 {
+            let (mut rows, _) = read_year(open("c25.csv"), open("l25.csv"), open("u25.csv"), open("v25.csv")).unwrap();
+            all.append(&mut rows);
+        }
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::new(6));
+        write_json(&mut gzip, &all, &[2025], 0, 0).unwrap();
+        println!("accidents : {}, {} octets gzip", all.len(), gzip.finish().unwrap().len());
+    }
 }

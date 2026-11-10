@@ -380,4 +380,16 @@ mod tests {
         assert_eq!(coordinates(""), None);
         assert_eq!(coordinates("200,4"), None);
     }
+
+    /// Mesure de mémoire à la main : `MONUMENTS_CSV=/chemin/merimee.csv cargo test --release mesure_memoire -- --ignored`,
+    /// sous `/usr/bin/time -l` (pic de mémoire résidente du processus).
+    #[test]
+    #[ignore = "demande le vrai fichier (100 Mo)"]
+    fn mesure_memoire() {
+        let path = std::env::var("MONUMENTS_CSV").expect("MONUMENTS_CSV");
+        let reader = csv::ReaderBuilder::new().delimiter(b'|').flexible(true).from_path(path).unwrap();
+        let mut gzip = GzEncoder::new(Vec::new(), Compression::new(6));
+        let count = convert(reader, &mut gzip, 0).unwrap();
+        println!("monuments : {count}, {} octets gzip", gzip.finish().unwrap().len());
+    }
 }

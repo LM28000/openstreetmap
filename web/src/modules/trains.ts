@@ -30,6 +30,7 @@ import {
   trackOf,
 } from './railNetwork';
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
+import { OVER_MAP } from '../map/parameters';
 
 // --- Réponse de l'API (voir server/src/api.rs) ---
 
@@ -1129,7 +1130,7 @@ export const trains = defineModule<TrainsData>({
     const chosenTrain = selectedTrain(data, selection);
     const chosenStation = selectedStation(data, selection);
     // Toujours dessinés par-dessus le relief (les trains de montagne resteraient sinon cachés).
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     const iconOf = (head: Head) =>
       byDelay ? delayIcon(FAMILY_STYLE[head.train.family].nose, head.delayClass) : familyIcon(head.train.family);
 

@@ -11,6 +11,7 @@ import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color } from '@deck.gl/core';
 import { defineModule } from '../core/module';
 import { formatDateTime } from '../ui/format';
+import { OVER_MAP } from '../map/parameters';
 
 interface Quake {
   id: string;
@@ -135,7 +136,7 @@ export const earthquakes = defineModule<Quake[]>({
     // Posés à l'altitude du relief, et dessinés par-dessus : un séisme reste visible
     // même s'il est derrière une montagne.
     const getPosition = (q: Quake): [number, number, number] => [q.lon, q.lat, terrain.elevation(q.lon, q.lat)];
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
 
     return [
       new ScatterplotLayer<Quake>({

@@ -21,6 +21,7 @@ import { defineModule, type InfoContent, type LegendItem } from '../core/module'
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
 import { buildPlaneAtlas, ringDataUrl, type PlaneAtlas, type Shape } from './planeIcons';
+import { OVER_MAP } from '../map/parameters';
 
 interface ApiPlane {
   hex: string;
@@ -337,7 +338,7 @@ export const planes = defineModule<PlanesData>({
 
   deckLayers({ data, time, terrain, selection, view }) {
     if (!data || !isLive(time)) return [];
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     const icons = atlas();
     const now = Date.now();
 

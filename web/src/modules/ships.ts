@@ -16,6 +16,7 @@ import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
+import { OVER_MAP } from '../map/parameters';
 
 interface ApiShip {
   mmsi: number;
@@ -289,7 +290,7 @@ export const ships = defineModule<ShipsData>({
     for (const ship of data.ships) extrapolate(ship, now);
     const icons = shipAtlas();
     const chosen = selection ? data.byMmsi.get((selection as { mmsi: number }).mmsi) : undefined;
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     return [
       new IconLayer<Ship>({
         id: 'bateaux/navires',

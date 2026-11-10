@@ -27,6 +27,8 @@ struct Inner {
     fires: RwLock<Option<Bytes>>,
     planes: RwLock<Option<Bytes>>,
     ships: RwLock<Option<Bytes>>,
+    satellites: RwLock<Option<Bytes>>,
+    starlink: RwLock<Option<Bytes>>,
 }
 
 impl AppState {
@@ -39,6 +41,8 @@ impl AppState {
             fires: RwLock::new(None),
             planes: RwLock::new(None),
             ships: RwLock::new(None),
+            satellites: RwLock::new(None),
+            starlink: RwLock::new(None),
         }))
     }
 
@@ -113,5 +117,21 @@ impl AppState {
 
     pub fn set_ships(&self, body: Vec<u8>) {
         *self.0.ships.write().expect("verrou des bateaux") = Some(Bytes::from(body));
+    }
+
+    pub fn satellites(&self) -> Option<Bytes> {
+        self.0.satellites.read().expect("verrou des satellites").clone()
+    }
+
+    pub fn set_satellites(&self, body: Vec<u8>) {
+        *self.0.satellites.write().expect("verrou des satellites") = Some(Bytes::from(body));
+    }
+
+    pub fn starlink(&self) -> Option<Bytes> {
+        self.0.starlink.read().expect("verrou de Starlink").clone()
+    }
+
+    pub fn set_starlink(&self, body: Vec<u8>) {
+        *self.0.starlink.write().expect("verrou de Starlink") = Some(Bytes::from(body));
     }
 }

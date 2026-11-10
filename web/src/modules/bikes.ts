@@ -14,6 +14,7 @@ import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
+import { OVER_MAP } from '../map/parameters';
 
 interface ApiStation {
   network: number;
@@ -158,7 +159,7 @@ export const bikes = defineModule<BikesData>({
     const mode = settings.mode as Mode;
     const onGround = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
     const chosen = selection ? data.byKey.get((selection as { key: string }).key) : undefined;
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     const showLabels = view.zoom >= LABEL_MIN_ZOOM;
 
     return [

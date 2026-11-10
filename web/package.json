@@ -16,7 +16,8 @@
     "@deck.gl/mapbox": "~9.4.1",
     "maplibre-gl": "~5.24.0",
     "react": "^19.3.1",
-    "react-dom": "^19.3.1"
+    "react-dom": "^19.3.1",
+    "satellite.js": "~7.1.0"
   },
   "devDependencies": {
     "@types/react": "^19.3.0",

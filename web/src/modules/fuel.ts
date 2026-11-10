@@ -14,6 +14,7 @@ import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
+import { OVER_MAP } from '../map/parameters';
 
 const EXPORT_URL =
   'https://data.economie.gouv.fr/api/explore/v2.1/catalog/datasets/prix-des-carburants-en-france-flux-instantane-v2/exports/json';
@@ -239,7 +240,7 @@ export const fuel = defineModule<FuelData>({
         autoHighlight: view.zoom < LABEL_MIN_ZOOM,
         highlightColor: [255, 255, 255, 160],
         updateTriggers: { getFillColor: fuelId, getPosition: terrain.version },
-        parameters: { depthCompare: 'always', depthWriteEnabled: false },
+        parameters: OVER_MAP,
       }),
       // Vu de près, une étiquette de prix à la couleur de la classe, à la place du point.
       view.zoom >= LABEL_MIN_ZOOM &&
@@ -264,7 +265,7 @@ export const fuel = defineModule<FuelData>({
           billboard: true,
           pickable: true,
           updateTriggers: { getText: fuelId, getColor: fuelId, getBackgroundColor: fuelId, getPosition: terrain.version },
-          parameters: { depthCompare: 'always', depthWriteEnabled: false },
+          parameters: OVER_MAP,
         }),
       chosen &&
         new ScatterplotLayer<Station>({
@@ -279,7 +280,7 @@ export const fuel = defineModule<FuelData>({
           lineWidthUnits: 'pixels',
           getLineWidth: 3,
           billboard: true,
-          parameters: { depthCompare: 'always', depthWriteEnabled: false },
+          parameters: OVER_MAP,
         }),
     ];
   },

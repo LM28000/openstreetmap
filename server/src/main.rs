@@ -4,6 +4,7 @@
 //! - interroge le flux temps réel SNCF (GTFS-RT) toutes les 30 secondes, et l'archive si demandé ;
 //! - calcule le tracé réel des trains sur les voies OpenStreetMap, avec leur altitude ;
 //! - rassemble les vélos en libre-service de France (GBFS) et les feux détectés par satellite ;
+//! - relève les éléments orbitaux des satellites (CelesTrak), que le navigateur propage lui-même ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -22,6 +23,7 @@ mod planes;
 mod rails;
 mod realtime;
 mod ships;
+mod satellites;
 mod state;
 mod timetable;
 mod tracks;
@@ -78,6 +80,7 @@ async fn main() -> Result<()> {
     tokio::spawn(fires::poll_forever(http.clone(), state.clone()));
     tokio::spawn(planes::poll_forever(http.clone(), state.clone()));
     tokio::spawn(ships::poll_forever(state.clone()));
+    tokio::spawn(satellites::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;

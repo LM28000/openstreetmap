@@ -12,6 +12,7 @@ import type { Color } from '@deck.gl/core';
 import { PathLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { fetchJson, loadNetwork, type RailNetwork, trackAt } from './railNetwork';
+import { OVER_MAP } from '../map/parameters';
 
 /** Une portion de tracé de vitesse maximale constante. */
 interface Run {
@@ -169,7 +170,7 @@ export const railways = defineModule<RailsData>({
     if (!data) return [];
     refreshPaths(data, terrain.exaggeration);
     const bySpeed = settings.couleur === 'vitesse';
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     // Vu de loin, les lignes se touchent : traits plus fins.
     const scale = view.zoom < FAR_ZOOM ? 0.65 : 1;
     const width = (run: Run) => (bySpeed ? SPEEDS[speedClass(run.limit)].width : 1.25);

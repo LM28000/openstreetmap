@@ -11,6 +11,7 @@ import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { formatDateTime } from '../ui/format';
+import { OVER_MAP } from '../map/parameters';
 
 interface Fire {
   lon: number;
@@ -88,7 +89,7 @@ export const fires = defineModule<FiresData>({
     const t = time / 1000;
     const minute = Math.floor(t / 60);
     const chosen = selection ? data.byKey.get((selection as { key: string }).key) : undefined;
-    const parameters = { depthCompare: 'always', depthWriteEnabled: false } as const;
+    const parameters = OVER_MAP;
     const onGround = (f: Fire): [number, number, number] => [f.lon, f.lat, terrain.elevation(f.lon, f.lat)];
     return [
       new ScatterplotLayer<Fire>({

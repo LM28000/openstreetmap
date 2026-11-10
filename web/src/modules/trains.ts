@@ -34,6 +34,9 @@ import {
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
 import { HALO, KEY, selectionRing, zoomRamp } from './symbols';
 import { OVER_MAP } from '../map/parameters';
+import { orientation, type MeshData } from '../models/mesh';
+import { meshLayer, RENDER_SETTING, wants3d } from '../models/meshLayer';
+import { CAR_SIZE, carMesh, HAS_CAB, type CarType } from '../models/trains';
 
 // --- Réponse de l'API (voir server/src/api.rs) ---
 
@@ -1149,6 +1152,259 @@ function buildRames(heads: readonly Head[], zoom: number, colorOf: (head: Head) 
   return rames;
 }
 
+// --- Maquettes 3D des voitures ---
+
+/** Largeur minimale d'une voiture 3D à l'écran (pixels) : de loin, la maquette est élargie jusque-là. */
+const CAR_3D_MIN_PX = 5;
+/** Au-delà de ce zoom, la trace à plat sous les maquettes disparaît (elles se lisent d'elles-mêmes). */
+const FOOTPRINT_MAX_ZOOM = 15.5;
+/** Rail plus bas que le relief de plus que cela (mètres) : voiture en tunnel, cachée par le relief. */
+const UNDERGROUND_M = 10;
+/** Garde au-dessus du relief : le relief lu côté processeur n'est pas exactement le maillage dessiné (m, puis m par pixel). */
+const LIFT_BASE_M = 0.45;
+const LIFT_PER_PIXEL_M = 0.3;
+const LIFT_MAX_M = 5;
+const MAX_PITCH = 9;
+
+/** Une voiture 3D : instance d'une couche de maquettes (objets réutilisés d'une image à l'autre). */
+interface CarInstance {
+  train: Train;
+  position: [number, number, number];
+  orientation: [number, number, number];
+  scale: [number, number, number];
+  color: [number, number, number];
+}
+
+/** Voiture sous terre : dessinée à plat par-dessus le relief, en fantôme, pour qu'on ne perde pas le train. */
+interface GhostCar {
+  train: Train;
+  path: Float64Array;
+  widthM: number;
+  color: [number, number, number];
+}
+
+/** Tracé à plat d'une rame (trace sous les maquettes, anneau de sélection). */
+interface RamePath {
+  train: Train;
+  path: Float64Array;
+  widthM: number;
+  mpp: number;
+}
+
+interface Cars3d {
+  buckets: Map<string, { mesh: MeshData; cars: CarInstance[] }>;
+  ghosts: GhostCar[];
+  shadows: RamePath[];
+  chosen: RamePath | undefined;
+}
+
+const carPool: CarInstance[] = [];
+let carPoolUsed = 0;
+
+function nextCar(train: Train): CarInstance {
+  let car = carPool[carPoolUsed++];
+  if (!car) {
+    car = { train, position: [0, 0, 0], orientation: [0, 0, 0], scale: [1, 1, 1], color: [255, 255, 255] };
+    carPool.push(car);
+  }
+  car.train = train;
+  return car;
+}
+
+/** Type de chaque voiture d'une composition. */
+function carTypes(train: Train, consist: Consist): CarType[] {
+  const n = consist.cars.length;
+  if (train.family === 'grande-vitesse') return consist.cars.map((_, i) => (i === 0 || i === n - 1 ? 'tgv-motrice' : 'tgv-remorque'));
+  if (train.family === 'intercites') return consist.cars.map((_, i) => (i === 0 ? 'loco' : 'corail'));
+  const tram = train.category === 'TramTrain';
+  return consist.cars.map((_, i) => (i === 0 || i === n - 1 ? (tram ? 'tram-tete' : 'ter-tete') : tram ? 'tram-milieu' : 'ter-milieu'));
+}
+
+/**
+ * Pose les voitures des trains visibles en 3D : pour chacune, sa position au milieu, son cap le long de
+ * la voie, sa pente (altitude du rail aux deux bouts) et son échelle. Les voitures dont le rail passe
+ * sous le relief (tunnel) sont mises à part, dessinées à plat.
+ */
+function buildCars3d(
+  heads: readonly Head[],
+  zoom: number,
+  colorOf: (head: Head) => [number, number, number],
+  terrain: TerrainSampler,
+  chosen: Train | undefined,
+): Cars3d {
+  const out: Cars3d = { buckets: new Map(), ghosts: [], shadows: [], chosen: undefined };
+  carPoolUsed = 0;
+  const flatValues: number[] = [];
+  const spans: Array<{ train: Train; from: number; to: number; widthM: number; mpp: number; selected: boolean }> = [];
+  const wantShadows = zoom < FOOTPRINT_MAX_ZOOM;
+
+  for (const { head, start, hasLeader, hasFollower } of placeSlots(heads)) {
+    const { train } = head;
+    const consist = consistOf(train);
+    const types = carTypes(train, consist);
+    const lat = head.position[1];
+    const mpp = metersPerPixel(zoom, lat);
+    const metersPerUnit = EARTH_RADIUS_M * Math.cos(lat * DEG);
+    const total = sum(consist.cars);
+    const color = colorOf(head);
+    const lift = Math.min(LIFT_MAX_M, LIFT_BASE_M + LIFT_PER_PIXEL_M * mpp);
+    collectBody(train, head, start + total + 6, metersPerUnit);
+
+    const size = CAR_SIZE[types[0]!];
+    const stretch = Math.max(1, (CAR_3D_MIN_PX * mpp) / size.width);
+    const heightStretch = Math.max(1, stretch ** 0.55);
+    const widthM = size.width * stretch;
+
+    let s = start;
+    const last = consist.cars.length - 1;
+    for (let i = 0; i <= last; i++) {
+      const length = consist.cars[i]!;
+      const type = types[i]!;
+      const reversed = i === last && i > 0;
+      const from = s;
+      s += length;
+      bodyAt(from, scratchA);
+      bodyAt(s, scratchB);
+      const x = (scratchA[0]! + scratchB[0]!) / 2;
+      const carLat = (scratchA[2]! + scratchB[2]!) / 2;
+      const rail = (scratchA[3]! + scratchB[3]!) / 2;
+      const lon = x / DEG;
+
+      // Le rail est sous le relief de plus que la couverture d'un tunnel : voiture fantôme.
+      const ground = terrain.exaggeration > 0 ? terrain.elevation(lon, carLat) : 0;
+      if (ground - rail > UNDERGROUND_M) {
+        const at = flatValues.length;
+        pushSlice(flatValues, from, s);
+        out.ghosts.push({ train, path: Float64Array.from(flatValues.slice(at)), widthM, color });
+        flatValues.length = at;
+        continue;
+      }
+      // Sur un pont ou un viaduc le rail est au-dessus du relief : on le suit ; sinon on colle au relief dessiné.
+      const z = Math.max(rail, ground) + lift;
+
+      const angle = Math.atan2(scratchA[1]! - scratchB[1]!, scratchA[0]! - scratchB[0]!) / DEG; // cap deck.gl (anti-horaire depuis l'est)
+      const climb = Math.max(-MAX_PITCH, Math.min(MAX_PITCH, Math.atan2(scratchA[3]! - scratchB[3]!, length) / DEG));
+
+      // Nez à l'avant de la première voiture, à l'arrière de la dernière ; plat entre deux rames accouplées.
+      const cab = HAS_CAB[type] && (reversed ? !hasFollower : i === 0 ? !hasLeader : true);
+      const key = `${type}:${length}:${cab ? 1 : 0}`;
+      let bucket = out.buckets.get(key);
+      if (!bucket) {
+        bucket = { mesh: carMesh(type, length, cab), cars: [] };
+        out.buckets.set(key, bucket);
+      }
+      const car = nextCar(train);
+      car.position[0] = lon;
+      car.position[1] = carLat;
+      car.position[2] = z;
+      const o = orientation(90 - (reversed ? angle + 180 : angle), reversed ? -climb : climb);
+      car.orientation[0] = o[0];
+      car.orientation[1] = o[1];
+      car.orientation[2] = o[2];
+      car.scale[1] = stretch;
+      car.scale[2] = heightStretch;
+      car.color[0] = color[0];
+      car.color[1] = color[1];
+      car.color[2] = color[2];
+      bucket.cars.push(car);
+    }
+
+    if (wantShadows || train === chosen) {
+      const at = flatValues.length;
+      pushSlice(flatValues, start, start + total);
+      spans.push({ train, from: at, to: flatValues.length, widthM, mpp, selected: train === chosen });
+    }
+  }
+
+  const buffer = Float64Array.from(flatValues);
+  for (const span of spans) {
+    const entry: RamePath = { train: span.train, path: buffer.subarray(span.from, span.to), widthM: span.widthM, mpp: span.mpp };
+    if (wantShadows) out.shadows.push(entry);
+    if (span.selected) out.chosen = entry;
+  }
+  return out;
+}
+
+/** Couches des maquettes 3D : sélection, trace à plat, fantômes des tronçons en tunnel, voitures. */
+function carLayers3d(cars: Cars3d, parameters: object, zoom: number) {
+  const pathCommon = {
+    positionFormat: 'XYZ' as const,
+    _pathType: 'open' as const,
+    widthUnits: 'meters' as const,
+    jointRounded: true,
+    capRounded: true,
+    parameters,
+  };
+  const chosen = cars.chosen ? [cars.chosen] : [];
+  const fade = zoomRamp(zoom, 14, FOOTPRINT_MAX_ZOOM, 1, 0);
+  return [
+    // Sélection : un anneau blanc cerné de sombre, jamais bleu, sous la rame.
+    chosen.length > 0 &&
+      new PathLayer<RamePath>({
+        ...pathCommon,
+        id: 'trains/rames/choix-blanc',
+        data: chosen,
+        getPath: (d) => d.path,
+        getColor: [255, 255, 255, 245],
+        getWidth: (d) => d.widthM + 9 * d.mpp,
+      }),
+    chosen.length > 0 &&
+      new PathLayer<RamePath>({
+        ...pathCommon,
+        id: 'trains/rames/choix-sombre',
+        data: chosen,
+        getPath: (d) => d.path,
+        getColor: KEY,
+        getWidth: (d) => d.widthM + 5.5 * d.mpp,
+      }),
+    // Trace à plat, discrète : une maquette cachée par le relief ou les immeubles reste repérable.
+    cars.shadows.length > 0 &&
+      new PathLayer<RamePath>({
+        ...pathCommon,
+        id: 'trains/rames/trace',
+        data: cars.shadows,
+        getPath: (d) => d.path,
+        getColor: [20, 26, 38, Math.round(95 * fade)],
+        getWidth: (d) => d.widthM + 1.5 * d.mpp,
+        capRounded: false,
+        updateTriggers: { getColor: fade.toFixed(2) },
+      }),
+    // Voitures sous terre : fantômes à plat, par-dessus le relief.
+    ...(cars.ghosts.length > 0
+      ? ([
+          ['tunnel-halo', HALO, 11, false],
+          ['tunnel-contour', KEY, 8, false],
+          ['tunnel', null, 5, true],
+        ] as const).map(
+          ([id, color, pixels, pickable]) =>
+            new PathLayer<GhostCar>({
+              ...pathCommon,
+              id: `trains/rames/${id}`,
+              data: cars.ghosts,
+              getPath: (d) => d.path,
+              getColor: color ?? ((d) => [...d.color, 235] as Color),
+              getWidth: (d) => d.widthM,
+              widthMinPixels: pixels,
+              capRounded: false,
+              pickable,
+            }),
+        )
+      : []),
+    ...[...cars.buckets].map(([key, bucket]) =>
+      meshLayer<CarInstance>({
+        id: `trains/maquettes/${key}`,
+        data: bucket.cars,
+        mesh: bucket.mesh,
+        getPosition: (d) => d.position,
+        getOrientation: (d) => d.orientation,
+        getScale: (d) => d.scale,
+        getColor: (d) => d.color,
+        pickable: true,
+      }),
+    ),
+  ];
+}
+
 /** Fenêtre de la carte, élargie de la longueur d'une rame : les trains hors de vue ne sont pas calculés. */
 let mapRef: MapLibreMap | undefined;
 const VIEW_PADDING_DEG = 0.012;
@@ -1647,6 +1903,7 @@ export const trains = defineModule<TrainsData>({
   },
 
   settings: [
+    RENDER_SETTING,
     {
       id: 'couleur',
       label: 'Couleur',
@@ -1717,7 +1974,9 @@ export const trains = defineModule<TrainsData>({
 
     // De près, la rame entière à la place de la tête, pour les seuls trains dans la vue.
     const bounds = close ? viewBounds() : null;
-    const rames = close ? buildRames(heads.filter((head) => inView(head, bounds)), view.zoom, colorOf) : [];
+    const visible = close ? heads.filter((head) => inView(head, bounds)) : [];
+    const cars3d = close && wants3d(settings) ? buildCars3d(visible, view.zoom, colorOf, terrain, chosenTrain) : undefined;
+    const rames = close && !cars3d ? buildRames(visible, view.zoom, colorOf) : [];
     // De loin, l'anneau de sélection suit la taille de la tête.
     const headPixels = Math.min(TRAIN_MAX_PX, Math.max(headMinPixels(view.zoom), TRAIN_SIZE_M / metersPerPixel(view.zoom, chosenTrain?.head.position[1] ?? 46)));
 
@@ -1809,7 +2068,9 @@ export const trains = defineModule<TrainsData>({
           updateTriggers: { getFillColor: passedStops },
           parameters,
         }),
-      close
+      cars3d
+        ? carLayers3d(cars3d, parameters, view.zoom)
+        : close
         ? rameLayers(rames, chosenTrain, parameters)
         : [
             new IconLayer<Head>({
@@ -1864,7 +2125,7 @@ export const trains = defineModule<TrainsData>({
   },
 
   select(object) {
-    const picked = object as Partial<Head & StopMarker & Station & { rame: Rame }>;
+    const picked = object as Partial<Head & StopMarker & Station & { rame: Rame }> & { train?: Train };
     // Une tête, une voiture ou un bout de rame : le même train.
     const train = picked.train ?? picked.rame?.train;
     if (train) return { type: 'train', id: train.id } satisfies TrainsSelection;

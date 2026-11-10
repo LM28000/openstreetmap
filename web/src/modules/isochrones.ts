@@ -22,6 +22,7 @@
  */
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import type { ImageSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent, type InfoTable } from '../core/module';
 import { ModuleManager } from '../core/moduleManager';
@@ -560,7 +561,8 @@ function journeyTable(data: IsochroneData, state: JourneyState): InfoTable {
         rows.push({ cells: [hhmm(leg.departure), `${category} ${leg.number} · ${both(leg)}`, hhmm(leg.arrival)] });
       } else if (leg.type === 'transit') {
         // « Car BreizhGo 7 » ou « RER B » en pastille aux couleurs officielles, puis la destination et le parcours.
-        const towards = leg.headsign ? `vers ${leg.headsign} · ` : '';
+        // Les RER et Transilien n'ont souvent pour destination qu'un code de mission (« ZVAL ») : on le tait.
+        const towards = leg.headsign && !/^[A-Z0-9]{3,5}$/.test(leg.headsign) ? `vers ${leg.headsign} · ` : '';
         rows.push({
           cells: [hhmm(leg.departure), `${towards}${both(leg)}`, hhmm(leg.arrival)],
           badge: { text: leg.label, color: leg.color ?? undefined, textColor: leg.textColor ?? undefined },
@@ -687,6 +689,40 @@ function showArea(map: MapLibreMap, data: IsochroneData | undefined, night: numb
   map.setPaintProperty(AREA_LAYER, 'raster-opacity', 1);
 }
 
+/** Étiquettes désencombrées (recalculées par demi-niveau de zoom et à chaque nouveau calcul). */
+let labelCache: { data: IsochroneData; band: number; extras: boolean; bounds: string; labelled: Reached[]; extraLabelled: Reached[] } | undefined;
+
+function labelsFor(data: IsochroneData, zoom: number, showExtras: boolean): { labelled: Reached[]; extraLabelled: Reached[] } {
+  if (zoom < 7) return { labelled: [], extraLabelled: [] };
+  const band = zoomBand(zoom);
+  const extras = showExtras && zoom >= EXTRA_LABEL_ZOOM;
+  const b = mapRef?.getBounds();
+  const bounds = b ? [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()].map((v) => v.toFixed(2)).join() : '';
+  if (labelCache && labelCache.data === data && labelCache.band === band && labelCache.extras === extras && labelCache.bounds === bounds) return labelCache;
+  const origin = data.origin!;
+  const candidates = [origin, ...data.reached.filter((s) => inView(mapRef, s)), ...(extras ? data.extraReached.filter((s) => inView(mapRef, s)) : [])];
+  // Les gares n'ont pas de `kind` ; les arrêts de cars et d'Île-de-France en ont un.
+  const isExtra = (s: Reached) => s.kind !== undefined;
+  const kept = declutter(candidates, zoom, {
+    lon: (s) => s.lon,
+    lat: (s) => s.lat,
+    rank: (s) => (s === origin ? -1 : (isExtra(s) ? 1e7 : 0) + s.seconds),
+    box: LABEL_BOX_PX,
+  }).filter((s) => s !== origin);
+  labelCache = {
+    data,
+    band,
+    extras,
+    bounds,
+    labelled: kept.filter((s) => !isExtra(s)).slice(0, 150),
+    extraLabelled: kept.filter(isExtra).slice(0, 120),
+  };
+  return labelCache;
+}
+
+/** Place d'une étiquette « Nom · 1 h 08 » à l'écran, avec un peu d'air (pixels). */
+const LABEL_BOX_PX = { width: 150, height: 26 };
+
 /** Dernière image posée sur la source : pour ne la remettre que si les données ont changé. */
 let shownData: IsochroneData | undefined;
 
@@ -718,7 +754,8 @@ export const isochrones = defineModule<IsochroneData>({
   drawOrder: 2,
   timeStepMs: 3_600_000, // le calcul ne dépend pas de l'instant à chaque image : voir `needsReload`
   followsView: true,
-  zoomBreaks: [5, 7, 9],
+  // Seuils des repères (5, 6,5, 9,5), puis chaque demi-niveau pour le désencombrement des étiquettes.
+  zoomBreaks: [5, 6.5, ...halfZoomBreaks(7, 16)],
 
   urlState: {
     param: 'depuis',
@@ -855,13 +892,14 @@ export const isochrones = defineModule<IsochroneData>({
     const position = (s: Reached): [number, number, number] => [s.lon, s.lat, 0];
     const color = (s: Reached): Color => [...bandColor(s.band, night), 255];
     const origin = data.origin;
-    // Les durées s'écrivent à côté des gares quand on est assez près, pour celles de la vue seulement.
-    const labelled = view.zoom >= 7 ? data.reached.filter((s) => inView(mapRef, s)).slice(0, 150) : [];
     // Les arrêts de cars et de métro : plus petits que les gares, cernés selon le mode, et nommés de près seulement.
     const showExtras = data.extraReached.length > 0 && view.zoom >= EXTRA_MIN_ZOOM;
     const extraRadius = radius * 0.68;
     const extraStroke = (s: Reached): Color => (s.kind === 'car' ? EXTRA_STROKE.car : EXTRA_STROKE.idf);
-    const extraLabelled = view.zoom >= EXTRA_LABEL_ZOOM ? data.extraReached.filter((s) => inView(mapRef, s)).slice(0, 120) : [];
+    // Les durées s'écrivent à côté des points quand on est assez près, sans se chevaucher : une
+    // étiquette par case, la gare de départ d'abord (elle a la sienne), puis les gares, puis les
+    // arrêts de cars et de métro, et dans chaque groupe la plus proche en temps.
+    const { labelled, extraLabelled } = labelsFor(data, view.zoom, showExtras);
 
     return [
       showExtras &&

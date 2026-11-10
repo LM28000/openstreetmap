@@ -388,7 +388,11 @@ fn estimate(schedule: &Schedule, realtime: Option<&Realtime>, now: i64) -> Vec<E
                     ts: now,
                     est: Some(EstimateOut {
                         theoretical: update.is_none(),
-                        to: (trip.headsign != u32::MAX).then(|| schedule.headsigns[trip.headsign as usize].to_string()),
+                        to: (trip.headsign != u32::MAX)
+                            .then(|| schedule.headsigns[trip.headsign as usize].to_string())
+                            // Les RER et Transilien ont pour « destination » le code de la mission (« SOME », « UPUS ») : on dit plutôt le dernier arrêt.
+                            .filter(|h| !is_mission_code(h))
+                            .or_else(|| pattern.stop.last().map(|&s| schedule.stops[s as usize].name.to_string()).filter(|n| !n.is_empty())),
                         next: next.map(|i| schedule.stops[pattern.stop[i] as usize].name.to_string()).filter(|n| !n.is_empty()),
                         next_at: next.map(|i| live.arrival[i]),
                         delay,
@@ -399,6 +403,11 @@ fn estimate(schedule: &Schedule, realtime: Option<&Realtime>, now: i64) -> Vec<E
         }
     }
     vehicles
+}
+
+/// Quatre lettres majuscules (« SOME ») : un code de mission de la SNCF, pas un nom de destination.
+fn is_mission_code(headsign: &str) -> bool {
+    headsign.len() == 4 && headsign.chars().all(|c| c.is_ascii_uppercase())
 }
 
 fn e5(degrees: f64) -> i32 {

@@ -25,6 +25,7 @@ struct Inner {
     /// Réponses JSON prêtes à servir, préparées par les collecteurs.
     bikes: RwLock<Option<Bytes>>,
     fires: RwLock<Option<Bytes>>,
+    planes: RwLock<Option<Bytes>>,
 }
 
 impl AppState {
@@ -35,6 +36,7 @@ impl AppState {
             timetable_changed: Notify::new(),
             bikes: RwLock::new(None),
             fires: RwLock::new(None),
+            planes: RwLock::new(None),
         }))
     }
 
@@ -93,5 +95,13 @@ impl AppState {
 
     pub fn set_fires(&self, body: Vec<u8>) {
         *self.0.fires.write().expect("verrou des feux") = Some(Bytes::from(body));
+    }
+
+    pub fn planes(&self) -> Option<Bytes> {
+        self.0.planes.read().expect("verrou des avions").clone()
+    }
+
+    pub fn set_planes(&self, body: Vec<u8>) {
+        *self.0.planes.write().expect("verrou des avions") = Some(Bytes::from(body));
     }
 }

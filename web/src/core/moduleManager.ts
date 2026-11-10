@@ -297,7 +297,7 @@ export class ModuleManager {
       terrain: this.terrain,
       settings: this.snapshot[entry.module.id]?.settings ?? {},
       selection,
-      view: { zoom: this.map?.getZoom() ?? 0 },
+      view: { zoom: this.map?.getZoom() ?? 0, bearing: this.map?.getBearing() ?? 0, pitch: this.map?.getPitch() ?? 0 },
     };
   }
 

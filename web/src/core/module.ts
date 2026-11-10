@@ -44,7 +44,8 @@ export interface RenderContext<TData> {
   /** Objet sélectionné dans ce module (valeur renvoyée par `select`), sinon `null`. */
   selection: unknown;
   /** État de la vue : par exemple pour n'afficher les gares qu'à partir d'un certain zoom. */
-  view: { zoom: number };
+  /** Vue de la carte : zoom, cap (degrés depuis le nord) et inclinaison (degrés). */
+  view: { zoom: number; bearing: number; pitch: number };
 }
 
 export interface LoadContext {

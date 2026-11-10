@@ -10,8 +10,9 @@ import { earthquakes } from './earthquakes';
 import { fires } from './fires';
 import { floods } from './floods';
 import { fuel } from './fuel';
+import { planes } from './planes';
 import { power } from './power';
 import { railways } from './railways';
 import { trains } from './trains';
 
-export const MODULES: LayerModule[] = [trains, railways, bikes, floods, fires, earthquakes, power, fuel, dayNight];
+export const MODULES: LayerModule[] = [trains, railways, planes, bikes, floods, fires, earthquakes, power, fuel, dayNight];

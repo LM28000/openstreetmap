@@ -29,6 +29,14 @@ export const SCENES: readonly Scene[] = [
     modules: ['pluie', 'vent', 'vigilance-meteo', 'jour-nuit'],
   },
   {
+    // Hors de « Météo » : l'indice (jaune, rouge, turquoise) y recouvrirait la vigilance (jaune, orange, rouge)
+    // et le radar de pluie (bleu). Le vent, lui, est blanc et montre où l'air pollué est emporté.
+    id: 'air',
+    label: 'Qualité de l’air',
+    description: 'indice ATMO, épisodes, vent',
+    modules: ['air', 'vent', 'jour-nuit'],
+  },
+  {
     id: 'energie',
     label: 'Énergie',
     description: 'électricité, bornes, carburants',

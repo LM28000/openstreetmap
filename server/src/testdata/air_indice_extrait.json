@@ -1,0 +1,11 @@
+{
+"type": "FeatureCollection",
+"name": "national_data.national_ind_atmo_2021",
+"features": [
+{ "type": "Feature", "properties": { "aasqa": "11", "date_maj": "2026-11-10T13:09:46.654+01:00", "code_no2": 1, "code_o3": 1, "code_pm10": 1, "code_pm25": 1, "code_qual": 1, "code_so2": 1, "code_zone": "77418", "coul_qual": "#50F0E6", "date_dif": "2026-11-10", "date_ech": "2026-11-10", "lib_qual": "Bon", "lib_zone": "Saint-Loup-De-Naud", "source": "Airparif", "type_zone": "commune", "x_wgs84": 3.2186317470449701, "y_wgs84": 48.5366737830985 } },
+{ "type": "Feature", "properties": { "aasqa": "11", "date_maj": "2026-11-10T13:09:46.654+01:00", "code_no2": 1, "code_o3": 2, "code_pm10": 1, "code_pm25": 1, "code_qual": 2, "code_so2": 1, "code_zone": "77418", "coul_qual": "#50CCAA", "date_dif": "2026-11-10", "date_ech": "2026-11-11", "lib_qual": "Moyen", "lib_zone": "Saint-Loup-De-Naud", "source": "Airparif", "type_zone": "commune", "x_wgs84": 3.2186317470449701, "y_wgs84": 48.5366737830985 } },
+{ "type": "Feature", "properties": { "aasqa": "76", "date_maj": "2026-11-10T11:30:02.000+01:00", "code_no2": 1, "code_o3": 1, "code_pm10": 1, "code_pm25": 1, "code_qual": 2, "code_so2": 1, "code_zone": "243100518", "coul_qual": "#50CCAA", "date_dif": "2026-11-10", "date_ech": "2026-11-10", "lib_qual": "moyen", "lib_zone": "CC du Pays de Test", "source": "Atmo-Occitanie", "type_zone": "epci", "x_wgs84": 2.1, "y_wgs84": 43.5 } },
+{ "type": "Feature", "properties": { "aasqa": "03", "date_maj": "2026-11-10T09:00:00.000-04:00", "code_no2": 1, "code_o3": 1, "code_pm10": 1, "code_pm25": 1, "code_qual": 2, "code_so2": 1, "code_zone": "97302", "coul_qual": "#50CCAA", "date_dif": "2026-11-10", "date_ech": "2026-11-10", "lib_qual": "Moyen", "lib_zone": "Cayenne", "source": "Atmo Guyane", "type_zone": "Commune", "x_wgs84": -52.3165431, "y_wgs84": 4.93387174 } },
+{ "type": "Feature", "properties": { "aasqa": "11", "date_maj": "2026-11-10T13:09:46.654+01:00", "code_no2": 1, "code_o3": 1, "code_pm10": 1, "code_pm25": 1, "code_qual": 1, "code_so2": 1, "code_zone": "00000", "date_ech": "2026-11-10", "lib_zone": "Sans position", "source": "Airparif", "type_zone": "commune", "x_wgs84": null, "y_wgs84": null } }
+]
+}

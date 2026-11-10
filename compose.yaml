@@ -8,6 +8,7 @@
 #   ARCHIVE_PATH=/mnt/pool/carte-vivante   où garder les archives du temps réel
 #   RUN_AS=1000:1000                   utilisateur:groupe propriétaire des dossiers data et archive
 #   AISSTREAM_API_KEY=…                clé aisstream.io de la couche « Bateaux » (secrète : chmod 600 .env)
+#   ATMO_USERNAME=… ATMO_PASSWORD=…    compte Atmo Data de la couche « Qualité de l'air » (secrets)
 
 name: carte-vivante
 
@@ -25,6 +26,9 @@ services:
     environment:
       # Vide = couche « Bateaux » désactivée. La clé ne sort jamais du serveur.
       AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
+      # Vides = couche « Qualité de l'air » désactivée. Compte Atmo Data : il ne sort jamais du serveur.
+      ATMO_USERNAME: "${ATMO_USERNAME:-}"
+      ATMO_PASSWORD: "${ATMO_PASSWORD:-}"
     volumes:
       - "${DATA_PATH:-./data}:/data"
       - "${ARCHIVE_PATH:-./archive}:/archive"

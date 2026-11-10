@@ -11,6 +11,7 @@
 //! - `GET /api/bornes` : bornes de recharge (base nationale IRVE, regroupées par station).
 //! - `GET /api/trafic` : événements routiers (Bison Futé) ; `GET /api/trafic/etat` : état de la circulation.
 //! - `GET /api/vigilance` : vigilance météo par département (Météo-France).
+//! - `GET /api/air` : indice ATMO de qualité de l'air par commune, et épisodes de pollution (Atmo France / AASQA).
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
 //!   navigateur calcule lui-même la position de chaque train à chaque image.
@@ -59,6 +60,7 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
         .route("/api/trafic", get(|State(state): State<AppState>| async move { prepared(state.traffic(), "trafic") }))
         .route("/api/trafic/etat", get(|State(state): State<AppState>| async move { prepared(state.traffic_state(), "état du trafic") }))
         .route("/api/vigilance", get(|State(state): State<AppState>| async move { prepared(state.vigilance(), "vigilance") }))
+        .route("/api/air", get(air))
         .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))
         .route("/api/vent", get(|State(state): State<AppState>| async move { prepared(state.wind(), "vent") }))
         // Une adresse d'API inconnue est une erreur, pas la page du site.
@@ -265,6 +267,14 @@ fn prepared(body: Option<Bytes>, what: &str) -> axum::response::Response {
     match body {
         Some(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         None => (StatusCode::SERVICE_UNAVAILABLE, format!("{what} : première collecte en cours")).into_response(),
+    }
+}
+
+/// Qualité de l'air : 503 avec la raison quand la couche est désactivée (pas d'identifiants Atmo Data).
+async fn air(State(state): State<AppState>) -> axum::response::Response {
+    match state.air_disabled() {
+        Some(reason) => (StatusCode::SERVICE_UNAVAILABLE, format!("qualité de l'air : {reason}")).into_response(),
+        None => prepared(state.air(), "qualité de l'air"),
     }
 }
 

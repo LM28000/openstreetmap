@@ -7,6 +7,7 @@
 //! - relève les éléments orbitaux des satellites (CelesTrak), que le navigateur propage lui-même ;
 //! - rassemble les bus, trams et métros en direct des réseaux qui publient leurs positions ;
 //! - relève le champ de vent (Open-Meteo, modèle ARPEGE) toutes les 6 heures ;
+//! - relève l'indice de qualité de l'air (Atmo Data, avec un compte) toutes les heures ;
 //! - estime la position des bus, trams et métros des réseaux qui ne publient que leurs horaires en temps réel ;
 //! - sert l'API `/api/trains` au site.
 //!
@@ -14,8 +15,11 @@
 //! - `HOST` (127.0.0.1) et `PORT` (8787) : adresse d'écoute ;
 //! - `DATA_DIR` (../data) : où ranger les fichiers téléchargés ;
 //! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel ;
-//! - `RUST_LOG` (info) : niveau de détail des journaux.
+//! - `RUST_LOG` (info) : niveau de détail des journaux ;
+//! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
+//! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.
 
+mod air;
 mod api;
 mod bikes;
 mod dem;
@@ -102,6 +106,7 @@ async fn main() -> Result<()> {
     tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
     tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(air::poll_forever(http.clone(), state.clone()));
     tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     match &config.web_dir {

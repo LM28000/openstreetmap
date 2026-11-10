@@ -10,6 +10,7 @@
  * (on voit par exemple le solaire monter puis descendre dans la journée).
  */
 import { ColumnLayer } from '@deck.gl/layers';
+import { measuredStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
 import { formatTime } from '../ui/format';
 
@@ -231,22 +232,33 @@ export const power = defineModule<PowerData>({
     const reading = data ? readingsAt(data, time).find((r) => r.region === code) : undefined;
     const region = REGIONS[code];
     if (!region) return null;
-    if (!reading) return { title: region.name, subtitle: 'Électricité · pas de données à cet instant' };
+    if (!reading) return { kind: 'Région · électricité', title: region.name, subtitle: 'Pas de données à cet instant' };
     const production = total(reading);
     const balance = production - reading.consumption;
+    // Tout sauf le thermique (gaz, charbon, fioul) : nucléaire, hydraulique, éolien, solaire, bioénergies.
+    const lowCarbon = Math.round(((production - reading.production.thermique) / Math.max(production, 1)) * 100);
+    const mw = (v: number) => Math.round(v).toLocaleString('fr-FR');
     return {
+      kind: 'Région · électricité',
       title: region.name,
-      subtitle: `Électricité · relevé de ${formatTime(reading.time)}`,
+      // Relevé RTE au quart d'heure, publié avec une demi-heure de retard : l'âge dit ce retard.
+      status: measuredStatus(time, reading.time),
+      figures: [
+        { value: mw(reading.consumption), unit: 'MW', label: 'consommation' },
+        { value: mw(production), unit: 'MW', label: 'production' },
+        { value: String(lowCarbon), unit: '%', label: 'bas carbone' },
+      ],
+      // Production et consommation sont dans les chiffres : il reste le sens du bilan.
       fields: [
-        ['Consommation', megawatts(reading.consumption)],
-        ['Production', megawatts(production)],
         [
           'Bilan',
           balance >= 0
             ? `produit ${megawatts(balance)} de plus qu’elle ne consomme`
             : `dépend de ses voisines pour ${megawatts(-balance)}`,
         ],
+        ['Relevé de', formatTime(reading.time)],
       ],
+      actions: [{ label: 'Source', href: 'https://www.rte-france.com/eco2mix' }],
       tables: [
         {
           title: 'Production par filière',

@@ -18,11 +18,12 @@
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
+import { measuredStatus, plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
-import type { LegendItem } from '../core/module';
+import type { InfoFigure, LegendItem } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { OVER_MAP } from '../map/parameters';
-import { formatDateTime, formatRelative } from '../ui/format';
+import { formatDateTime, formatRelative, formatTime } from '../ui/format';
 import { type Shape, ShapeExtension } from './shapeExtension';
 import { STATUS_COLORS, addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
@@ -99,6 +100,15 @@ const SHAPES: Record<Exclude<Kind, 'bouchon'>, { shape: Shape; label: string; si
   fermeture: { shape: 'square', label: 'Route fermée', size: 8, fill: [22, 26, 38] },
   travaux: { shape: 'diamond', label: 'Travaux, voie neutralisée', size: 6, fill: [255, 255, 255] },
   danger: { shape: 'triangle', label: 'Danger (obstacle, chaussée…)', size: 8, fill: [255, 255, 255] },
+};
+
+/** Nom de chaque famille d'événements, pour le type affiché en tête de fiche. */
+const KIND_NAMES: Record<Kind, string> = {
+  bouchon: 'Bouchon',
+  accident: 'Accident',
+  fermeture: 'Fermeture de route',
+  travaux: 'Travaux',
+  danger: 'Danger',
 };
 
 const KIND_ORDER: Kind[] = ['travaux', 'danger', 'fermeture', 'accident', 'bouchon'];
@@ -253,6 +263,13 @@ function eventsGeoJson(events: TrafficEvent[]) {
 
 function setVisibility(map: MapLibreMap, ids: string[], visible: boolean): void {
   for (const id of ids) if (map.getLayer(id)) map.setLayoutProperty(id, 'visibility', visible ? 'visible' : 'none');
+}
+
+/** Fin d'un événement, assez courte pour une case de chiffre : « 18:30 » le jour même, « 12 nov. » sinon. */
+function endLabel(ms: number): string {
+  const day = (t: number) => new Date(t).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris' });
+  if (day(ms) === day(Date.now())) return formatTime(ms);
+  return new Date(ms).toLocaleDateString('fr-FR', { timeZone: 'Europe/Paris', day: 'numeric', month: 'short' });
 }
 
 const stateAge = (data: TrafficData): string => (data.stateAt ? formatRelative(data.stateAt * 1000) : '');
@@ -565,48 +582,72 @@ export const traffic = defineModule<TrafficData>({
     return picked.id ? { type: picked.type ?? 'event', id: picked.id } : null;
   },
 
-  describe(selection, { data }) {
+  describe(selection, { data, time }) {
     if (!data) return null;
     const { type, id } = selection as { type: string; id: string };
     const NOT_COVERED = 'Les autoroutes concédées (Vinci, APRR, Sanef…) ne sont pas couvertes : leurs événements et leur état ne sont pas publiés en données ouvertes.';
+    const source = { label: 'Source', href: 'https://www.bison-fute.gouv.fr/' };
 
     if (type === 'section') {
       const section = data.sectionsById.get(id);
       if (!section) return null;
-      const fields: Array<[string, string]> = [['État', STATES[section.state]?.name ?? 'inconnu']];
-      if (section.speed !== undefined) fields.push(['Vitesse moyenne', `${Math.round(section.speed)} km/h`]);
-      if (section.flow !== undefined) fields.push(['Débit', `${section.flow.toLocaleString('fr-FR')} véhicules par heure`]);
+      const fields: Array<[string, string]> = [];
       if (section.road && section.name) fields.push(['Sens', section.name]);
-      fields.push(['Mesure', `${formatDateTime(section.time * 1000)} (${formatRelative(section.time * 1000)})`]);
-      fields.push(['Source', section.source]);
       return {
+        kind: 'Tronçon routier',
         title: section.road ?? section.name ?? 'Tronçon routier',
-        subtitle: section.road ? `État de la circulation · ${section.source}` : section.source,
-        fields,
+        subtitle: section.source,
+        // L'état est une mesure des capteurs, datée : c'est la seule donnée ici qui est vraiment reçue en continu.
+        status: measuredStatus(time, section.time * 1000),
+        // L'état n'est jamais absent ; la vitesse et le débit dépendent des capteurs de la source.
+        figures: [
+          ...(section.speed !== undefined ? [{ value: String(Math.round(section.speed)), unit: 'km/h', label: 'vitesse moyenne' }] : []),
+          { value: STATES[section.state]?.name ?? 'Inconnu', label: 'état' },
+          ...(section.flow !== undefined ? [{ value: section.flow.toLocaleString('fr-FR'), unit: 'véh./h', label: 'débit' }] : []),
+        ],
+        fields: fields.length ? fields : undefined,
         note: `${NOT_COVERED}${stateAge(data) ? ` Données relues ${stateAge(data)}.` : ''}`,
+        actions: [source],
       };
     }
 
     const event = data.eventsById.get(id);
     if (!event) return null;
     const places = event.from && event.to && event.from !== event.to ? `de ${event.from} à ${event.to}` : (event.from ?? '');
+    const length =
+      event.lengthM !== undefined && event.lengthM > 0
+        ? event.lengthM >= 1000
+          ? { value: (event.lengthM / 1000).toFixed(1).replace('.', ','), unit: 'km' }
+          : { value: String(event.lengthM), unit: 'm' }
+        : undefined;
+    const figures: InfoFigure[] = [];
+    if (length) figures.push({ ...length, label: event.kind === 'bouchon' ? 'de file' : 'de tronçon' });
+    if (event.lanes && event.lanes[1] > 0) figures.push({ value: `${event.lanes[0]}/${event.lanes[1]}`, label: 'voies concernées' });
+    figures.push({ value: event.end !== undefined ? endLabel(event.end * 1000) : '–', label: event.end !== undefined ? 'fin prévue' : 'fin non précisée' });
+    // Les chiffres portent déjà la longueur, les voies et la fin ; la fiche garde le reste du détail.
     const fields: Array<[string, string]> = [];
     if (event.road) fields.push(['Route', event.road]);
     if (event.direction) fields.push(['Sens', event.direction]);
-    if (event.lengthM !== undefined && event.lengthM > 0) fields.push([event.kind === 'bouchon' ? 'Longueur de la file' : 'Longueur du tronçon', event.lengthM >= 1000 ? `${(event.lengthM / 1000).toFixed(1).replace('.', ',')} km` : `${event.lengthM} m`]);
-    if (event.lanes && event.lanes[1] > 0) fields.push(['Voies concernées', `${event.lanes[0]} sur ${event.lanes[1]}`]);
     if (event.start !== undefined) fields.push(['Début', formatDateTime(event.start * 1000)]);
-    fields.push(['Fin', event.end !== undefined ? formatDateTime(event.end * 1000) : 'non précisée']);
     if (event.period) fields.push(['Période', event.period]);
-    if (event.uncertain) fields.push(['Certitude', 'événement probable, pas encore confirmé']);
     if (event.location) fields.push(['Position', event.location]);
     if (event.source) fields.push(['Source', `${event.source} (Bison Futé)`]);
-    if (event.updated !== undefined) fields.push(['Mis à jour', formatRelative(event.updated * 1000)]);
     return {
+      kind: KIND_NAMES[event.kind],
       title: event.label,
       subtitle: [event.road, places].filter(Boolean).join(' · ') || undefined,
-      fields,
+      // Un événement est déclaré par les gestionnaires de route, pas mesuré : on dit sa fraîcheur, sans point rouge.
+      status: plainStatus(
+        event.uncertain
+          ? 'Probable, pas encore confirmé'
+          : event.updated !== undefined
+            ? `Mis à jour ${formatRelative(event.updated * 1000)}`
+            : 'Déclaré par Bison Futé',
+      ),
+      figures,
+      fields: fields.length ? fields : undefined,
       note: [event.comment, NOT_COVERED].filter(Boolean).join('\n\n'),
+      actions: [source],
     };
   },
 

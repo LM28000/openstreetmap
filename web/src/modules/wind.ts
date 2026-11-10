@@ -13,6 +13,7 @@
  */
 import type { CustomLayerInterface, GeoJSONSource, Map as MapLibreMap, MapMouseEvent, MapTouchEvent } from 'maplibre-gl';
 import { ScatterplotLayer } from '@deck.gl/layers';
+import { scheduledStatus } from '../core/infoStatus';
 import { defineModule, type LegendItem } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { OVER_MAP } from '../map/parameters';
@@ -270,6 +271,7 @@ export const wind = defineModule<WindData>({
     const uv = windAt(data, time, point.lon, point.lat);
     if (!uv) {
       return {
+        kind: 'Vent à 10 m',
         title: 'Vent',
         subtitle: formatDateTime(time),
         note: 'Pas de prévision de vent à cet instant : le modèle ne couvre que quelques heures avant et après maintenant.',
@@ -279,14 +281,19 @@ export const wind = defineModule<WindData>({
     const force = beaufort(speed);
     const number = (value: number, digits = 0) => value.toLocaleString('fr-FR', { maximumFractionDigits: digits });
     return {
-      title: 'Vent à 10 m',
-      subtitle: formatDateTime(time),
-      fields: [
-        ['Vitesse', `${number(speed * KMH)} km/h (${number(speed, 1)} m/s)`],
-        ['Direction', speed < 0.3 ? 'aucune, air calme' : `vent ${originName(from)} (${number(from)}°)`],
-        ['Force', `${force.degree} Beaufort : ${force.name}`],
-        ['Position', `${number(point.lat, 2)} °N, ${number(point.lon, 2)} °E`],
+      kind: 'Vent à 10 m',
+      title: `${number(point.lat, 2)} °N, ${number(point.lon, 2)} °E`,
+      subtitle: 'Point cliqué sur la carte',
+      // Sortie d'un modèle, pour l'instant affiché : une prévision, jamais une mesure.
+      status: scheduledStatus(`Prévision ARPEGE · ${formatDateTime(time)}`),
+      figures: [
+        { value: number(speed * KMH), unit: 'km/h', label: `${number(speed, 1)} m/s` },
+        speed < 0.3
+          ? { value: '–', label: 'air calme' }
+          : { value: `${number(from)}°`, label: `vent ${originName(from)}` },
+        { value: String(force.degree), unit: 'Bf', label: force.name },
       ],
+      actions: [{ label: 'Source', href: 'https://open-meteo.com/' }],
       note: 'Vent moyen à 10 m du sol, d’après le modèle ARPEGE de Météo-France. Les rafales et l’effet du relief local (vallées, cols) ne sont pas décrits : la grille est de 0,5° (environ 50 km).',
     };
   },

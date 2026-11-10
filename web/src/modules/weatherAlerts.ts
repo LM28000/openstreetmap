@@ -15,6 +15,7 @@
  * gregoiredavid/france-geojson, réduits à 3 décimales et embarqués (src/data/).
  */
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
+import { scheduledStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { formatDateTime } from '../ui/format';
@@ -132,7 +133,8 @@ function swatch(level: number): string {
   if (!ctx) return '';
   ctx.fillStyle = LEVELS[level]!.color;
   ctx.globalAlpha = 0.85;
-  ctx.fillRect(2, 2, 24, 24);
+  // Le vert n'est pas peint sur la carte : sa pastille est un simple cadre, comme son contour.
+  if (level > 1) ctx.fillRect(2, 2, 24, 24);
   ctx.globalAlpha = 1;
   const pattern = PATTERN_OF[level]!;
   if (pattern !== 'none') {
@@ -226,7 +228,7 @@ export const weatherAlerts = defineModule<AlertsData>({
     return [4, 3, 2, 1].map((level) => ({
       color: LEVELS[level]!.color,
       icon: swatch(level),
-      label: `Vigilance ${LEVELS[level]!.name}${level === 1 ? '' : level === 4 ? ' (hachures croisées)' : level === 3 ? ' (hachures serrées)' : ' (hachures espacées)'}`,
+      label: `Vigilance ${LEVELS[level]!.name}${level === 1 ? ' : pas de vigilance particulière, non colorée' : level === 4 ? ' (hachures croisées)' : level === 3 ? ' (hachures serrées)' : ' (hachures espacées)'}`,
     }));
   },
 
@@ -256,8 +258,9 @@ export const weatherAlerts = defineModule<AlertsData>({
           source: SOURCE_ID,
           paint: {
             'fill-color': ['match', ['get', 'level'], 2, LEVELS[2]!.color, 3, LEVELS[3]!.color, 4, LEVELS[4]!.color, LEVELS[1]!.color] as never,
-            // Le vert est presque transparent : on voit d'abord ce qui demande de la vigilance.
-            'fill-opacity': byLevel([0.1, 0.45, 0.55, 0.65], 0),
+            // Le vert n'est pas peint : un fond vert sur toute la France, surtout de nuit, noie ce qui demande
+            // de la vigilance. Il garde un contour discret ; la couche reste cliquable (l'opacité n'y change rien).
+            'fill-opacity': byLevel([0, 0.45, 0.55, 0.65], 0),
           },
         },
         before,
@@ -331,14 +334,22 @@ export const weatherAlerts = defineModule<AlertsData>({
     const period = periodAt(data, time);
     const title = `${feature.properties.nom} (${code})`;
     if (period < 0) {
-      return { title, subtitle: 'Vigilance météo', note: 'Le bulletin de Météo-France ne couvre que deux jours (celui de son émission et le suivant) : aucune information pour cet instant.' };
+      return { kind: 'Vigilance météo', title, note: 'Le bulletin de Météo-France ne couvre que deux jours (celui de son émission et le suivant) : aucune information pour cet instant.' };
     }
     const entry = data.departments[code]?.[period];
     const level = entry?.max ?? 1;
+    const phenomena = entry?.phenomena ?? [];
+    const levelName = LEVELS[level]!.name;
     return {
+      kind: `Vigilance météo · ${levelName}`,
       title,
-      subtitle: `Vigilance météo · ${dayName(data, period)} · bulletin de ${formatDateTime(data.issuedAt * 1000)}`,
-      fields: [['Niveau maximal', `Vigilance ${LEVELS[level]!.name}`]],
+      subtitle: 'Département',
+      // Le bulletin est une prévision de Météo-France, pas une mesure : point gris.
+      status: scheduledStatus(`${dayName(data, period)} · bulletin de ${formatDateTime(data.issuedAt * 1000)}`),
+      figures: [
+        { value: levelName.charAt(0).toUpperCase() + levelName.slice(1), label: 'niveau maximal' },
+        { value: String(phenomena.length), label: phenomena.length > 1 ? 'phénomènes' : 'phénomène' },
+      ],
       tables: [
         {
           title: 'Phénomènes en vigilance jaune ou plus',
@@ -351,7 +362,7 @@ export const weatherAlerts = defineModule<AlertsData>({
         },
       ],
       note: LEVELS[level]!.text,
-      link: { href: 'https://vigilance.meteofrance.fr/', label: 'Carte et bulletins sur Météo-France' },
+      actions: [{ label: 'Carte et bulletins sur Météo-France', href: 'https://vigilance.meteofrance.fr/' }],
     };
   },
 });

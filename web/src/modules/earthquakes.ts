@@ -9,8 +9,9 @@
  */
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { Color } from '@deck.gl/core';
+import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
-import { formatDateTime } from '../ui/format';
+import { formatDateTime, formatRelative, formatTime } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
 import { selectionRing } from './symbols';
 
@@ -250,18 +251,23 @@ export const earthquakes = defineModule<Quake[]>({
     const q = data?.find((quake) => quake.id === id);
     if (!q) return null;
     return {
-      title: `Séisme de magnitude ${q.mag.toFixed(1)}`,
-      subtitle: titleCase(q.region),
-      fields: [
-        ['Date', formatDateTime(q.time)],
-        ['Profondeur', `${Math.round(q.depthKm)} km`],
-        ['Magnitude', `${q.mag.toFixed(1)} (${q.magType})`],
-        ['Mesuré par', q.authority],
+      kind: 'Séisme',
+      title: titleCase(q.region),
+      subtitle: formatDateTime(q.time),
+      // Catalogue de l'EMSC, relu à intervalles réguliers : un séisme d'hier n'est pas du direct.
+      status: plainStatus(`Survenu ${formatRelative(q.time)}`),
+      figures: [
+        { value: q.mag.toFixed(1).replace('.', ','), label: `magnitude (${q.magType})` },
+        { value: String(Math.round(q.depthKm)), unit: 'km', label: 'profondeur' },
+        { value: formatTime(q.time), label: 'heure locale' },
       ],
-      link: {
-        href: `https://www.seismicportal.eu/eventdetails.html?unid=${encodeURIComponent(q.id)}`,
-        label: 'Fiche détaillée sur le site de l’EMSC',
-      },
+      fields: [['Mesuré par', q.authority]],
+      actions: [
+        {
+          label: 'Source',
+          href: `https://www.seismicportal.eu/eventdetails.html?unid=${encodeURIComponent(q.id)}`,
+        },
+      ],
     };
   },
 

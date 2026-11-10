@@ -9,9 +9,10 @@ target/
 *.local
 .DS_Store
 
-# Données téléchargées (volumineuses, jamais versionnées)
-data/
+# Données téléchargées (volumineuses, jamais versionnées) : seulement celles de la racine,
+# pas les petites données embarquées dans le site (web/src/data).
+/data/
 
 # Archives du temps réel (serveur maison)
-archive/
+/archive/
 .claude/worktrees/

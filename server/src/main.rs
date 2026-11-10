@@ -20,6 +20,7 @@ mod bikes;
 mod dem;
 mod fires;
 mod gtfs_rt;
+mod irve;
 mod network;
 mod planes;
 mod rails;
@@ -31,6 +32,9 @@ mod timetable;
 mod tracks;
 mod transit;
 mod wind;
+mod traffic;
+mod traffic_state;
+mod vigilance;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -91,6 +95,10 @@ async fn main() -> Result<()> {
     tokio::spawn(satellites::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(transit::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(wind::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(irve::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
 
     match &config.web_dir {
         Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),

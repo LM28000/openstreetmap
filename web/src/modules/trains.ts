@@ -32,6 +32,7 @@ import {
   trackOf,
 } from './railNetwork';
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
+import { setIsochroneOrigin } from './isochrones';
 import { HALO, KEY, selectionRing, zoomRamp } from './symbols';
 import { OVER_MAP } from '../map/parameters';
 import { orientation, type MeshData } from '../models/mesh';
@@ -77,6 +78,8 @@ type DelayClass = 'inconnu' | 'heure' | 'retard' | 'gros-retard';
 
 /** Une gare : sa position, et tous les passages de trains (pour son tableau d'affichage). */
 export interface Station {
+  /** Code UIC de la gare. */
+  code?: string;
   /** Identifiant stable d'un chargement à l'autre (nom + position). */
   key: string;
   name: string;
@@ -485,7 +488,7 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
   const nextGeometryCache = new Map<string, TrainGeometry>();
   const geometries: TrainGeometry[] = [];
   let reused = 0;
-  const stations: Station[] = net.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [], perDay: 0, size: 0 }));
+  const stations: Station[] = net.stations.map((s) => ({ key: stationKey(s), code: s.code, name: s.name, lon: s.lon, lat: s.lat, visits: [], perDay: 0, size: 0 }));
   const trains: Train[] = [];
   let canceled = 0;
 
@@ -1810,7 +1813,10 @@ function describeStation(station: Station, t: number, data: TrainsData, time: nu
       { value: next ? hhmm(next.actual) : '—', label: next ? `${displayCategory(next.run.category)} ${next.run.number}` : 'prochain départ' },
     ],
     tables: [boardTable(station, t, true), boardTable(station, t, false)],
-    actions: [railMapAction(station.lon, station.lat, 15)],
+    actions: [
+      ...(station.code ? [{ label: 'Jusqu’où en train ?', primary: true, onClick: () => setIsochroneOrigin(station.code!, station) }] : []),
+      railMapAction(station.lon, station.lat, 15),
+    ],
   };
 }
 

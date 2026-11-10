@@ -58,6 +58,8 @@ export interface LoadContext {
   signal: AbortSignal;
   /** Instant simulé au moment du chargement : pour ne charger que la période utile. */
   time: number;
+  /** Valeur de chaque réglage du module : certains chargements en dépendent (isochrones). */
+  settings: Readonly<Record<string, string>>;
 }
 
 /** Un réglage proposé dans le panneau des couches, sous forme de choix exclusifs. */
@@ -205,7 +207,20 @@ export interface LayerModule<TData = unknown> {
    * Faut-il recharger pour afficher l'instant t ? Par exemple quand t sort de la
    * période chargée, après un saut dans le temps.
    */
-  needsReload?(data: TData, time: number): boolean;
+  needsReload?(data: TData, time: number, settings: Readonly<Record<string, string>>): boolean;
+
+  /**
+   * Un état du module qui n'est pas un choix d'options (par exemple la gare de départ des
+   * isochrones) mais doit survivre à un rechargement et se partager : il vit dans l'adresse,
+   * sous `#param=valeur`, tant que la couche est affichée.
+   */
+  urlState?: {
+    param: string;
+    /** Valeur à écrire dans l'adresse, `null` : rien. */
+    read(): string | null;
+    /** Valeur lue dans l'adresse au démarrage. */
+    write(value: string): void;
+  };
 
   /** Réglages proposés à l'utilisateur (ex. mode de couleur). */
   settings?: readonly ModuleSetting[];

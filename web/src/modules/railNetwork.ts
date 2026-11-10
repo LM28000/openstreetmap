@@ -8,6 +8,8 @@
  */
 
 export interface ApiStation {
+  /** Code UIC de la gare, stable d'un chargement à l'autre (l'indice, lui, change). */
+  code?: string;
   name: string;
   lon: number;
   lat: number;

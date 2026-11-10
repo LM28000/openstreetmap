@@ -30,6 +30,7 @@ mod gtfs_rt;
 mod irve;
 mod network;
 mod planes;
+mod raptor;
 mod rails;
 mod realtime;
 mod ships;

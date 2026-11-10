@@ -163,7 +163,7 @@ async fn fetch(http: &reqwest::Client) -> Result<(Vec<u8>, FeedMessage)> {
     Ok((bytes.to_vec(), feed))
 }
 
-fn from_feed(feed: FeedMessage, fetched_at: i64) -> Realtime {
+pub(crate) fn from_feed(feed: FeedMessage, fetched_at: i64) -> Realtime {
     let mut trips: HashMap<String, Vec<TripUpdate>> = HashMap::new();
     for entity in feed.entity {
         if entity.is_deleted == Some(true) {

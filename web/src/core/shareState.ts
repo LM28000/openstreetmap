@@ -10,6 +10,7 @@
  *   t=direct | t=2026-11-09T17:00:00Z   instant affiché (UTC), ou le direct
  *   vitesse=3600                     secondes simulées par seconde, absent à ×1
  *   pause=1                          horloge en pause, absent en lecture
+ *   depuis=87471003                  gare de départ des isochrones (paramètre propre à un module : `urlState`)
  *   objet=trains:%7B%22type%22…      module sélectionné, puis la valeur de `select` en JSON
  *
  * Les préférences du navigateur (`localStorage`) restent la valeur par défaut quand
@@ -18,7 +19,7 @@
 import { clock } from './clock';
 import type { ModuleManager } from './moduleManager';
 
-const KEYS = ['couches', 'reglages', 't', 'vitesse', 'pause', 'objet'] as const;
+const KEYS = ['couches', 'reglages', 't', 'vitesse', 'pause', 'objet', 'depuis'] as const;
 /** Pendant un rejeu en lecture, l'instant de l'adresse est rafraîchi à ce rythme. */
 const REPLAY_REFRESH_MS = 10_000;
 
@@ -59,6 +60,11 @@ export function applySharedState(manager: ModuleManager): void {
     const [path = '', rawValue = ''] = entry.split(':').map((piece) => safeDecode(piece) ?? '');
     const dot = path.indexOf('.');
     if (dot > 0) manager.setSetting(path.slice(0, dot), path.slice(dot + 1), rawValue, persist);
+  }
+
+  for (const module of manager.modules) {
+    const value = module.urlState ? safeDecode(params.get(module.urlState.param) ?? '') : null;
+    if (module.urlState && value) module.urlState.write(value);
   }
 
   const time = params.get('t');
@@ -111,6 +117,11 @@ function buildHash(manager: ModuleManager): string {
     ours.push(['t', new Date(Math.round(clock.now() / 1000) * 1000).toISOString().replace('.000Z', 'Z')]);
     if (speed !== 1) ours.push(['vitesse', String(speed)]);
     if (!playing) ours.push(['pause', '1']);
+  }
+
+  for (const module of visible) {
+    const value = module.urlState?.read();
+    if (module.urlState && value) ours.push([module.urlState.param, encodeURIComponent(value)]);
   }
 
   const selection = manager.getSelection();

@@ -136,6 +136,7 @@ server/                le serveur (Rust : tokio, axum)
   src/dem.rs           altitudes du relief (tuiles Mapterhorn)
   src/tracks.rs        tracé réel de chaque tronçon entre deux gares, avec altitude
   src/network.rs       le réseau (gares et tracés) tel que l'envoie l'API, sous une version
+  src/raptor.rs        isochrones : algorithme RAPTOR sur les horaires (lignes, tours, correspondances)
   src/api.rs           l'API HTTP
   src/transit.rs       bus, trams et métros en direct (flux GTFS-RT de transport.data.gouv.fr, noms de lignes lus dans routes.txt des GTFS)
   src/bikes.rs …       collecteurs des autres couches (vélos, feux…)
@@ -207,12 +208,23 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 
 **Clic sur une gare** (visibles à partir du zoom 8,5) : son tableau des départs et des arrivées, trains supprimés compris. Chaque ligne d'un tableau mène au train ou à la gare correspondante.
 
+## Comment les isochrones sont calculés
+
+Le serveur (`server/src/raptor.rs`) utilise **RAPTOR** (Round-bAsed Public Transit Optimized Router), un algorithme de calcul d'itinéraires en transports en commun :
+
+1. les trains qui desservent les mêmes gares dans le même ordre forment une **ligne** (8 700 lignes pour 52 000 trajets) ; sur une ligne, le premier train qu'on peut prendre est aussi celui qui arrive le plus tôt, une recherche dichotomique le trouve ;
+2. on procède par **tours** : le tour *k* donne la meilleure arrivée à chaque gare avec au plus *k* trains. Un tour reprend les gares améliorées au tour précédent, monte dans le premier train possible de chaque ligne qui y passe, le suit jusqu'au terminus en notant chaque arrivée qui bat les précédentes, puis ajoute les correspondances à pied ;
+3. chaque amélioration garde une étiquette (« train 6607 pris à Paris », « à pied depuis… »), qui permet de **remonter l'itinéraire** tour par tour. Le nombre de correspondances est un résultat du calcul, pas une pénalité.
+
+Les choix de modélisation : une gare est une zone d'arrêt (tous les quais ensemble) ; une correspondance dans la même gare demande 8 minutes (le `transfers.txt` de la SNCF est vide), sauf au départ ; deux gares à moins de 1,2 km sont reliées à pied (3 min de marge, plus 1,3 × la distance à 4,5 km/h) ; les terminus parisiens, reliés par un métro ou un RER que cet horaire ne contient pas, le sont par un temps fixe de 20 à 45 min selon la paire (Nord et Est, voisines, sont à 20 min), comme Lyon Part-Dieu et Perrache (25 min). Le **temps réel** (retards, suppressions) est appliqué quand l'heure de départ est entre 2 h avant et 6 h après maintenant ; ailleurs, l'horaire théorique. `GET /api/isochrone?depuis=<code UIC>&depart=<secondes>&max=<minutes>&correspondances=<n>` répond en une dizaine de millisecondes (une vingtaine de Ko compressés pour toute la France) ; `/api/isochrone/trajet?…&vers=<code UIC>` donne l'itinéraire jusqu'à une gare. La couche ne couvre que les trains du jeu SNCF (TGV, Intercités, et les TER qu'il contient) : ni métros, ni tramways, ni cars.
+
 ## Couches disponibles
 
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
 | Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard ; de près (zoom 13), chaque rame est une suite de voitures en 3D sur sa vraie longueur, qui suit la voie et sa pente (motrice à nez effilé et voitures à deux niveaux pour le TGV, cabines arrondies pour le TER, locomotive et voitures Corail pour l'Intercités), en fantôme à plat dans les tunnels. Gares de trois tailles selon leur trafic. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
 | Voies ferrées | Les lignes empruntées par les trains de voyageurs, telles que le serveur les a calculées sur les voies OSM. Trait discret, ou nuances de gris selon la vitesse maximale de la ligne (épaisseur comprise). Fiche au clic : gares du tronçon, longueur, répartition des vitesses, lien vers OpenRailwayMap. | OpenStreetMap |
+| Isochrones | Jusqu'où va-t-on en train depuis une gare, en partant à l'heure de la frise ? Gares atteintes colorées par heure de trajet, zone lisse autour d'elles (le temps qui reste converti en rayon à 15 km/h, 30 km au plus), gare de départ marquée. Se choisit par l'action « Jusqu'où en train ? » d'une fiche de gare, ou en cherchant « depuis Rennes » ; la gare vit dans l'adresse (`#depuis=87471003`). Réglages : durée maximale (2, 3, 4 ou 6 h), correspondances (aucune à sans limite), zone ou gares seules. Fiche d'une gare atteinte : durée, correspondances, itinéraire train par train. Une teinte (framboise), une tranche par heure, palette validée sur fond clair et sombre. | SNCF (calcul RAPTOR sur le serveur) |
 | Avions | Les avions au-dessus de la France et autour, en direct, à leur altitude réelle (couleur selon l'altitude), avec leur indicatif. Sept maquettes 3D selon le type d'appareil (biréacteur, gros-porteur, quadriréacteur, turbopropulseur, jet d'affaires, avion léger, hélicoptère), cabrées en montée, inclinées en virage, avec leur ombre au sol, à l'envergure réelle de près (silhouettes à plat de loin) ; anneau rouge pour une urgence déclarée (squawk 7500, 7600, 7700). Fiche au clic, caméra qui suit. En direct seulement. | [adsb.lol](https://adsb.lol) |
 | Bateaux | Les navires autour de la France et sur les fleuves, d'après leurs émissions AIS : couleur par famille (marchandises, passagers, pêche et plaisance), maquettes 3D selon le type AIS (porte-conteneurs avec ses conteneurs, pétrolier, ferry, paquebot, pêche, voilier, plaisance, remorqueur…) aux dimensions AIS, ligne de flottaison comprise, sillage proportionnel à la vitesse, taille réelle de près, noms en étiquettes de carte sans chevauchement. Fiche au clic (destination, dimensions…), caméra qui suit. En direct seulement ; demande une clé aisstream.io sur le serveur. | [aisstream.io](https://aisstream.io) |
 | Bus, trams et métros | Les véhicules des transports urbains en direct, dans les ~140 réseaux français qui publient leurs positions (GTFS-RT, relues toutes les 30 s). Couleur et numéro de la ligne quand le réseau les donne ; maquettes 3D de bus, bus articulé, tram et métro orientées selon le cap (silhouettes à plat sous le zoom 15) ; une position estimée d'après les horaires (47 réseaux) est translucide, sur une empreinte en pointillé. De loin, un rond par réseau ; de près, chaque véhicule, qui glisse d'une position à la suivante. Fiche au clic. En direct seulement. | réseaux de transport via [transport.data.gouv.fr](https://transport.data.gouv.fr) (Licence Ouverte 2.0 ou ODbL) |
@@ -276,4 +288,4 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 | **Refonte** (fait) | Recherche universelle, interface neutre, scènes, frise, fiche unifiée, adresse partageable, téléphone, fond de carte calme et nuit sombre, nouveaux symboles (silhouettes d'avions, coques, rames voiture par voiture) |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |
 | 5. Rendu avancé (en cours) | Fait : vent animé, radar de pluie, ombres des bâtiments. Reste : LiDAR, photos anciennes |
-| 6. Intelligence | Isochrones, replay d'une journée, croisement des couches, questions en langage naturel, visite guidée |
+| 6. Intelligence | Fait : isochrones ferroviaires (RAPTOR). Reste : replay d'une journée, croisement des couches, questions en langage naturel, visite guidée |

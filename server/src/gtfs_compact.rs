@@ -421,6 +421,15 @@ type PatternKey = (Option<u32>, Vec<u32>, Vec<u32>);
 /// Construit le modèle compact d'un GTFS (zip sur disque) pour les trois jours autour de l'instant `now` (secondes UTC).
 /// `guided_only` : ne garder que les tramways, métros, trains et câbles (réseau trop gros).
 pub fn build(path: &Path, now: i64, guided_only: bool) -> Result<Schedule> {
+    let keep = |info: &RouteInfo| !guided_only || matches!(info.mode, Some("tram" | "metro" | "train" | "cable"));
+    let mut schedule = build_with(path, now, &keep, (!guided_only).then_some(MAX_TRIPS))?;
+    schedule.guided_only = guided_only;
+    Ok(schedule)
+}
+
+/// Comme `build`, avec le choix des lignes gardées (`keep`) et un plafond de courses facultatif (`max_trips` : au-delà,
+/// l'erreur « trop de courses »).
+pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_trips: Option<usize>) -> Result<Schedule> {
     let mut zip = Zip::open(path)?;
     let tz = network_zone(&mut zip);
     let today = Timestamp::from_second(now)?.to_zoned(tz.clone()).date();
@@ -438,8 +447,7 @@ pub fn build(path: &Path, now: i64, guided_only: bool) -> Result<Schedule> {
     let mut route_ids: Vec<Box<str>> = Vec::new();
     let mut route_index: HashMap<String, u32> = HashMap::new();
     for (id, info) in route_table {
-        let guided = matches!(info.mode, Some("tram" | "metro" | "train" | "cable"));
-        if guided_only && !guided {
+        if !keep(&info) {
             continue;
         }
         route_index.insert(id.clone(), routes.len() as u32);
@@ -459,7 +467,7 @@ pub fn build(path: &Path, now: i64, guided_only: bool) -> Result<Schedule> {
             while reader.read_byte_record(&mut record)? {
                 let Some(&days) = std::str::from_utf8(field(&record, Some(service))).ok().and_then(|s| services.get(s)) else { continue };
                 let Some(&route) = std::str::from_utf8(field(&record, Some(route))).ok().and_then(|r| route_index.get(r)) else { continue };
-                if raw_trips.len() >= MAX_TRIPS && !guided_only {
+                if max_trips.is_some_and(|max| raw_trips.len() >= max) {
                     return Ok(true);
                 }
                 let id_bytes = field(&record, Some(id));
@@ -640,7 +648,7 @@ pub fn build(path: &Path, now: i64, guided_only: bool) -> Result<Schedule> {
     patterns.shrink_to_fit();
     shapes.shrink_to_fit();
 
-    Ok(Schedule { built_for: today, tz, day_starts, dates, stops: kept_stops, routes, route_ids, headsigns, shapes, patterns, trips, times, guided_only })
+    Ok(Schedule { built_for: today, tz, day_starts, dates, stops: kept_stops, routes, route_ids, headsigns, shapes, patterns, trips, times, guided_only: false })
 }
 
 /// Arrivée et départ à chaque arrêt, complets et croissants : une heure absente (arrêt non horodaté) est interpolée

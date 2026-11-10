@@ -27,6 +27,7 @@ mod estimates;
 mod fires;
 mod gtfs_compact;
 mod gtfs_rt;
+mod idf;
 mod irve;
 mod network;
 mod planes;

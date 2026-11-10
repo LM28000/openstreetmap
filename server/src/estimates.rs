@@ -45,6 +45,7 @@ use tokio::task::JoinSet;
 use tracing::{info, warn};
 
 use crate::gtfs_compact::{self, Schedule, Trip};
+use crate::idf;
 use crate::gtfs_rt::{self, FeedMessage};
 use crate::state::AppState;
 use crate::transit::{EstimateOut, LineOut, NetworkOut, TransitOut, TransitPart, VehicleOut, is_excluded, network_name, round5, url_has_key};
@@ -63,6 +64,8 @@ const GTFS_REFRESH: Duration = Duration::from_secs(24 * 3600);
 const RETRY_AFTER: Duration = Duration::from_secs(900);
 const CACHE_LIMIT_BYTES: u64 = 300 << 20;
 const MAX_ZIP_BYTES: u64 = 150 << 20;
+/// Le GTFS d'Île-de-France pèse 115 Mo en 2026.
+const PRIM_MAX_ZIP_BYTES: u64 = 200 << 20;
 const MEMORY_BUDGET_BYTES: usize = 150 << 20;
 const MAX_GTFS_PER_NETWORK: usize = 2;
 const PARALLEL_FEEDS: usize = 8;
@@ -156,9 +159,9 @@ fn parse_sources(catalog: &Value) -> Result<Vec<Source>> {
 // ───────────────────────── Temps réel (TripUpdates) ─────────────────────────
 
 #[derive(Clone, Copy)]
-struct Event {
-    delay: Option<i32>,
-    time: Option<i64>,
+pub(crate) struct Event {
+    pub delay: Option<i32>,
+    pub time: Option<i64>,
 }
 
 impl Event {
@@ -168,24 +171,26 @@ impl Event {
     }
 }
 
-struct StopUpdate {
-    stop_sequence: Option<u32>,
-    stop_id: Option<String>,
-    arrival: Option<Event>,
-    departure: Option<Event>,
+pub(crate) struct StopUpdate {
+    pub stop_sequence: Option<u32>,
+    pub stop_id: Option<String>,
+    pub arrival: Option<Event>,
+    pub departure: Option<Event>,
 }
 
-struct TripUpdate {
-    start_date: Option<Date>,
-    canceled: bool,
-    stops: Vec<StopUpdate>,
+pub(crate) struct TripUpdate {
+    pub start_date: Option<Date>,
+    pub canceled: bool,
+    pub stops: Vec<StopUpdate>,
+    /// Faux quand les heures annoncées n'ont pas été comparées à l'horaire théorique (SIRI sans `Aimed*`) : le retard n'est alors pas affiché.
+    pub delay_known: bool,
 }
 
 /// Le dernier flux de temps réel d'un réseau.
 #[derive(Default)]
-struct Realtime {
-    fetched_at: i64,
-    trips: HashMap<String, Vec<TripUpdate>>,
+pub(crate) struct Realtime {
+    pub fetched_at: i64,
+    pub trips: HashMap<String, Vec<TripUpdate>>,
 }
 
 fn decode_realtime(bytes: &[u8], fetched_at: i64) -> Result<Realtime> {
@@ -208,6 +213,7 @@ fn decode_realtime(bytes: &[u8], fetched_at: i64) -> Result<Realtime> {
             start_date: update.trip.start_date.as_deref().and_then(parse_date),
             canceled: matches!(relationship, gtfs_rt::TRIP_CANCELED | gtfs_rt::TRIP_DELETED),
             stops,
+            delay_known: true,
         });
     }
     Ok(Realtime { fetched_at, trips })
@@ -369,7 +375,7 @@ fn estimate(schedule: &Schedule, realtime: Option<&Realtime>, now: i64) -> Vec<E
                 path.push(pair[1].1 - pair[0].1);
             }
             let next = placement.next;
-            let delay = next.filter(|_| update.is_some()).map(|i| (live.arrival[i] - live.scheduled_arrival[i]) as i32);
+            let delay = next.filter(|_| update.is_some_and(|u| u.delay_known)).map(|i| (live.arrival[i] - live.scheduled_arrival[i]) as i32);
             vehicles.push(EstimatedVehicle {
                 route: trip.route,
                 out: VehicleOut {
@@ -420,6 +426,8 @@ struct Shared {
     /// Décalage de l'horloge (voir `TRANSPORTS_DECALAGE_S`).
     offset_s: i64,
     tour: AtomicU64,
+    /// Île-de-France (PRIM) : présent seulement si la clé est donnée.
+    prim: Option<idf::Config>,
 }
 
 impl Shared {
@@ -427,9 +435,10 @@ impl Shared {
         Timestamp::now().as_second() + self.offset_s
     }
 
+    /// Mémoire des réseaux du catalogue (Île-de-France, qui a son budget, n'y compte pas).
     fn memory_used(&self) -> usize {
         let slots = self.slots.read().expect("verrou des réseaux estimés");
-        slots.iter().map(|s| s.schedules.read().expect("verrou des horaires").iter().map(|sch| sch.approx_bytes()).sum::<usize>()).sum()
+        slots.iter().filter(|s| s.source.slug != idf::SLUG).map(|s| s.schedules.read().expect("verrou des horaires").iter().map(|sch| sch.approx_bytes()).sum::<usize>()).sum()
     }
 }
 
@@ -437,6 +446,11 @@ impl Shared {
 
 fn cache_dir(data_dir: &Path) -> PathBuf {
     data_dir.join("transit-estimates")
+}
+
+/// Dossier du GTFS d'Île-de-France (voir `idf.rs`).
+fn prim_cache_dir(data_dir: &Path) -> PathBuf {
+    data_dir.join("transit-idfm")
 }
 
 fn cache_path(data_dir: &Path, resource_id: &str) -> PathBuf {
@@ -460,13 +474,15 @@ fn prune_cache(data_dir: &Path, sources: &[Source]) {
 }
 
 /// Le zip du GTFS d'une ressource : celui du cache s'il a moins d'un jour, sinon retéléchargé (le cache périmé sert de secours).
-async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, url: &str) -> Result<PathBuf> {
-    let path = cache_path(data_dir, resource_id);
+async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, url: &str, prim: bool) -> Result<PathBuf> {
+    // Le GTFS d'Île-de-France (115 Mo) a son dossier et ses plafonds : il ne doit ni remplir le cache des autres réseaux ni en être refusé.
+    let (dir, max_zip, cache_limit) = if prim { (prim_cache_dir(data_dir), PRIM_MAX_ZIP_BYTES, PRIM_MAX_ZIP_BYTES + (50 << 20)) } else { (cache_dir(data_dir), MAX_ZIP_BYTES, CACHE_LIMIT_BYTES) };
+    let path = dir.join(cache_path(data_dir, resource_id).file_name().unwrap_or_default());
     let age = std::fs::metadata(&path).and_then(|m| m.modified()).ok().and_then(|t| SystemTime::now().duration_since(t).ok());
     if age.is_some_and(|age| age < GTFS_REFRESH) {
         return Ok(path);
     }
-    match download(http, data_dir, &path, url).await {
+    match download(http, &dir, &path, url, max_zip, cache_limit).await {
         Ok(()) => Ok(path),
         Err(error) if age.is_some() => {
             warn!("transports estimés : GTFS {resource_id} non rafraîchi ({error:#}), l'ancien sert encore");
@@ -476,16 +492,16 @@ async fn ensure_zip(http: &reqwest::Client, data_dir: &Path, resource_id: &str, 
     }
 }
 
-async fn download(http: &reqwest::Client, data_dir: &Path, path: &Path, url: &str) -> Result<()> {
-    tokio::fs::create_dir_all(cache_dir(data_dir)).await?;
+async fn download(http: &reqwest::Client, dir: &Path, path: &Path, url: &str, max_zip: u64, cache_limit: u64) -> Result<()> {
+    tokio::fs::create_dir_all(dir).await?;
     let mut response = http.get(url).timeout(Duration::from_secs(300)).send().await?.error_for_status()?;
     let announced = response.content_length();
-    if announced.is_some_and(|n| n > MAX_ZIP_BYTES) {
+    if announced.is_some_and(|n| n > max_zip) {
         bail!("GTFS trop gros ({} Mo)", announced.unwrap_or(0) >> 20);
     }
     // Le plafond du cache s'applique avant d'écrire : le fichier qu'on remplace ne compte pas.
-    if dir_size(&cache_dir(data_dir), path) + announced.unwrap_or(MAX_ZIP_BYTES / 4) > CACHE_LIMIT_BYTES {
-        bail!("plafond de {} Mo du cache des GTFS atteint", CACHE_LIMIT_BYTES >> 20);
+    if dir_size(dir, path) + announced.unwrap_or(max_zip / 4) > cache_limit {
+        bail!("plafond de {} Mo du cache des GTFS atteint", cache_limit >> 20);
     }
     let part = path.with_extension("zip.part");
     let mut file = tokio::fs::File::create(&part).await?;
@@ -493,7 +509,7 @@ async fn download(http: &reqwest::Client, data_dir: &Path, path: &Path, url: &st
     let result: Result<()> = async {
         while let Some(chunk) = response.chunk().await? {
             size += chunk.len() as u64;
-            if size > MAX_ZIP_BYTES {
+            if size > max_zip {
                 bail!("GTFS trop gros");
             }
             file.write_all(&chunk).await?;
@@ -516,14 +532,21 @@ async fn download(http: &reqwest::Client, data_dir: &Path, path: &Path, url: &st
 /// Charge les modèles compacts d'un réseau. `Ok(None)` : budget de mémoire épuisé.
 async fn load_slot(http: &reqwest::Client, data_dir: &Path, shared: &Shared, slot: &Slot) -> Result<Option<Vec<Arc<Schedule>>>> {
     let mut schedules = Vec::new();
+    let prim = slot.source.slug == idf::SLUG;
     for (resource_id, url) in &slot.source.gtfs {
-        let path = ensure_zip(http, data_dir, resource_id, url).await?;
+        let path = ensure_zip(http, data_dir, resource_id, url, prim).await?;
         let now = shared.now();
-        let built = tokio::task::spawn_blocking(move || {
-            gtfs_compact::build(&path, now, false).or_else(|error| {
+        let prim_config = shared.prim.clone().filter(|_| prim);
+        let built = tokio::task::spawn_blocking(move || match prim_config {
+            // Île-de-France : les modes choisis, sans plafond de courses (voir `idf.rs`).
+            Some(config) => gtfs_compact::build_with(&path, now, &|info| config.keeps(info), None).map(|mut schedule| {
+                idf::decorate(&mut schedule);
+                schedule
+            }),
+            None => gtfs_compact::build(&path, now, false).or_else(|error| {
                 // Un réseau trop gros : on retente avec ses seuls tramways et métros.
                 if format!("{error:#}").contains("trop de courses") { gtfs_compact::build(&path, now, true) } else { Err(error) }
-            })
+            }),
         })
         .await?;
         match built {
@@ -542,7 +565,12 @@ async fn load_slot(http: &reqwest::Client, data_dir: &Path, shared: &Shared, slo
     }
     let added: usize = schedules.iter().map(|s| s.approx_bytes()).sum();
     let replaced: usize = slot.schedules.read().expect("verrou des horaires").iter().map(|s| s.approx_bytes()).sum();
-    if shared.memory_used() - replaced + added > MEMORY_BUDGET_BYTES {
+    // Île-de-France a son propre budget (`IDFM_MEMOIRE_MO`) et ne consomme pas celui des autres réseaux.
+    let (used, budget) = match shared.prim.as_ref().filter(|_| prim) {
+        Some(config) => (replaced, config.memory_limit),
+        None => (shared.memory_used(), MEMORY_BUDGET_BYTES),
+    };
+    if used - replaced + added > budget {
         return Ok(None);
     }
     Ok(Some(schedules))
@@ -569,10 +597,23 @@ async fn loader(http: reqwest::Client, data_dir: PathBuf, shared: Arc<Shared>) {
     let mut catalog_at: Option<Instant> = None;
     loop {
         if catalog_at.is_none_or(|at| at.elapsed() > CATALOG_EVERY) {
-            match fetch_catalog(&http).await {
-                Ok(sources) => {
-                    info!(reseaux = sources.len(), "transports estimés : catalogue chargé");
-                    prune_cache(&data_dir, &sources);
+            let fetched = match fetch_catalog(&http).await {
+                Ok(sources) => Some((sources, true)),
+                Err(error) => {
+                    warn!("transports estimés : catalogue indisponible : {error:#}");
+                    // Sans catalogue au démarrage, Île-de-France (qui n'en dépend pas) est tout de même chargée.
+                    (shared.prim.is_some() && shared.slots.read().expect("verrou des réseaux estimés").is_empty()).then(|| (Vec::new(), false))
+                }
+            };
+            if let Some((mut sources, from_catalog)) = fetched {
+                {
+                    if from_catalog {
+                        info!(reseaux = sources.len(), "transports estimés : catalogue chargé");
+                        prune_cache(&data_dir, &sources);
+                    }
+                    if let Some(config) = &shared.prim {
+                        sources.insert(0, Source { slug: idf::SLUG.into(), name: idf::NAME.into(), licence: "odc-odbl".into(), rt_url: String::new(), gtfs: vec![(idf::RESOURCE_ID.into(), config.gtfs_url.clone())] });
+                    }
                     let mut slots = shared.slots.write().expect("verrou des réseaux estimés");
                     let mut old: HashMap<String, Arc<Slot>> = slots.drain(..).map(|s| (s.source.slug.clone(), s)).collect();
                     *slots = sources
@@ -592,9 +633,10 @@ async fn loader(http: reqwest::Client, data_dir: PathBuf, shared: Arc<Shared>) {
                             *attempt = None;
                         }
                     }
-                    catalog_at = Some(Instant::now());
+                    if from_catalog {
+                        catalog_at = Some(Instant::now());
+                    }
                 }
-                Err(error) => warn!("transports estimés : catalogue indisponible : {error:#}"),
             }
         }
         let slots: Vec<Arc<Slot>> = shared.slots.read().expect("verrou des réseaux estimés").clone();
@@ -668,7 +710,8 @@ async fn realtime_poller(http: reqwest::Client, shared: Arc<Shared>) {
         let slots: Vec<Arc<Slot>> = shared.slots.read().expect("verrou des réseaux estimés").clone();
         let mut tasks = JoinSet::new();
         for (index, slot) in slots.iter().enumerate() {
-            if slot.schedules.read().expect("verrou des horaires").is_empty() || slot.idle.lock().expect("verrou du repos").1 > tour {
+            // Île-de-France a son propre relevé (`prim_poller`).
+            if slot.source.slug == idf::SLUG || slot.schedules.read().expect("verrou des horaires").is_empty() || slot.idle.lock().expect("verrou du repos").1 > tour {
                 continue;
             }
             let (http, gate, url) = (http.clone(), gate.clone(), slot.source.rt_url.clone());
@@ -712,6 +755,106 @@ async fn realtime_poller(http: reqwest::Client, shared: Arc<Shared>) {
         }
         if ok + failed > 0 {
             info!(flux_ok = ok, flux_en_erreur = failed, "transports estimés : temps réel relu");
+        }
+    }
+}
+
+// ───────────────────────── Temps réel d'Île-de-France (PRIM) ─────────────────────────
+
+/// Un en-tête de réponse numérique (quota PRIM).
+fn header_number(response: &reqwest::Response, name: &str) -> Option<u64> {
+    response.headers().get(name)?.to_str().ok()?.trim().parse().ok()
+}
+
+/// Relève périodiquement le SIRI global de PRIM, le rapproche des horaires GTFS et le range dans le réseau d'Île-de-France.
+/// Le quota (1 000 requêtes par jour) est lu dans les en-têtes de chaque réponse : sous `QUOTA_RESERVE` requêtes restantes, on attend sa réinitialisation.
+async fn prim_poller(http: reqwest::Client, shared: Arc<Shared>, config: idf::Config) {
+    let mut fails = 0u32;
+    let mut wait = Duration::from_secs(20);
+    loop {
+        tokio::time::sleep(wait).await;
+        wait = config.every;
+        let slot = shared.slots.read().expect("verrou des réseaux estimés").iter().find(|s| s.source.slug == idf::SLUG).cloned();
+        let schedules = slot.as_ref().map(|s| s.schedules.read().expect("verrou des horaires").clone()).unwrap_or_default();
+        let (Some(slot), Some(schedule)) = (slot, schedules.first().cloned()) else {
+            // Les horaires ne sont pas encore chargés (le GTFS est lu en une à deux minutes).
+            wait = Duration::from_secs(15);
+            continue;
+        };
+        let fetched_at = Timestamp::now().as_second();
+        let response = http
+            .get(idf::PRIM_URL)
+            .header("apiKey", config.key())
+            .header(reqwest::header::ACCEPT, "application/json")
+            .header(reqwest::header::ACCEPT_ENCODING, "gzip")
+            .timeout(Duration::from_secs(90))
+            .send()
+            .await;
+        let response = match response {
+            Ok(r) => r,
+            // L'erreur de reqwest cite l'adresse mais pas l'en-tête de la clé : elle peut être écrite.
+            Err(error) => {
+                fails += 1;
+                wait = config.every * fails.min(8);
+                warn!("transports Île-de-France : requête SIRI en échec ({fails} de suite) : {error}");
+                continue;
+            }
+        };
+        let remaining = header_number(&response, "x-ratelimit-remaining-day");
+        let reset = header_number(&response, "ratelimit-reset");
+        if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
+            wait = Duration::from_secs(reset.unwrap_or(1800).clamp(60, 6 * 3600));
+            warn!(attente_s = wait.as_secs(), "transports Île-de-France : quota PRIM atteint, en pause");
+            continue;
+        }
+        if !response.status().is_success() {
+            fails += 1;
+            wait = config.every * fails.min(8);
+            warn!("transports Île-de-France : réponse SIRI {} ({fails} de suite)", response.status());
+            continue;
+        }
+        let body = match response.bytes().await {
+            Ok(b) => b,
+            Err(error) => {
+                fails += 1;
+                wait = config.every * fails.min(8);
+                warn!("transports Île-de-France : lecture du SIRI interrompue : {error}");
+                continue;
+            }
+        };
+        if let (Some(left), Some(reset)) = (remaining, reset)
+            && left < u64::from(idf::QUOTA_RESERVE)
+        {
+            wait = Duration::from_secs(reset.clamp(60, 24 * 3600) + 5);
+            warn!(restantes = left, attente_s = wait.as_secs(), "transports Île-de-France : quota PRIM presque épuisé, en pause jusqu'à sa réinitialisation");
+        }
+        let started = Instant::now();
+        let accepted: HashSet<String> = schedule.route_ids.iter().map(|id| id.to_string()).collect();
+        let result = tokio::task::spawn_blocking(move || {
+            let journeys = idf::parse_siri(&body, &|route| accepted.contains(route))?;
+            Ok::<_, anyhow::Error>(idf::match_journeys(&schedule, &journeys, fetched_at))
+        })
+        .await;
+        match result {
+            Ok(Ok((realtime, stats))) => {
+                fails = 0;
+                info!(
+                    circulations = stats.journeys,
+                    par_identifiant = stats.by_id,
+                    par_arrets = stats.by_stops,
+                    sans_course = stats.unmatched,
+                    requetes_restantes = remaining.unwrap_or(0),
+                    ms = started.elapsed().as_millis() as u64,
+                    "transports Île-de-France : SIRI rapproché des horaires"
+                );
+                *slot.realtime.write().expect("verrou du temps réel") = Some(Arc::new(realtime));
+            }
+            Ok(Err(error)) => {
+                fails += 1;
+                wait = config.every * fails.min(8);
+                warn!("transports Île-de-France : SIRI inutilisable : {error:#}");
+            }
+            Err(error) => warn!("transports Île-de-France : rapprochement interrompu : {error}"),
         }
     }
 }
@@ -788,7 +931,16 @@ pub async fn poll_forever(http: reqwest::Client, data_dir: PathBuf, state: AppSt
     if offset_s != 0 {
         warn!(decalage_s = offset_s, "transports estimés : horloge décalée (test hors du direct), temps réel ignoré");
     }
-    let shared = Arc::new(Shared { slots: RwLock::default(), offset_s, tour: AtomicU64::new(0) });
+    let prim = idf::Config::from_env();
+    match &prim {
+        Some(config) => info!(modes = ?config.modes, intervalle_s = config.every.as_secs(), memoire_mo = config.memory_limit >> 20, "transports Île-de-France : activés (PRIM)"),
+        None => info!("transports Île-de-France : pas de clé IDFM_PRIM_API_KEY, réseau ignoré"),
+    }
+    let shared = Arc::new(Shared { slots: RwLock::default(), offset_s, tour: AtomicU64::new(0), prim: prim.clone() });
+    // Horloge décalée : le temps réel ne vaut que pour maintenant, on ne dépense pas le quota de PRIM.
+    if let Some(config) = prim.filter(|_| offset_s == 0) {
+        tokio::spawn(prim_poller(http.clone(), shared.clone(), config));
+    }
     tokio::spawn(loader(http.clone(), data_dir, shared.clone()));
     tokio::spawn(realtime_poller(http, shared.clone()));
     publisher(state, shared).await;

@@ -13,10 +13,12 @@ import type { Provider, SearchContext, SearchResult } from './types';
 const MODULE = 'trains';
 const MAX_STATIONS = 5;
 const MAX_TRAINS = 4;
+/** Retrait d'un train trouvé par sa ligne et non par son numéro. */
+const LINE_ONLY_PENALTY = 90;
 
 interface Index {
   stations: Array<{ text: string; station: Station }>;
-  trains: Array<{ text: string; train: Train }>;
+  trains: Array<{ text: string; line: string; train: Train }>;
 }
 
 const CATEGORY_NAMES: Record<string, string> = {
@@ -29,8 +31,8 @@ const categoryName = (category: string) => CATEGORY_NAMES[category] ?? category;
 
 const build = indexed<TrainsData, Index>((data) => ({
   stations: data.stations.map((station) => ({ text: pad(station.name), station })),
-  // « TGV INOUI 6623 » : catégorie, numéro, nom de ligne. Les numéros comptent aussi sans catégorie.
-  trains: data.trains.map((train) => ({ text: pad(`${categoryName(train.category)} ${train.number} ${train.line}`), train })),
+  // « TGV INOUI 6623 » d'un côté, la ligne (« Amiens - Arras ») de l'autre : la ligne est une route, donc moins précise.
+  trains: data.trains.map((train) => ({ text: pad(`${categoryName(train.category)} ${train.number}`), line: pad(train.line), train })),
 }));
 
 export const trainsProvider: Provider = {
@@ -75,13 +77,19 @@ function searchStations(index: Index, query: Query, ctx: SearchContext, bonus: n
 function searchTrains(index: Index, query: Query, ctx: SearchContext, bonus: number): SearchResult[] {
   const t = ctx.time / 1000;
   const top = new TopK<Train>(MAX_TRAINS);
-  for (const { text, train } of index.trains) {
-    const match = matchScore(text, query);
-    if (match === 0) continue;
+  for (const { text, line, train } of index.trains) {
+    let match = matchScore(text, query);
+    let base = match > 0 ? rank(text, query, match) : 0;
+    if (match === 0) {
+      // Trouvé par sa ligne seulement : « lyon » ne doit pas noyer les gares sous les TER qui y passent.
+      match = matchScore(line, query);
+      if (match === 0) continue;
+      base = rank(line, query, match) - LINE_ONLY_PENALTY;
+    }
     // Un train qui roule passe devant celui qui partira, et devant celui qui est arrivé.
     const phase = phaseOf(train, t);
     const timing = phase === 'roule' ? 40 : phase === 'attend' ? 10 : -60;
-    top.push(rank(text, query, match) + timing + bonus, train);
+    top.push(base + timing + bonus, train);
   }
   return top.result().map(({ score, item: train }) => {
     const last = train.stations[train.stations.length - 1];

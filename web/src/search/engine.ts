@@ -71,5 +71,12 @@ export function arrange(results: readonly SearchResult[], filter: Kind | null): 
     const unique = own.filter((r, i) => own.findIndex((o) => o.key === r.key) === i);
     if (unique.length > 0) groups.push({ kind, label: KIND_LABELS[kind], results: unique.slice(0, filter ? PER_GROUP_FILTERED : PER_GROUP) });
   }
-  return groups.sort((a, b) => b.results[0]!.score - a.results[0]!.score);
+  return groups.sort((a, b) => groupScore(b) - groupScore(a));
 }
+
+/**
+ * Un lieu ou une gare est plus souvent ce qu'on cherche qu'une borne parmi 53 000 :
+ * à correspondance égale, les types passent dans cet ordre.
+ */
+const KIND_BIAS: Record<Kind, number> = { lieu: 30, gare: 30, train: 10, avion: 10, navire: 0, reseau: 0, action: 0, velo: -40, borne: -50 };
+const groupScore = (group: Group): number => group.results[0]!.score + KIND_BIAS[group.kind];

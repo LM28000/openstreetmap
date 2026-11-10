@@ -74,8 +74,8 @@ function tokensScore(padded: string, tokens: readonly Token[], fuzzy: boolean): 
   for (const t of tokens) {
     if (padded.includes(t.whole)) sum += 3;
     else if (padded.includes(t.start)) sum += 2;
-    else if (t.word.length >= 3 && padded.includes(t.word)) sum += 1;
-    else if (fuzzy && t.word.length >= 4 && fuzzyIncludes(padded, t.word)) sum += 0.6;
+    else if (t.word.length >= 3 && !/^\d+$/.test(t.word) && padded.includes(t.word)) sum += 1;
+    else if (fuzzy && t.word.length >= 5 && !/\d/.test(t.word) && fuzzyIncludes(padded, t.word)) sum += 0.6;
     else return 0;
   }
   return sum / tokens.length;
@@ -96,7 +96,7 @@ export function rank(padded: string, query: Query, match: number): number {
 function fuzzyIncludes(padded: string, word: string): boolean {
   const limit = word.length >= 8 ? 2 : 1;
   for (const candidate of padded.split(' ')) {
-    if (!candidate) continue;
+    if (!candidate || candidate[0] !== word[0]) continue; // une faute de frappe porte rarement sur la première lettre
     if (editDistance(candidate, word, limit) <= limit) return true;
     // un mot plus long peut commencer comme le mot tapé (frappe en cours)
     if (candidate.length > word.length && editDistance(candidate.slice(0, word.length), word, limit) <= limit) return true;
@@ -143,5 +143,51 @@ export class TopK<T> {
 
   result(): Array<{ score: number; item: T }> {
     return this.items;
+  }
+}
+
+/**
+ * Index de grands ensembles de textes (53 000 bornes) : tous les textes rembourrés sont
+ * mis bout à bout dans une seule chaîne, que `indexOf` parcourt à la vitesse du moteur
+ * du navigateur, au lieu d'un `includes` par texte. Seul le plus long mot de la requête
+ * est cherché ainsi (c'est le plus sélectif) ; les candidats sont ensuite vérifiés mot à mot.
+ */
+export class TextIndex {
+  private readonly blob: string;
+  private readonly starts: Uint32Array;
+
+  constructor(readonly texts: readonly string[]) {
+    this.starts = new Uint32Array(texts.length);
+    let offset = 0;
+    for (let i = 0; i < texts.length; i++) {
+      this.starts[i] = offset;
+      offset += texts[i]!.length;
+    }
+    this.blob = texts.join('');
+  }
+
+  /** Indices (croissants) des textes qui contiennent le plus long mot de la requête. */
+  candidates(query: Query): number[] {
+    if (query.tokens.length === 0 || this.starts.length === 0) return [];
+    const longest = query.tokens.reduce((a, b) => (b.word.length > a.word.length ? b : a));
+    // Un mot de moins de 3 lettres ne compte que comme début de mot (voir `matchScore`).
+    const needle = longest.word.length >= 3 ? longest.word : longest.start;
+    const found: number[] = [];
+    let from = 0;
+    for (;;) {
+      const at = this.blob.indexOf(needle, from);
+      if (at < 0) return found;
+      // Le texte qui contient cette position : le dernier dont le début est avant elle.
+      let lo = 0;
+      let hi = this.starts.length - 1;
+      while (lo < hi) {
+        const mid = (lo + hi + 1) >> 1;
+        if (this.starts[mid]! <= at) lo = mid;
+        else hi = mid - 1;
+      }
+      found.push(lo);
+      if (lo + 1 >= this.starts.length) return found;
+      from = this.starts[lo + 1]!; // la suite : textes suivants seulement
+    }
   }
 }

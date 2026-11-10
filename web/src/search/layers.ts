@@ -33,7 +33,7 @@ const SYNONYMS: Record<string, string> = {
 };
 
 interface LayerIndex {
-  layers: Array<{ text: string; module: LayerModule }>;
+  layers: Array<{ text: string; name: string; module: LayerModule }>;
   settings: Array<{ text: string; module: LayerModule; settingId: string; settingLabel: string; value: string; label: string }>;
   scenes: Array<{ text: string; scene: (typeof SCENES)[number] }>;
 }
@@ -45,7 +45,7 @@ function build(manager: ModuleManager): LayerIndex {
   if (index) return index;
   index = { layers: [], settings: [], scenes: [] };
   for (const module of manager.modules) {
-    index.layers.push({ text: pad(`${module.name} ${SYNONYMS[module.id] ?? ''}`), module });
+    index.layers.push({ text: pad(`${module.name} ${SYNONYMS[module.id] ?? ''}`), name: pad(module.name), module });
     for (const setting of module.settings ?? []) {
       for (const option of setting.options) {
         index.settings.push({
@@ -63,22 +63,29 @@ function build(manager: ModuleManager): LayerIndex {
   return index;
 }
 
+function sceneBonus(name: string, query: Query): number {
+  const padded = pad(name);
+  if (padded === ` ${query.text} `) return 120;
+  return matchScore(padded, query, true) > 0 ? 50 : 0;
+}
+
 export const layersProvider: Provider = {
   search(query: Query, { manager }) {
     const { layers, settings, scenes } = build(manager);
     const out: SearchResult[] = [];
 
-    for (const { text, module } of layers) {
+    for (const { text, name, module } of layers) {
       const match = matchScore(text, query, true);
       if (match === 0) continue;
       const shown = isShown(manager, module.id);
+      // Le nom de la couche compte plus que ses synonymes : « pluie » est d'abord le Radar de pluie.
+      const byName = matchScore(name, query, true) > 0;
       out.push({
         key: `couche:${module.id}`,
         kind: 'action',
         title: `${shown ? 'Masquer' : 'Afficher'} la couche ${module.name}`,
         subtitle: shown ? 'Couche affichée' : 'Couche masquée',
-        // Les couches affichées passent devant.
-        score: rank(text, query, match) + (shown ? 30 : 0),
+        score: rank(text, query, match) + (byName ? 40 : 0),
         run: () => manager.setVisible(module.id, !shown),
       });
     }
@@ -112,7 +119,8 @@ export const layersProvider: Provider = {
         kind: 'action',
         title: `Scène « ${scene.name} »`,
         subtitle: scene.summary,
-        score: rank(text, query, match) + 5,
+        // Le nom de la scène : « météo » ouvre d'abord la scène, avant ses couches prises une à une.
+        score: rank(text, query, match) + sceneBonus(scene.name, query),
         run: () => {
           for (const module of manager.modules) manager.setVisible(module.id, scene.layers.includes(module.id));
         },

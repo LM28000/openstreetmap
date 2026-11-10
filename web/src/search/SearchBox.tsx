@@ -9,7 +9,9 @@
 import { useCallback, useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode } from 'react';
 import type { ModuleManager } from '../core/moduleManager';
 import { useModuleStates } from '../ui/hooks';
+import { isLiveWord, parseWhen } from './dates';
 import { arrange, MIN_QUERY_LENGTH, searchLocal, warmIndexes } from './engine';
+import { fold } from './normalize';
 import { replayResult, searchPlaces, type PlaceResult } from './places';
 import { addRecent, clearRecents, readRecents, type Recent } from './recents';
 import { KIND_LABELS, type Kind, type SearchResult } from './types';
@@ -73,7 +75,9 @@ export function SearchBox({ manager }: { manager: ModuleManager }) {
   // Lieux : une requête par pause de frappe, la précédente annulée si elle est dépassée.
   useEffect(() => {
     const text = query.trim();
-    if (!open || text.length < PLACES_MIN_LENGTH) {
+    // Une date, « direct » ou un numéro court ne désignent pas un lieu : inutile de questionner le service.
+    const notAPlace = !!parseWhen(text) || isLiveWord(text) || /^\d{1,4}$/.test(text);
+    if (!open || text.length < PLACES_MIN_LENGTH || notAPlace) {
       setPlaces([]);
       setPlacesState('idle');
       return;
@@ -129,9 +133,12 @@ export function SearchBox({ manager }: { manager: ModuleManager }) {
   const all = useMemo<SearchResult[]>(() => {
     const extra: SearchResult[] = [];
     const best = places[0];
-    if (best && best.score >= REPLAY_MIN_SCORE) extra.push(replayResult(manager, best));
+    // Seulement si le lieu est bien celui qu'on a tapé (« Lyon »), pas un lieu voisin par hasard.
+    const typedName = fold(query);
+    const exact = best && (fold(best.title) === typedName || fold(best.title).startsWith(`${typedName} `));
+    if (best && exact && best.score >= REPLAY_MIN_SCORE) extra.push(replayResult(manager, best));
     return [...local, ...places, ...extra];
-  }, [local, places, manager]);
+  }, [local, places, manager, query]);
 
   const groups = useMemo(() => arrange(all, filter), [all, filter]);
   const kindsPresent = useMemo(() => arrange(all, null).map((g) => g.kind), [all]);

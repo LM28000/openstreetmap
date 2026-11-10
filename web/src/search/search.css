@@ -65,6 +65,13 @@
   font-size: 16px; /* 16 px : le navigateur d'un téléphone ne zoome pas à la saisie */
 }
 
+/* Le focus est dessiné par la barre entière : pas de second contour sur le champ. */
+.search__input:focus,
+.search__input:focus-visible {
+  outline: none;
+  box-shadow: none;
+}
+
 .search__input::placeholder {
   color: var(--ui-muted, #9aa4b6);
 }
@@ -138,6 +145,7 @@ kbd {
 }
 
 .search__filters {
+  flex: none;
   display: flex;
   gap: 6px;
   padding: 10px 12px 6px;

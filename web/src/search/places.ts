@@ -38,6 +38,7 @@ interface GeoFeature {
     // lieux nommés
     toponym?: string;
     category?: string[];
+    depcode?: string | string[];
     classification?: number;
   };
 }
@@ -67,6 +68,8 @@ export async function searchPlaces(text: string, manager: ModuleManager, signal:
   (json.features ?? []).forEach((feature, index) => {
     const place = toPlace(feature, index, manager);
     if (!place) return;
+    // Le lieu qui porte exactement le nom tapé (« Lyon ») passe devant les gares et les stations qui le contiennent.
+    if (fold(place.title) === key) place.score += 80;
     // Une commune ressort deux fois (base adresse et lieux nommés) : on garde la mieux classée.
     const twin = places.some((p) => fold(p.title) === fold(place.title) && distanceKm(p, place) < SAME_PLACE_KM);
     if (!twin) places.push(place);
@@ -94,7 +97,8 @@ function toPlace(feature: GeoFeature, index: number, manager: ModuleManager): Pl
     const kind = p.category?.[0] ?? 'Lieu';
     const where = first(p.city);
     const isTown = p.category?.includes('commune') ?? false;
-    subtitle = [capitalize(isTown ? 'commune' : kind), where && where !== title ? where : undefined].filter(Boolean).join(' · ');
+    const area = isTown && first(p.depcode) ? `département ${first(p.depcode)}` : where && where !== title ? where : undefined;
+    subtitle = [capitalize(isTown ? 'commune' : kind), area].filter(Boolean).join(' · ');
     zoom = isTown ? 11 : p.category?.includes('transport') ? 15 : 14;
     if (isTown) bonus = 60; // « Lyon » : la ville, avant ses rues et ses arrêts
   } else if (p.type === 'municipality') {

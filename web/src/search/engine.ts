@@ -9,6 +9,7 @@ import type { ModuleManager } from '../core/moduleManager';
 import { bikesProvider } from './bikes';
 import { chargersProvider } from './chargers';
 import { commandsProvider } from './commands';
+import { isochronesProvider } from './isochrones';
 import { layersProvider } from './layers';
 import { parseQuery } from './normalize';
 import { planesProvider } from './planes';
@@ -19,6 +20,7 @@ import { KIND_LABELS, KIND_ORDER, type Kind, type Provider, type SearchContext, 
 
 const PROVIDERS: readonly Provider[] = [
   trainsProvider,
+  isochronesProvider,
   planesProvider,
   shipsProvider,
   transitProvider,

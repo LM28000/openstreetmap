@@ -73,7 +73,11 @@ export class ModuleManager {
     version: 0,
   };
 
+  /** Le gestionnaire de l'application, pour ce qui doit agir dessus sans l'avoir en main (action d'une fiche). */
+  static current: ModuleManager | undefined;
+
   constructor(modules: readonly LayerModule[]) {
+    ModuleManager.current = this;
     this.modules = modules;
     const savedVisibility = readStorage<Record<string, boolean>>(VISIBILITY_KEY);
     const savedSettings = readStorage<Record<string, Record<string, string>>>(SETTINGS_KEY);
@@ -211,6 +215,17 @@ export class ModuleManager {
     entry.version++;
   }
 
+  /**
+   * Un module a reçu quelque chose en dehors de `load` (l'itinéraire demandé par une fiche, par exemple) :
+   * redessiner et rafraîchir l'interface, même si l'horloge est en pause.
+   */
+  refresh(id: string): void {
+    const entry = this.entries.get(id);
+    if (!entry) return;
+    entry.version++;
+    this.patch(id, { lastUpdated: Date.now() });
+  }
+
   /** À appeler quand le relief change (tuiles reçues, relief activé ou désactivé). */
   notifyTerrainChanged(): void {
     this.terrain.version++;
@@ -260,7 +275,7 @@ export class ModuleManager {
         entry.data !== undefined &&
         !entry.abort &&
         now - entry.lastFailure > RELOAD_BACKOFF_MS &&
-        module.needsReload(entry.data, time)
+        module.needsReload(entry.data, time, this.snapshot[module.id]?.settings ?? {})
       ) {
         void this.load(entry, { showLoading: true });
       }
@@ -349,7 +364,7 @@ export class ModuleManager {
     const stale =
       entry.data === undefined ||
       (module.refreshIntervalMs !== undefined && Date.now() - lastUpdated > module.refreshIntervalMs) ||
-      (module.needsReload?.(entry.data, this.currentTime) ?? false);
+      (module.needsReload?.(entry.data, this.currentTime, this.snapshot[module.id]?.settings ?? {}) ?? false);
     if (stale) void this.load(entry, { showLoading: entry.data === undefined });
     if (module.refreshIntervalMs) {
       entry.timer = setInterval(() => void this.load(entry, { showLoading: false }), module.refreshIntervalMs);
@@ -378,7 +393,7 @@ export class ModuleManager {
     // Pendant un simple rafraîchissement, on garde l'affichage actuel sans indicateur.
     if (showLoading) this.patch(module.id, { status: 'loading', error: undefined });
     try {
-      const data = await module.load({ signal: controller.signal, time: this.currentTime });
+      const data = await module.load({ signal: controller.signal, time: this.currentTime, settings: this.snapshot[module.id]?.settings ?? {} });
       if (controller.signal.aborted) return;
       entry.data = data;
       entry.version++;

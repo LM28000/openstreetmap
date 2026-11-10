@@ -1,12 +1,15 @@
 /**
- * Module « Isochrones » : jusqu'où peut-on aller en train depuis une gare, en partant à l'heure
- * de la carte ?
+ * Module « Isochrones » : jusqu'où peut-on aller en transports en commun depuis une gare, en partant
+ * à l'heure de la carte ?
  *
- * Le serveur (`server/src/raptor.rs`) calcule, avec l'algorithme RAPTOR sur les horaires SNCF,
- * l'arrivée au plus tôt à chaque gare : durée, correspondances. Le navigateur n'en fait que
+ * Le serveur (`server/src/raptor.rs`) calcule, avec l'algorithme RAPTOR sur les horaires SNCF (trains,
+ * cars TER), ceux des cars interurbains des régions et ceux d'Île-de-France (métro, RER, Transilien,
+ * tramway), l'arrivée au plus tôt à chaque arrêt : durée, correspondances. Le navigateur n'en fait que
  * l'affichage :
  *
  * - les gares atteintes, colorées par tranche d'une heure de trajet ;
+ * - les arrêts supplémentaires atteints (cars, métro, RER sans gare SNCF), plus petits, cernés selon le
+ *   mode, nommés seulement de près ; leur liste vient d'une ressource à part (`/api/arrets/{version}`) ;
  * - une zone lisse (couche raster native, sous les étiquettes) : autour de chaque gare, le temps
  *   qui reste est converti en rayon à `ACCESS_SPEED_KMH` (route, car, vélo), et chaque point de la
  *   carte prend le meilleur temps total, « gare atteinte + trajet jusqu'au point ». C'est une
@@ -44,10 +47,16 @@ const BAND_LABELS = ['Moins d’1 h', '1 à 2 h', '2 à 3 h', '3 à 4 h', '4 à 
 /** Opacité de la zone sur le fond (le fond est plus sombre la nuit : un peu plus dense pour rester lisible). */
 const AREA_ALPHA_DAY = 0.6;
 const AREA_ALPHA_NIGHT = 0.68;
-/** Vitesse d'accès autour d'une gare (voiture, car, vélo) pour étendre la zone au-delà des gares. */
-const ACCESS_SPEED_KMH = 15;
-/** Plafond du rayon d'accès autour d'une gare (km) : au-delà, on n'est plus « près de la gare ». */
-const ACCESS_MAX_KM = 30;
+/**
+ * Autour d'un arrêt atteint, la zone s'étend à une vitesse et jusqu'à un rayon qui dépendent du mode : on rejoint une
+ * gare en voiture, en car ou à vélo (15 km/h en moyenne, 30 km au plus) ; un arrêt de car, un peu moins loin ; une
+ * station de métro, à pied ou à vélo seulement (5 km/h, 2 km).
+ */
+const ACCESS = {
+  rail: { speedKmh: 15, maxKm: 30 },
+  car: { speedKmh: 15, maxKm: 15 },
+  idf: { speedKmh: 5, maxKm: 2 },
+} as const;
 /** Écart avec l'heure du dernier calcul au-delà duquel on le refait (secondes). */
 const REQUERY_S = 5 * 60;
 /** Taille maximale de la grille de la zone, en cases par côté. */
@@ -102,24 +111,65 @@ interface ApiIsochrone {
   stations: number[];
   seconds: number[];
   transfers: number[];
+  /** Version de la ressource des arrêts supplémentaires, `null` quand cars et Île-de-France ne sont pas chargés. */
+  extras: string | null;
+  /** Modes pris en compte : `train`, `car`, `idf`. */
+  modes: string[];
+  extraStops: number[];
+  extraSeconds: number[];
+  extraTransfers: number[];
+}
+
+/** Genre d'un arrêt supplémentaire (voir `server/src/multimodal.rs`). */
+type StopKind = 'car' | 'metro' | 'rer' | 'transilien' | 'tram';
+
+/** Les arrêts supplémentaires, en colonnes (`/api/arrets/{version}`). */
+interface ExtraStops {
+  version: string;
+  kinds: string[];
+  names: string[];
+  lon: number[];
+  lat: number[];
+  kind: number[];
 }
 
 type ApiLeg =
   | { type: 'train'; number: string; category: string; line: string; from: number; to: number; departure: number; arrival: number; stops: number }
+  | {
+      type: 'transit';
+      mode: StopKind;
+      /** « Car TER », « Car BreizhGo 7 », « RER B », « Métro 14 ». */
+      label: string;
+      line: string;
+      headsign: string | null;
+      color: string | null;
+      textColor: string | null;
+      from: number;
+      to: number;
+      departure: number;
+      arrival: number;
+      stops: number;
+    }
   | { type: 'walk'; from: number; to: number; departure: number; arrival: number };
 
 interface ApiJourney {
   network: string;
+  /** Les indices de départ et d'arrivée au-delà sont des arrêts supplémentaires (indice − `stationCount`). */
+  stationCount: number;
+  extras: string | null;
   realtime: boolean;
   legs: ApiLeg[];
 }
 
 // --- Modèle côté navigateur ---
 
-/** Une gare atteinte. */
+/** Une gare atteinte, ou un arrêt supplémentaire (`kind` renseigné : car, métro, RER…). */
 export interface Reached {
+  /** Indice dans le réseau ferré, ou dans la ressource des arrêts supplémentaires. */
   index: number;
+  /** Code UIC de la gare ; « x12 » pour l'arrêt supplémentaire 12 (c'est ce que le serveur attend pour son itinéraire). */
   code: string;
+  kind?: StopKind;
   name: string;
   lon: number;
   lat: number;
@@ -143,11 +193,18 @@ interface Grid {
 
 export interface IsochroneData {
   /** Ce pour quoi ces données ont été calculées. */
-  query: { code: string | null; departure: number; maxMinutes: number; transfers: string };
+  query: { code: string | null; departure: number; maxMinutes: number; transfers: string; modes: string };
   network?: RailNetwork;
+  /** Arrêts supplémentaires de cette version, si le serveur en a pour cette requête. */
+  extras?: ExtraStops;
   origin?: Reached;
+  /** Gares atteintes (sans la gare de départ). */
   reached: Reached[];
+  /** Arrêts supplémentaires atteints : cars, métro, RER, tramway. */
+  extraReached: Reached[];
   byCode: Map<string, Reached>;
+  /** Le serveur a-t-il pris en compte les cars et Île-de-France demandés ? (Faux tant qu'ils se chargent.) */
+  multimodal: boolean;
   realtime: boolean;
   grid?: Grid;
   /** Image de la zone déjà colorée pour une part de nuit (voir `native.update`). */
@@ -158,36 +215,70 @@ type Coordinates = [[number, number], [number, number], [number, number], [numbe
 type IsoSelection = { type: 'gare'; code: string } | { type: 'origine' };
 
 const EMPTY: IsochroneData = {
-  query: { code: null, departure: 0, maxMinutes: 0, transfers: '' },
+  query: { code: null, departure: 0, maxMinutes: 0, transfers: '', modes: '' },
   reached: [],
+  extraReached: [],
   byCode: new Map(),
+  multimodal: false,
   realtime: false,
 };
 
 // --- Chargement ---
 
+/** Dernière fois qu'on a retenté un calcul multimodal pendant que le serveur chargeait ses réseaux. */
+let lastMultimodalCheck = 0;
+
 const maxMinutesOf = (settings: Readonly<Record<string, string>>) => Number(settings.duree) || 180;
+
+/** Réglage « Transports pris en compte » → paramètre `modes` de l'API (le train est toujours de la partie). */
+const MODES_PARAM: Record<string, string> = { trains: 'train', cars: 'train,car', tout: 'train,car,idf' };
+const modesOf = (settings: Readonly<Record<string, string>>) => (settings.modes && MODES_PARAM[settings.modes] ? settings.modes : 'tout');
+
+/** Arrêts supplémentaires par version : la ressource est immuable, un seul téléchargement pour tous les calculs. */
+const extraStopsCache = new Map<string, Promise<ExtraStops>>();
+
+function loadExtraStops(version: string, signal: AbortSignal): Promise<ExtraStops> {
+  let promise = extraStopsCache.get(version);
+  if (!promise) {
+    promise = fetchJson<Omit<ExtraStops, 'version'>>(`/api/arrets/${version}`, new AbortController().signal).then((api) => ({ ...api, version }));
+    extraStopsCache.set(version, promise);
+    promise.catch(() => extraStopsCache.delete(version));
+    if (extraStopsCache.size > 3) extraStopsCache.delete(extraStopsCache.keys().next().value as string);
+  }
+  const shared = promise;
+  return new Promise((resolve, reject) => {
+    signal.addEventListener('abort', () => reject(signal.reason), { once: true });
+    shared.then(resolve, reject);
+  });
+}
 
 async function loadIsochrone(signal: AbortSignal, time: number, settings: Readonly<Record<string, string>>): Promise<IsochroneData> {
   const code = originCode;
   const maxMinutes = maxMinutesOf(settings);
   const transfers = settings.correspondances ?? '2';
+  const modes = modesOf(settings);
   const departure = Math.floor(time / 60_000) * 60;
-  const query = { code, departure, maxMinutes, transfers };
+  const query = { code, departure, maxMinutes, transfers, modes };
   if (!code) return { ...EMPTY, query };
 
   const limit = transfers === 'illimite' ? '' : `&correspondances=${transfers}`;
-  const json = await fetchJson<ApiIsochrone>(`/api/isochrone?depuis=${encodeURIComponent(code)}&depart=${departure}&max=${maxMinutes}${limit}`, signal);
-  // Le réseau a pu changer de version entre l'envoi de la réponse et le téléchargement des gares : on le redemande une fois.
+  const json = await fetchJson<ApiIsochrone>(
+    `/api/isochrone?depuis=${encodeURIComponent(code)}&depart=${departure}&max=${maxMinutes}${limit}&modes=${MODES_PARAM[modes]}`,
+    signal,
+  );
+  // Le réseau (ou les arrêts) a pu changer de version entre l'envoi de la réponse et le téléchargement : on redemande une fois.
   let network: RailNetwork;
+  let extras: ExtraStops | undefined;
   try {
     network = await loadNetwork(json.network, signal);
+    if (json.extras) extras = await loadExtraStops(json.extras, signal);
   } catch (error) {
     if (error instanceof ServerError && error.status === 404) return loadIsochrone(signal, time, settings);
     throw error;
   }
 
   const reached: Reached[] = [];
+  const extraReached: Reached[] = [];
   const byCode = new Map<string, Reached>();
   let origin: Reached | undefined;
   json.stations.forEach((index, i) => {
@@ -199,8 +290,30 @@ async function loadIsochrone(signal: AbortSignal, time: number, settings: Readon
     if (index === json.origin) origin = item;
     else reached.push(item);
   });
-  const grid = buildGrid(origin ? [origin, ...reached] : reached, maxMinutes * 60);
-  return { query, network, origin, reached, byCode, realtime: json.realtime, grid };
+  if (extras) {
+    json.extraStops.forEach((index, i) => {
+      const name = extras.names[index];
+      if (name === undefined) return;
+      const seconds = json.extraSeconds[i] ?? 0;
+      const item: Reached = {
+        index,
+        code: `x${index}`,
+        kind: (extras.kinds[extras.kind[index] ?? 0] ?? 'car') as StopKind,
+        name,
+        lon: extras.lon[index] ?? 0,
+        lat: extras.lat[index] ?? 0,
+        seconds,
+        transfers: json.extraTransfers[i] ?? 0,
+        band: bandOf(seconds),
+      };
+      byCode.set(item.code, item);
+      extraReached.push(item);
+    });
+  }
+  const grid = buildGrid(origin ? [origin, ...reached, ...extraReached] : [...reached, ...extraReached], maxMinutes * 60);
+  // « Multimodal » : on a demandé plus que des trains et le serveur l'a fait (il charge les cars et Île-de-France en tâche de fond).
+  const multimodal = json.extras !== null;
+  return { query, network, extras, origin, reached, extraReached, byCode, multimodal, realtime: json.realtime, grid };
 }
 
 // --- La zone lisse : transformée de distance sur une grille ---
@@ -210,6 +323,12 @@ const mercatorY = (lat: number) => EARTH_R * Math.log(Math.tan(Math.PI / 4 + (la
 const lonFromX = (x: number) => (x / EARTH_R) * (180 / Math.PI);
 const latFromY = (y: number) => (2 * Math.atan(Math.exp(y / EARTH_R)) - Math.PI / 2) * (180 / Math.PI);
 
+/** Vitesse et rayon d'accès autour d'un arrêt atteint : voir `ACCESS`. */
+function accessOf(s: Reached) {
+  if (!s.kind) return ACCESS.rail;
+  return s.kind === 'car' ? ACCESS.car : ACCESS.idf;
+}
+
 /**
  * Pour chaque case : min sur les gares de (temps pour atteindre la gare + distance / vitesse d'accès).
  * Chaque gare ne remplit que le disque où il reste du temps (durée maximale moins son temps), donc le
@@ -217,13 +336,14 @@ const latFromY = (y: number) => (2 * Math.atan(Math.exp(y / EARTH_R)) - Math.PI 
  */
 function buildGrid(stations: readonly Reached[], maxSeconds: number): Grid | undefined {
   if (stations.length === 0) return undefined;
-  const speed = (ACCESS_SPEED_KMH * 1000) / 3600; // m/s
-  // Rayon au sol de chaque gare, et son équivalent en Mercator (qui agrandit les distances de 1 / cos(latitude)).
+  // Rayon au sol de chaque arrêt, et son équivalent en Mercator (qui agrandit les distances de 1 / cos(latitude)).
   const items = stations
     .filter((s) => s.seconds < maxSeconds)
     .map((s) => {
       const stretch = 1 / Math.cos((s.lat * Math.PI) / 180);
-      return { s, x: mercatorX(s.lon), y: mercatorY(s.lat), stretch, radius: Math.min((maxSeconds - s.seconds) * speed, ACCESS_MAX_KM * 1000) };
+      const access = accessOf(s);
+      const speed = (access.speedKmh * 1000) / 3600; // m/s
+      return { s, x: mercatorX(s.lon), y: mercatorY(s.lat), stretch, speed, radius: Math.min((maxSeconds - s.seconds) * speed, access.maxKm * 1000) };
     });
   if (items.length === 0) return undefined;
   let west = Infinity;
@@ -245,7 +365,7 @@ function buildGrid(stations: readonly Reached[], maxSeconds: number): Grid | und
   const height = Math.ceil((north - south) / cell);
   const seconds = new Float32Array(width * height).fill(Infinity);
 
-  for (const { s, x, y, stretch, radius } of items) {
+  for (const { s, x, y, stretch, speed, radius } of items) {
     const reach = radius * stretch; // rayon en mètres Mercator
     const col0 = Math.max(0, Math.floor((x - reach - west) / cell));
     const col1 = Math.min(width - 1, Math.ceil((x + reach - west) / cell));
@@ -391,20 +511,20 @@ const CATEGORY_NAMES: Record<string, string> = {
   TramTrain: 'Tram-train',
 };
 
-// --- Itinéraires (chargés à la demande, pour la gare dont on ouvre la fiche) ---
+// --- Itinéraires (chargés à la demande, pour la gare ou l'arrêt dont on ouvre la fiche) ---
 
 type JourneyState = ApiJourney | 'chargement' | 'erreur';
 const journeys = new Map<string, JourneyState>();
 
 function journeyOf(data: IsochroneData, station: Reached): JourneyState {
   const { query } = data;
-  const key = `${query.code}|${query.departure}|${query.maxMinutes}|${query.transfers}|${station.code}|${data.network?.version}`;
+  const key = `${query.code}|${query.departure}|${query.maxMinutes}|${query.transfers}|${query.modes}|${station.code}|${data.network?.version}|${data.extras?.version}`;
   const known = journeys.get(key);
   if (known) return known;
   journeys.set(key, 'chargement');
   if (journeys.size > 60) journeys.delete(journeys.keys().next().value as string);
   const limit = query.transfers === 'illimite' ? '' : `&correspondances=${query.transfers}`;
-  const url = `/api/isochrone/trajet?depuis=${query.code}&depart=${query.departure}&max=${query.maxMinutes}${limit}&vers=${station.code}`;
+  const url = `/api/isochrone/trajet?depuis=${query.code}&depart=${query.departure}&max=${query.maxMinutes}${limit}&modes=${MODES_PARAM[query.modes]}&vers=${station.code}`;
   fetchJson<ApiJourney>(url, new AbortController().signal).then(
     (journey) => journeys.set(key, journey),
     () => journeys.set(key, 'erreur'),
@@ -412,12 +532,24 @@ function journeyOf(data: IsochroneData, station: Reached): JourneyState {
   return 'chargement';
 }
 
+/** Genre d'un arrêt supplémentaire, pour la fiche. */
+const STOP_KIND_NAMES: Record<StopKind, string> = {
+  car: 'Arrêt de car',
+  metro: 'Station de métro',
+  rer: 'Station de RER',
+  transilien: 'Gare Transilien',
+  tram: 'Arrêt de tramway',
+};
+
 function journeyTable(data: IsochroneData, state: JourneyState): InfoTable {
   const empty = state === 'erreur' ? 'Itinéraire indisponible.' : 'Calcul de l’itinéraire…';
   const stations = data.network?.stations ?? [];
-  const name = (index: number) => cleanName(stations[index]?.name ?? '?');
   const rows: InfoTable['rows'] = [];
   if (state !== 'chargement' && state !== 'erreur') {
+    // Les indices au-delà du nombre de gares sont des arrêts supplémentaires.
+    const name = (index: number) =>
+      index < state.stationCount ? cleanName(stations[index]?.name ?? '?') : (data.extras?.names[index - state.stationCount] ?? '?');
+    const both = (leg: ApiLeg) => `${name(leg.from)} → ${name(leg.to)}`;
     state.legs.forEach((leg, i) => {
       const previous = state.legs[i - 1];
       if (previous && leg.departure - previous.arrival >= 60) {
@@ -425,9 +557,18 @@ function journeyTable(data: IsochroneData, state: JourneyState): InfoTable {
       }
       if (leg.type === 'train') {
         const category = CATEGORY_NAMES[leg.category] ?? leg.category;
-        rows.push({ cells: [hhmm(leg.departure), `${category} ${leg.number} · ${name(leg.from)} → ${name(leg.to)}`, hhmm(leg.arrival)] });
+        rows.push({ cells: [hhmm(leg.departure), `${category} ${leg.number} · ${both(leg)}`, hhmm(leg.arrival)] });
+      } else if (leg.type === 'transit') {
+        // « Car BreizhGo 7 » ou « RER B » en pastille aux couleurs officielles, puis la destination et le parcours.
+        const towards = leg.headsign ? `vers ${leg.headsign} · ` : '';
+        rows.push({
+          cells: [hhmm(leg.departure), `${towards}${both(leg)}`, hhmm(leg.arrival)],
+          badge: { text: leg.label, color: leg.color ?? undefined, textColor: leg.textColor ?? undefined },
+        });
       } else {
-        rows.push({ cells: [hhmm(leg.departure), `Changement de gare (à pied, métro ou RER) · ${name(leg.from)} → ${name(leg.to)}`, hhmm(leg.arrival)], tone: 'muted' });
+        const railToRail = leg.from < state.stationCount && leg.to < state.stationCount;
+        const how = railToRail && leg.arrival - leg.departure >= 15 * 60 ? 'à pied ou en métro' : 'à pied';
+        rows.push({ cells: [hhmm(leg.departure), `Changement (${how}) · ${both(leg)}`, hhmm(leg.arrival)], tone: 'muted' });
       }
     });
   }
@@ -439,49 +580,65 @@ function describeReached(data: IsochroneData, station: Reached, time: number): I
   const journey = journeyOf(data, station);
   const realtime = data.realtime && isLiveTime(time);
   const arrival = data.query.departure + station.seconds;
-  // Le temps compté depuis l'heure de la frise inclut l'attente du premier train : une fois
-  // l'itinéraire connu, on montre le temps passé en train et l'attente à part.
+  // Le temps compté depuis l'heure de la frise inclut l'attente du premier départ : une fois
+  // l'itinéraire connu, on montre le temps passé en transport et l'attente à part.
   const legs = journey !== 'chargement' && journey !== 'erreur' ? journey.legs : undefined;
   const firstDeparture = legs?.[0]?.departure;
   const wait = firstDeparture === undefined ? 0 : firstDeparture - data.query.departure;
+  const onTrain = legs?.every((leg) => leg.type !== 'transit') ?? true;
   const fields: Array<[string, string]> =
-    firstDeparture !== undefined && wait >= 5 * 60 ? [['Attente du premier train', `${formatDuration(wait)} (départ à ${hhmm(firstDeparture)})`]] : [];
+    firstDeparture !== undefined && wait >= 5 * 60 ? [[onTrain ? 'Attente du premier train' : 'Attente du premier départ', `${formatDuration(wait)} (départ à ${hhmm(firstDeparture)})`]] : [];
+  const extra = station.kind !== undefined;
   return {
-    kind: 'Gare · isochrone',
+    kind: extra ? `${STOP_KIND_NAMES[station.kind!]} · isochrone` : 'Gare · isochrone',
     title: station.name,
     subtitle: origin ? `depuis ${origin.name}, en partant à ${hhmm(data.query.departure)}` : undefined,
     status: realtime ? { tone: 'live', text: 'Retards en direct pris en compte' } : { tone: 'scheduled', text: 'Horaires théoriques' },
     fields,
     figures: [
       firstDeparture !== undefined
-        ? { value: formatDuration(arrival - firstDeparture), label: 'en train' }
+        ? { value: formatDuration(arrival - firstDeparture), label: onTrain ? 'en train' : 'en transport' }
         : { value: formatDuration(station.seconds), label: `depuis ${hhmm(data.query.departure)}` },
       { value: String(station.transfers), label: station.transfers > 1 ? 'correspondances' : 'correspondance' },
       { value: hhmm(arrival), label: 'arrivée' },
     ],
     tables: [journeyTable(data, journey)],
-    note: 'Meilleur trajet de la journée en train (TGV, Intercités, TER). Les correspondances comptent 8 min au minimum, et les gares parisiennes sont reliées par le métro ou le RER (20 à 45 min).',
-    actions: [{ label: 'Partir d’ici', onClick: () => setIsochroneOrigin(station.code, station) }],
+    note: noteFor(data.query.modes),
+    // On ne part que d'une gare du réseau ferré : c'est ce que l'API accepte comme origine.
+    actions: extra ? undefined : [{ label: 'Partir d’ici', onClick: () => setIsochroneOrigin(station.code, station) }],
   };
+}
+
+/** Ce que le calcul prend en compte, selon le réglage des modes (pour le bas des fiches). */
+function noteFor(modes: string): string {
+  const change = 'Les correspondances comptent 4 à 8 min au minimum (selon le mode), et les arrêts voisins sont reliés à pied.';
+  if (modes === 'trains') {
+    return `Meilleur trajet de la journée en train (TGV, Intercités, TER). ${change} Les gares parisiennes sont reliées par le métro ou le RER (20 à 45 min).`;
+  }
+  if (modes === 'cars') return `Meilleur trajet de la journée en train (TGV, Intercités, TER) et en car (cars TER et réseaux régionaux). ${change}`;
+  return `Meilleur trajet de la journée en train, en car (cars TER et réseaux régionaux) et dans les transports d’Île-de-France (métro, RER, Transilien, tramway). ${change}`;
 }
 
 function describeOrigin(data: IsochroneData): InfoContent | null {
   const origin = data.origin;
   if (!origin) return null;
   const inside = data.reached.length;
+  const stops = data.extraReached.length;
+  const subject = data.query.modes === 'trains' ? 'en train' : 'en transports';
   return {
     kind: 'Gare de départ',
     title: origin.name,
-    subtitle: `jusqu’où en train, en partant à ${hhmm(data.query.departure)}`,
+    subtitle: `jusqu’où ${subject}, en partant à ${hhmm(data.query.departure)}`,
     status: plainStatus(`${limitLabel(data.query.maxMinutes)} au plus, ${data.query.transfers === 'illimite' ? 'correspondances libres' : `${data.query.transfers} correspondance${data.query.transfers === '1' ? '' : 's'} au plus`}`),
     figures: [
       { value: String(inside), label: 'gares atteintes' },
-      { value: formatDuration(Math.max(0, ...data.reached.map((s) => s.seconds))), label: 'la plus lointaine' },
+      ...(stops > 0 ? [{ value: stops.toLocaleString('fr-FR'), label: 'arrêts de car, métro…' }] : []),
+      { value: formatDuration(Math.max(0, ...data.reached.map((s) => s.seconds), ...data.extraReached.map((s) => s.seconds))), label: 'la plus lointaine' },
     ],
     note: [
       reducedServiceDay(data.query.departure) &&
         `${reducedServiceDay(data.query.departure)} : service réduit, environ deux fois moins de trains qu’un jour de semaine.`,
-      'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle, à 15 km/h (route ou vélo).',
+      'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle à 15 km/h (route ou vélo), chaque arrêt de car jusqu’à 15 km, et chaque station de métro ou de RER jusqu’à 2 km à pied.',
     ]
       .filter(Boolean)
       .join(' '),
@@ -535,6 +692,13 @@ let shownData: IsochroneData | undefined;
 
 // --- Module ---
 
+/** Contour des arrêts supplémentaires selon le mode : car (ambre), métro, RER, tram (bleu). Le remplissage reste la rampe framboise. */
+const EXTRA_STROKE: Record<'car' | 'idf', Color> = { car: [255, 196, 64, 255], idf: [96, 176, 255, 255] };
+const rgb_css = (c: Color) => `rgb(${c[0]},${c[1]},${c[2]})`;
+/** Les arrêts supplémentaires n'apparaissent qu'à partir de ce zoom, et leur nom de plus près encore. */
+const EXTRA_MIN_ZOOM = 6.5;
+const EXTRA_LABEL_ZOOM = 9.5;
+
 const labelFont = 'system-ui, -apple-system, "Segoe UI", sans-serif';
 
 function inView(map: MapLibreMap | undefined, station: Reached): boolean {
@@ -547,8 +711,9 @@ export const isochrones = defineModule<IsochroneData>({
   id: MODULE_ID,
   name: 'Isochrones',
   category: 'transport',
-  description: 'Jusqu’où peut-on aller en train depuis une gare, en partant à l’heure de la frise ?',
-  attribution: 'SNCF (horaires et temps réel) — ODbL ; calcul RAPTOR sur le serveur',
+  description: 'Jusqu’où peut-on aller en train, en car et en métro depuis une gare, en partant à l’heure de la frise ?',
+  attribution:
+    'SNCF (horaires, cars TER et temps réel) — ODbL ; Île-de-France Mobilités (métro, RER, Transilien, tramway) — ODbL ; cars interurbains des régions et départements (transport.data.gouv.fr) — licences ouvertes de chaque réseau ; calcul RAPTOR sur le serveur',
   // Au-dessus des trains : les gares atteintes doivent rester cliquables ; la zone, elle, est une couche de fond.
   drawOrder: 2,
   timeStepMs: 3_600_000, // le calcul ne dépend pas de l'instant à chaque image : voir `needsReload`
@@ -589,6 +754,16 @@ export const isochrones = defineModule<IsochroneData>({
       defaultValue: '2',
     },
     {
+      id: 'modes',
+      label: 'Transports pris en compte',
+      options: [
+        { value: 'trains', label: 'Trains seulement' },
+        { value: 'cars', label: 'Trains et cars' },
+        { value: 'tout', label: 'Tous les transports (Île-de-France comprise)' },
+      ],
+      defaultValue: 'tout',
+    },
+    {
       id: 'affichage',
       label: 'Affichage',
       options: [
@@ -602,9 +777,14 @@ export const isochrones = defineModule<IsochroneData>({
   legend(settings) {
     const max = maxMinutesOf(settings) * 60;
     const night = currentNight();
-    return BAND_LABELS.map((label, band) => ({ color: `rgb(${bandColor(band, night).join(',')})`, label, band }))
+    const bands = BAND_LABELS.map((label, band) => ({ color: `rgb(${bandColor(band, night).join(',')})`, label, band }))
       .filter(({ band }) => band * BAND_S < max)
       .map(({ color, label }) => ({ color, label }));
+    // Le contour des petits ronds dit le mode des arrêts qui ne sont pas des gares.
+    const modes = modesOf(settings);
+    if (modes !== 'trains') bands.push({ color: rgb_css(EXTRA_STROKE.car), label: 'Arrêt de car (contour)' });
+    if (modes === 'tout') bands.push({ color: rgb_css(EXTRA_STROKE.idf), label: 'Métro, RER, tram (contour)' });
+    return bands;
   },
 
   load: ({ signal, time, settings }) => loadIsochrone(signal, time, settings),
@@ -613,7 +793,12 @@ export const isochrones = defineModule<IsochroneData>({
     const { query } = data;
     if (query.code !== originCode) return true;
     if (!originCode) return false;
-    if (query.maxMinutes !== maxMinutesOf(settings) || query.transfers !== (settings.correspondances ?? '2')) return true;
+    if (query.maxMinutes !== maxMinutesOf(settings) || query.transfers !== (settings.correspondances ?? '2') || query.modes !== modesOf(settings)) return true;
+    // Cars et Île-de-France se chargent en tâche de fond : on refait le calcul quand ils arrivent (une fois, au retour du serveur).
+    if (!data.multimodal && query.modes !== 'trains' && Date.now() - lastMultimodalCheck > 30_000) {
+      lastMultimodalCheck = Date.now();
+      return true;
+    }
     return Math.abs(time / 1000 - query.departure) >= REQUERY_S;
   },
 
@@ -621,10 +806,13 @@ export const isochrones = defineModule<IsochroneData>({
     if (!originCode) return 'Cliquez une gare, puis « Jusqu’où en train ? », ou cherchez « depuis Rennes »';
     if (!data?.origin || data.query.code !== originCode) return 'calcul en cours…';
     const n = data.reached.length;
+    const stops = data.extraReached.length;
     const limit = limitLabel(data.query.maxMinutes);
     const reduced = reducedServiceDay(data.query.departure);
     const warning = reduced ? ` · ${reduced} : moins de trains` : '';
-    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''} en moins de ${limit}${warning}`;
+    const more = stops > 0 ? ` et ${stops.toLocaleString('fr-FR')} arrêt${stops > 1 ? 's' : ''}` : '';
+    const loading = !data.multimodal && data.query.modes !== 'trains' ? ' · cars et Île-de-France en cours de chargement' : '';
+    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''}${more} en moins de ${limit}${warning}${loading}`;
   },
 
   native: {
@@ -669,8 +857,51 @@ export const isochrones = defineModule<IsochroneData>({
     const origin = data.origin;
     // Les durées s'écrivent à côté des gares quand on est assez près, pour celles de la vue seulement.
     const labelled = view.zoom >= 7 ? data.reached.filter((s) => inView(mapRef, s)).slice(0, 150) : [];
+    // Les arrêts de cars et de métro : plus petits que les gares, cernés selon le mode, et nommés de près seulement.
+    const showExtras = data.extraReached.length > 0 && view.zoom >= EXTRA_MIN_ZOOM;
+    const extraRadius = radius * 0.68;
+    const extraStroke = (s: Reached): Color => (s.kind === 'car' ? EXTRA_STROKE.car : EXTRA_STROKE.idf);
+    const extraLabelled = view.zoom >= EXTRA_LABEL_ZOOM ? data.extraReached.filter((s) => inView(mapRef, s)).slice(0, 120) : [];
 
     return [
+      showExtras &&
+        new ScatterplotLayer<Reached>({
+          id: 'isochrones/arrets',
+          data: data.extraReached,
+          getPosition: position,
+          radiusUnits: 'pixels',
+          getRadius: extraRadius,
+          getFillColor: color,
+          stroked: true,
+          getLineColor: extraStroke,
+          lineWidthUnits: 'pixels',
+          getLineWidth: view.zoom < 9 ? 1.2 : 1.8,
+          billboard: true,
+          pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 140],
+          updateTriggers: { getRadius: extraRadius, getFillColor: night, getLineWidth: view.zoom < 9 },
+          parameters,
+        }),
+      showExtras &&
+        extraLabelled.length > 0 &&
+        new TextLayer<Reached>({
+          id: 'isochrones/arrets-noms',
+          data: extraLabelled,
+          getPosition: position,
+          getText: (s) => `${s.name} · ${formatDuration(s.seconds)}`,
+          characterSet: 'auto',
+          fontFamily: labelFont,
+          fontWeight: 500,
+          getSize: 10.5,
+          getColor: [255, 255, 255],
+          getPixelOffset: [0, -11],
+          background: true,
+          getBackgroundColor: [15, 18, 26, 205],
+          backgroundPadding: [3, 2],
+          billboard: true,
+          parameters,
+        }),
       new ScatterplotLayer<Reached>({
         id: 'isochrones/gares-halo',
         data: data.reached,

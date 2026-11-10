@@ -179,6 +179,8 @@ export interface InfoRow {
   tone?: 'muted' | 'current' | 'alert';
   /** Sélection à ouvrir quand on clique sur la ligne (dans le même module). */
   select?: unknown;
+  /** Pastille de ligne (« RER B », « Métro 14 ») en tête de la deuxième cellule, aux couleurs officielles quand on les connaît. */
+  badge?: { text: string; color?: string; textColor?: string };
 }
 
 /**

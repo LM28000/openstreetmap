@@ -154,7 +154,9 @@ export function noRecordingText(layer: string, time: number): string | null {
     case 'before':
       return Number.isFinite(c.from) ? `Pas d’enregistrement avant le ${dayHourText(c.from)}` : 'Pas d’enregistrement pour l’instant';
     case 'gap':
-      return `Pas d’enregistrement de ${dayHourText(c.from)} à ${dayHourText(c.to)}`;
+      return dayFormat.format(c.from) === dayFormat.format(c.to)
+        ? `Pas d’enregistrement de ${hourText(c.from)} à ${hourText(c.to)} (${dayFormat.format(c.from)})`
+        : `Pas d’enregistrement du ${dayHourText(c.from)} au ${dayHourText(c.to)}`;
     case 'after':
       return `Pas d’enregistrement après le ${dayHourText(c.to)}`;
   }

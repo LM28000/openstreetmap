@@ -26,6 +26,8 @@ const SOURCE_ID = 'population';
 const COLUMNS_ID = 'population-colonnes';
 const FLAT_ID = 'population-plat';
 const SELECTED_ID = 'population-choisi';
+/** Zone des isochrones (module `isochrones`) : la population passe dessous, pour qu'on la voie à travers les gares atteintes. */
+const UNDER = 'isochrones-zone';
 
 /**
  * Une seule teinte (terre de Sienne), sept classes. Jour : le plus dense est le plus foncé ; nuit : le plus dense
@@ -220,6 +222,8 @@ export const population = defineModule<PopulationData>({
         addSelectionRing(map, ring.map((layer) => ({ ...layer, 'source-layer': sheet.couche }) as never), before);
         shownKey = '';
       }
+      // Sous les autres couches natives qui dessinent une zone (isochrones) : elles s'activent dans n'importe quel ordre.
+      for (const id of [COLUMNS_ID, FLAT_ID]) if (map.getLayer(UNDER) && map.getLayer(id)) map.moveLayer(id, UNDER);
       const variable = (settings.couleur ?? 'd') as Variable;
       const flat = settings.relief === 'plat';
       const key = `${variable}:${flat}:${night >= 0.5}`;

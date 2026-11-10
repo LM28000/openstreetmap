@@ -53,6 +53,22 @@ pub struct PopGrid {
     pop: Vec<f32>,
 }
 
+/// Position d'un arrêt dans le repère de la grille, et marche maximale à partir de lui (mètres).
+#[derive(Clone, Copy, Debug)]
+pub struct StopPos {
+    pub e: f32,
+    pub n: f32,
+    pub max_walk: f32,
+}
+
+impl StopPos {
+    /// `(longitude, latitude)` d'une gare du réseau ferré ou d'un arrêt supplémentaire.
+    pub fn new(lon: f64, lat: f64, rail: bool) -> StopPos {
+        let (e, n) = super::proj::laea_forward(lon, lat);
+        StopPos { e: e as f32, n: n as f32, max_walk: if rail { MAX_WALK_RAIL_M } else { MAX_WALK_EXTRA_M } }
+    }
+}
+
 /// Un arrêt atteint : position dans le repère LAEA (mètres), arrivée (secondes après le départ), marche maximale (mètres).
 #[derive(Clone, Copy)]
 pub struct Source {

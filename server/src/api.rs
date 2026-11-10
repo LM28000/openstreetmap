@@ -338,6 +338,8 @@ struct IsochroneQuery {
     modes: Option<String>,
     /// Gare d'arrivée (pour `/api/isochrone/trajet` seulement).
     vers: Option<String>,
+    /// `non` : ne pas compter les habitants atteints (le calcul coûte ~1 ms de plus).
+    habitants: Option<String>,
 }
 
 /// Les groupes de modes demandés (voir `raptor::MODE_*`). Le train est toujours permis : sans lui, rien ne partirait d'une gare.
@@ -371,6 +373,50 @@ struct IsochroneResponse<'a> {
     extra_stops: Vec<u32>,
     extra_seconds: Vec<i32>,
     extra_transfers: Vec<u8>,
+    /// Habitants qui vivent à portée de ces arrêts dans la durée demandée (`null` : grille de population pas encore prête).
+    population: Option<PopulationOut>,
+}
+
+/// Habitants atteints : total, et par tranche de `band_minutes` minutes de trajet (la première : de 0 à 30 min, etc.).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct PopulationOut {
+    total: u64,
+    band_minutes: i32,
+    bands: Vec<u64>,
+}
+
+/// Largeur des tranches de temps du décompte des habitants.
+const POPULATION_BAND_S: i32 = 30 * 60;
+
+/// Habitants à portée : un carreau compte si l'arrivée à un arrêt atteint plus la marche jusqu'à son centre tient dans la
+/// durée (règle et marche : voir `tiles/popgrid.rs`).
+fn population_reach(
+    tiles: &crate::tiles::Registry,
+    network: &Network,
+    extras: Option<&Extras>,
+    reached: &[raptor::Reached],
+    limit_s: i32,
+) -> Option<PopulationOut> {
+    use crate::tiles::popgrid::{Source, StopPos};
+    let population = tiles.population();
+    let grid = population.grid()?;
+    let positions = population.stop_positions(network.timetable.id, extras.map(|e| e.version.as_str()), || {
+        let rails = network.timetable.stations.iter().map(|s| StopPos::new(s.lon, s.lat, true));
+        let others = extras.into_iter().flat_map(|e| e.stops.iter().map(|s| StopPos::new(s.lon, s.lat, false)));
+        rails.chain(others).collect()
+    });
+    let sources: Vec<Source> = reached
+        .iter()
+        .filter(|r| r.seconds <= limit_s)
+        .filter_map(|r| positions.get(r.station as usize).map(|p| Source { e: p.e, n: p.n, arrival: r.seconds, max_walk: p.max_walk }))
+        .collect();
+    let reach = grid.reach(&sources, limit_s, POPULATION_BAND_S);
+    Some(PopulationOut {
+        total: reach.total.round() as u64,
+        band_minutes: POPULATION_BAND_S / 60,
+        bands: reach.bands.iter().map(|b| b.round() as u64).collect(),
+    })
 }
 
 #[derive(Serialize)]
@@ -463,8 +509,15 @@ async fn isochrone(
     State(state): State<AppState>,
     Query(query): Query<IsochroneQuery>,
 ) -> Result<impl IntoResponse, (StatusCode, String)> {
-    let body = run_isochrone(&state, query, |network, extras, iso, query| {
+    let tiles = state.tiles().clone();
+    let body = run_isochrone(&state, query, move |network, extras, iso, query| {
         let reached = iso.reached();
+        let population = if query.habitants.as_deref() == Some("non") {
+            None
+        } else {
+            let limit_s = query.max.unwrap_or(DEFAULT_MAX_MINUTES).clamp(1, MAX_MINUTES) * 60;
+            population_reach(&tiles, network, extras, &reached, limit_s)
+        };
         let origin = station_by_code(network, &query.depuis).unwrap_or_default();
         let station_count = network.timetable.stations.len() as u32;
         let (rail, other): (Vec<_>, Vec<_>) = reached.iter().partition(|r| r.station < station_count);
@@ -482,6 +535,7 @@ async fn isochrone(
             extra_stops: other.iter().map(|r| r.station - station_count).collect(),
             extra_seconds: other.iter().map(|r| r.seconds).collect(),
             extra_transfers: other.iter().map(|r| r.transfers).collect(),
+            population,
         })
         .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
     })

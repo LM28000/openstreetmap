@@ -40,7 +40,7 @@ use anyhow::{Context, Result, bail};
 use tracing::{info, warn};
 
 use super::geom::Bounds;
-use super::popgrid::PopGrid;
+use super::popgrid::{PopGrid, StopPos};
 use super::proj::Crs;
 use super::{Cell, Dataset, Feature, Finalize, Generalizer, GridAggregator, Geometry, Value};
 
@@ -73,7 +73,13 @@ pub struct Population {
     grid_cells: Mutex<Vec<(u16, u16, f32)>>,
     /// La grille chargée, pour les isochrones (service).
     grid: RwLock<Option<Arc<PopGrid>>>,
+    /// Positions des arrêts des isochrones dans le repère de la grille : calculées une fois par version des horaires
+    /// (une projection par arrêt, ~40 000 arrêts : trop pour la refaire à chaque requête).
+    stops: Mutex<Option<StopsCache>>,
 }
+
+/// Positions pour les horaires `timetable_id` et les arrêts supplémentaires `extras` (version), s'ils sont pris en compte.
+type StopsCache = (u64, Option<String>, Arc<Vec<StopPos>>);
 
 /// Échantillon de valeurs (valeur, habitants) pour calculer les bornes des légendes, et totaux.
 #[derive(Default)]
@@ -101,12 +107,25 @@ mod raw {
 impl Population {
     pub fn new() -> Population {
         let url = std::env::var("INSEE_CARREAUX_URL").ok().filter(|u| !u.is_empty()).unwrap_or_else(|| DEFAULT_URL.to_string());
-        Population { url, samples: Mutex::new(Samples::default()), grid_cells: Mutex::new(Vec::with_capacity(2_320_000)), grid: RwLock::new(None) }
+        Population { url, samples: Mutex::new(Samples::default()), grid_cells: Mutex::new(Vec::with_capacity(2_320_000)), grid: RwLock::new(None), stops: Mutex::new(None) }
     }
 
     /// La grille de population des isochrones, une fois l'archive en service.
     pub fn grid(&self) -> Option<Arc<PopGrid>> {
         self.grid.read().expect("verrou de la grille").clone()
+    }
+
+    /// Positions des arrêts (gares d'abord, puis arrêts supplémentaires, comme les indices de RAPTOR), mises en cache.
+    pub fn stop_positions(&self, timetable_id: u64, extras: Option<&str>, build: impl FnOnce() -> Vec<StopPos>) -> Arc<Vec<StopPos>> {
+        let mut cache = self.stops.lock().expect("positions des arrêts");
+        if let Some((id, version, positions)) = cache.as_ref() {
+            if *id == timetable_id && version.as_deref() == extras {
+                return positions.clone();
+            }
+        }
+        let positions = Arc::new(build());
+        *cache = Some((timetable_id, extras.map(str::to_string), positions.clone()));
+        positions
     }
 
     fn grid_file(dir: &Path, version: &str) -> std::path::PathBuf {

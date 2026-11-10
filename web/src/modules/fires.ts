@@ -7,11 +7,11 @@
  * détection à l'instant t (on la voit apparaître en rejouant la semaine), la taille
  * sa puissance radiative.
  */
-import type { Color } from '@deck.gl/core';
-import { ScatterplotLayer } from '@deck.gl/layers';
+import { IconLayer, ScatterplotLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { formatDateTime } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
+import { HALO, ink, type IconSheet, KEY, packIcons, selectionRing, zoomRamp } from './symbols';
 
 interface Fire {
   lon: number;
@@ -39,11 +39,62 @@ const AGES = [
   { maxAge: 3 * 24 * HOUR, color: [177, 58, 31] as [number, number, number], css: '#b13a1f', label: '1 à 3 jours' },
   { maxAge: WINDOW_S, color: [232, 120, 75] as [number, number, number], css: '#e8784b', label: '3 à 7 jours' },
 ];
-/** Contour clair : reste visible sur la carte claire comme sous l'ombre de la nuit. */
-const RING: Color = [255, 255, 255, 200];
+/** À partir de ce zoom, un point chaud est une flamme ; avant, un point (halo clair, contour sombre). */
+const FLAME_MIN_ZOOM = 9;
 const CONFIDENCE: Record<string, string> = { l: 'faible', n: 'normale', h: 'élevée' };
 
 const ageClass = (age: number) => AGES.findIndex((a) => age <= a.maxAge);
+
+
+// --- Flamme (tracé de la planche des symboles, en u) ---
+
+const FLAME_SCALE = 1.3;
+const FLAME_W = Math.ceil((40 + 2 + 2 * 2.4 + 2) * FLAME_SCALE);
+const FLAME_H = Math.ceil((52 + 2 + 2 * 2.4 + 2) * FLAME_SCALE);
+const flameKey = (age: number) => `flamme:${age}`;
+
+let flames: IconSheet | undefined;
+/** Les flammes sont dessinées au premier usage (il faut un document pour créer un canvas). */
+function flameSheet(): IconSheet {
+  flames ??= packIcons(
+    AGES.map((age, index) => ({
+      key: flameKey(index),
+      width: FLAME_W,
+      height: FLAME_H,
+      draw(c: CanvasRenderingContext2D) {
+        c.translate(FLAME_W / 2, FLAME_H / 2 + 2 * FLAME_SCALE);
+        c.scale(FLAME_SCALE, FLAME_SCALE);
+        ink(
+          c,
+          (k) => {
+            k.beginPath();
+            k.moveTo(0, -28);
+            k.bezierCurveTo(16, -12, 20, 2, 16, 12);
+            k.bezierCurveTo(12, 24, -12, 24, -16, 12);
+            k.bezierCurveTo(-20, 0, -12, -6, -8, -14);
+            k.bezierCurveTo(-4, -4, 2, -6, 0, -28);
+          },
+          age.css,
+          { key: 2 },
+        );
+      },
+    })),
+  );
+  return flames;
+}
+
+/** Les détections visibles à cet instant : gardées d'une minute à l'autre pour que deck.gl ne recalcule rien. */
+let visibleCache: { data: FiresData; minute: number; fires: Fire[] } | undefined;
+function visibleFires(data: FiresData, t: number, minute: number): Fire[] {
+  if (visibleCache?.data !== data || visibleCache.minute !== minute) {
+    visibleCache = { data, minute, fires: data.fires.filter((f) => f.time <= t && t - f.time <= WINDOW_S) };
+  }
+  return visibleCache.fires;
+}
+
+/** Taille de la flamme en pixels : plus le feu est puissant, plus elle est grande. */
+const flameSize = (f: Fire) => Math.min(34, 15 + Math.sqrt(Math.max(f.frp, 0)) * 1.6);
+const dotRadius = (f: Fire) => Math.min(14, 3 + Math.sqrt(Math.max(f.frp, 0)) * 1.2);
 
 async function loadFires(signal: AbortSignal): Promise<FiresData> {
   const response = await fetch('/api/feux', { signal });
@@ -66,6 +117,7 @@ export const fires = defineModule<FiresData>({
   refreshIntervalMs: 30 * 60_000,
   timeStepMs: 60_000, // l'âge des détections change avec l'instant affiché
   followsTerrain: true,
+  zoomBreaks: [9, 9.5, 10, 10.5, 11, 11.5, 12],
 
   legend() {
     return [
@@ -84,52 +136,71 @@ export const fires = defineModule<FiresData>({
     return `${visible.length.toLocaleString('fr-FR')} détections sur 7 jours · ${recent} ces dernières 24 h`;
   },
 
-  deckLayers({ data, time, selection, terrain }) {
+  deckLayers({ data, time, selection, terrain, view }) {
     if (!data) return [];
     const t = time / 1000;
     const minute = Math.floor(t / 60);
     const chosen = selection ? data.byKey.get((selection as { key: string }).key) : undefined;
     const parameters = OVER_MAP;
     const onGround = (f: Fire): [number, number, number] => [f.lon, f.lat, terrain.elevation(f.lon, f.lat)];
+    const shown = visibleFires(data, t, minute);
+    const flaming = view.zoom >= FLAME_MIN_ZOOM;
+    const sheet = flaming ? flameSheet() : undefined;
+    const scale = zoomRamp(view.zoom, FLAME_MIN_ZOOM, 12, 0.8, 1);
     return [
-      new ScatterplotLayer<Fire>({
-        id: 'feux/detections',
-        data: data.fires,
-        getPosition: onGround,
-        radiusUnits: 'pixels',
-        getRadius: (f) => Math.min(14, 3 + Math.sqrt(Math.max(f.frp, 0)) * 1.2),
-        // Une détection n'apparaît qu'à partir de son heure, et disparaît après 7 jours.
-        getFillColor: (f) => {
-          const age = t - f.time;
-          if (age < 0 || age > WINDOW_S) return [0, 0, 0, 0];
-          return [...AGES[ageClass(age)]!.color, 235];
-        },
-        getLineColor: (f) => (f.time > t || t - f.time > WINDOW_S ? [0, 0, 0, 0] : RING),
-        stroked: true,
-        lineWidthUnits: 'pixels',
-        getLineWidth: 1,
-        billboard: true,
-        pickable: true,
-        autoHighlight: true,
-        highlightColor: [255, 255, 255, 140],
-        updateTriggers: { getFillColor: minute, getLineColor: minute, getPosition: terrain.version },
-        parameters,
-      }),
-      chosen &&
+      // De loin : un point par détection, à la couleur de son âge, avec le halo et le contour du trait commun.
+      !flaming &&
         new ScatterplotLayer<Fire>({
-          id: 'feux/choisi',
-          data: [chosen],
+          id: 'feux/halo',
+          data: shown,
           getPosition: onGround,
           radiusUnits: 'pixels',
-          getRadius: 14,
-          filled: false,
-          stroked: true,
-          getLineColor: [79, 140, 255],
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
+          getRadius: (f) => dotRadius(f) + 2.4,
+          getFillColor: HALO,
           billboard: true,
+          updateTriggers: { getPosition: terrain.version },
           parameters,
         }),
+      !flaming &&
+        new ScatterplotLayer<Fire>({
+          id: 'feux/detections',
+          data: shown,
+          getPosition: onGround,
+          radiusUnits: 'pixels',
+          getRadius: dotRadius,
+          getFillColor: (f) => [...AGES[ageClass(t - f.time)]!.color, 235],
+          stroked: true,
+          getLineColor: KEY,
+          lineWidthUnits: 'pixels',
+          getLineWidth: 1.2,
+          billboard: true,
+          pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 140],
+          updateTriggers: { getFillColor: minute, getPosition: terrain.version },
+          parameters,
+        }),
+      // De près : une flamme, de la couleur de l'âge et d'autant plus grande que le feu est puissant.
+      sheet &&
+        new IconLayer<Fire>({
+          id: 'feux/flammes',
+          data: shown,
+          iconAtlas: sheet.atlas,
+          iconMapping: sheet.mapping,
+          getIcon: (f) => flameKey(ageClass(t - f.time)),
+          getPosition: onGround,
+          sizeUnits: 'pixels',
+          getSize: flameSize,
+          sizeScale: scale,
+          billboard: true,
+          pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 140],
+          updateTriggers: { getIcon: minute, getPosition: terrain.version },
+          parameters,
+        }),
+      chosen &&
+        selectionRing('feux/choisi', [chosen], onGround, flaming ? flameSize(chosen) * 0.62 * scale : dotRadius(chosen) + 7, parameters),
     ];
   },
 

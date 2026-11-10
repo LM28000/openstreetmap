@@ -14,7 +14,8 @@
  */
 import type { Color } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
-import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { IconLayer, PathLayer, ScatterplotLayer, SolidPolygonLayer, TextLayer } from '@deck.gl/layers';
+import type { Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent, type InfoTable, type TerrainSampler } from '../core/module';
 import { formatTime } from '../ui/format';
 import {
@@ -30,6 +31,7 @@ import {
   trackOf,
 } from './railNetwork';
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
+import { HALO, KEY, selectionRing, zoomRamp } from './symbols';
 import { OVER_MAP } from '../map/parameters';
 
 // --- Réponse de l'API (voir server/src/api.rs) ---
@@ -77,7 +79,13 @@ interface Station {
   lon: number;
   lat: number;
   visits: Visit[];
+  /** Passages de trains par jour, estimés d'après la période chargée (voir `rankStations`). */
+  perDay: number;
+  /** Taille du symbole : 0 petite, 1 gare, 2 grande gare. */
+  size: StationSize;
 }
+
+type StationSize = 0 | 1 | 2;
 
 /** Le passage d'une circulation à une gare. */
 interface Visit {
@@ -134,6 +142,9 @@ interface Train extends Run {
 interface Head {
   train: Train;
   position: [number, number, number];
+  /** Le train est entre les sommets `vertex` et `vertex + 1` de son chemin, à la fraction `fraction`. */
+  vertex: number;
+  fraction: number;
   /** Cap, en degrés dans le sens inverse des aiguilles d'une montre depuis l'est (convention deck.gl). */
   angle: number;
   /** Retard en secondes à cet instant, `null` sans temps réel. */
@@ -156,6 +167,8 @@ interface TrainsData {
   base: number;
   realtimeAt: number | null;
   stations: Station[];
+  /** Les gares moyennes et grandes, qui ont un point central. */
+  centred: Station[];
   stationByKey: Map<string, Station>;
   trains: Train[];
   trainById: Map<string, Train>;
@@ -191,11 +204,11 @@ const FAMILY_STYLE: Record<Family, { color: [number, number, number]; css: strin
 const FAMILY_ORDER: Family[] = ['ter', 'grande-vitesse', 'intercites'];
 
 /** Le retard est une grandeur ordonnée : neutre à l'heure, puis un orange de plus en plus sombre. */
-const DELAY_STYLE: Record<DelayClass, { css: string; label: string }> = {
-  inconnu: { css: '#8a8f9c', label: 'Sans information temps réel' },
-  heure: { css: '#ffffff', label: 'À l’heure (moins de 5 min)' },
-  retard: { css: '#f0913a', label: '5 à 14 min de retard' },
-  'gros-retard': { css: '#a83a16', label: '15 min de retard ou plus' },
+const DELAY_STYLE: Record<DelayClass, { css: string; rgb: [number, number, number]; label: string }> = {
+  inconnu: { css: '#8a8f9c', rgb: [138, 143, 156], label: 'Sans information temps réel' },
+  heure: { css: '#ffffff', rgb: [255, 255, 255], label: 'À l’heure (moins de 5 min)' },
+  retard: { css: '#f0913a', rgb: [240, 145, 58], label: '5 à 14 min de retard' },
+  'gros-retard': { css: '#a83a16', rgb: [168, 58, 22], label: '15 min de retard ou plus' },
 };
 const DELAY_ORDER: DelayClass[] = ['heure', 'retard', 'gros-retard', 'inconnu'];
 
@@ -220,13 +233,15 @@ function trainAtlas(): TrainAtlas {
 }
 
 /**
- * Taille des trains : hauteur de l'icône en mètres, bornée en pixels pour rester
- * visible vu de loin et ne pas envahir l'écran vu de près.
+ * Taille des têtes de train : hauteur de l'icône (halo compris) en mètres, bornée en
+ * pixels. Le plancher monte avec le zoom : de loin les têtes restent petites pour ne pas
+ * se recouvrir, à partir du zoom 8,5 elles ont la taille de la planche des symboles.
  */
 const TRAIN_SIZE_M = 900;
-const TRAIN_MIN_PX = 7;
-const TRAIN_MAX_PX = 18;
+const TRAIN_MAX_PX = 16;
+const headMinPixels = (zoom: number) => zoomRamp(zoom, 5, 8.5, 9, TRAIN_MAX_PX);
 const TRAIL_GREY: Color = [230, 233, 240, 150];
+const TRAIL_WIDTH_PX = 4;
 /** Longueur de la traînée, en secondes de trajet. */
 const TRAIL_SECONDS = 15 * 60;
 /** Période chargée autour de l'instant affiché. */
@@ -466,7 +481,7 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
   const nextGeometryCache = new Map<string, TrainGeometry>();
   const geometries: TrainGeometry[] = [];
   let reused = 0;
-  const stations: Station[] = net.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [] }));
+  const stations: Station[] = net.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [], perDay: 0, size: 0 }));
   const trains: Train[] = [];
   let canceled = 0;
 
@@ -547,6 +562,8 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
     train.head = {
       train,
       position: [0, 0, 0],
+      vertex: 0,
+      fraction: 0,
       angle: 0,
       delay: null,
       delayClass: 'inconnu',
@@ -560,6 +577,7 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
   }
 
   geometryCache = nextGeometryCache;
+  rankStations(stations, json.from, json.to);
   if (import.meta.env.DEV) {
     const ms = Math.round(performance.now() - started);
     console.info(`[trains] ${trains.length} trains analysés en ${ms} ms (${reused} chemins réutilisés)`);
@@ -571,6 +589,7 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
     base,
     realtimeAt: json.realtime?.feedTimestamp ?? null,
     stations,
+    centred: stations.filter((s) => s.size > 0),
     stationByKey: new Map(stations.map((s) => [s.key, s])),
     trains,
     trainById: new Map(trains.map((t) => [t.id, t])),
@@ -712,6 +731,8 @@ function updateHead(train: Train, t: number): boolean {
   head.position[0] = train.lon[k]! + (train.lon[k + 1]! - train.lon[k]!) * f;
   head.position[1] = latitudeFromMercatorY(train.my[k]! + (train.my[k + 1]! - train.my[k]!) * f);
   head.position[2] = flat[k * 3 + 2]! + (flat[(k + 1) * 3 + 2]! - flat[k * 3 + 2]!) * f;
+  head.vertex = k;
+  head.fraction = f;
   head.angle = train.angles[k]!;
   // Vitesse estimée (profil de marche) et vitesse maximale de la ligne à cet endroit.
   head.speed = train.speeds[k]! + (train.speeds[k + 1]! - train.speeds[k]!) * f;
@@ -754,6 +775,483 @@ function delayText(delay: number | null): string {
 
 const hhmm = (seconds: number | undefined) => (seconds === undefined ? '?' : formatTime(seconds * 1000));
 const displayCategory = (category: string) => CATEGORY_NAMES[category] ?? category;
+
+// --- Taille des gares selon le trafic ---
+
+/** Trains par jour à partir desquels une gare passe de petite à moyenne, puis à grande. */
+const STATION_MEDIUM_PER_DAY = 20;
+const STATION_BIG_PER_DAY = 200;
+
+/**
+ * Part du trafic d'une journée type à chaque heure locale (en %), pour passer de
+ * quelques heures de circulation chargées à un nombre de trains par jour : à 8 h on voit
+ * beaucoup plus de passages qu'à 3 h, et la taille d'une gare ne doit pas dépendre de
+ * l'heure du chargement.
+ */
+const HOURLY_SHARE = [0.4, 0.2, 0.2, 0.3, 1.5, 4, 7, 8, 7, 5.5, 4.5, 4.5, 5, 5, 4.5, 5, 6, 7.5, 8, 6.5, 4.5, 3, 2, 1.2];
+const HOURLY_TOTAL = HOURLY_SHARE.reduce((total, v) => total + v, 0);
+const parisHour = new Intl.DateTimeFormat('fr-FR', { timeZone: 'Europe/Paris', hour: 'numeric', hourCycle: 'h23' });
+
+/** Fraction d'une journée de trafic couverte par la période [from, to] (secondes UTC). */
+function shareOfDay(from: number, to: number): number {
+  const step = 300;
+  let share = 0;
+  for (let s = from; s < to; s += step) {
+    share += (HOURLY_SHARE[Number.parseInt(parisHour.format(s * 1000), 10) % 24] ?? 0) * (step / 3600);
+  }
+  return share / HOURLY_TOTAL;
+}
+
+/** Estime les passages par jour de chaque gare, et en déduit la taille de son symbole. */
+function rankStations(stations: Station[], from: number, to: number): void {
+  // Plancher : une période de nuit ne compte que quelques trains, l'estimation serait du bruit.
+  const share = Math.max(0.06, shareOfDay(from, to));
+  for (const station of stations) {
+    let count = 0;
+    for (const { run, stop } of station.visits) {
+      if (run.canceled) continue;
+      const at = run.arr[stop] ?? run.dep[stop] ?? 0;
+      if (at >= from && at <= to) count++;
+    }
+    station.perDay = Math.round(count / share);
+    station.size = station.perDay >= STATION_BIG_PER_DAY ? 2 : station.perDay >= STATION_MEDIUM_PER_DAY ? 1 : 0;
+  }
+}
+
+/** Rayon (pixels) des trois tailles de gares, leur contour, et le rapport du point central. */
+const STATION_RADIUS_PX = [3.6, 5.8, 8.2] as const;
+const STATION_LINE_PX = [1.3, 1.6, 2] as const;
+const STATION_DOT_RATIO = 0.45;
+/** Épaisseur du halo clair autour du contour d'une gare. */
+const STATION_HALO_PX = 1.8;
+
+// --- Rames de près ---
+
+/**
+ * À partir de ce zoom, chaque train visible est dessiné voiture par voiture sur sa
+ * vraie longueur, le long de ses voies, à la place de sa tête. En dessous, un train de
+ * 200 m ne ferait que quelques pixels.
+ */
+const CARS_ZOOM = 13;
+/** Largeur d'une rame : exagérée à 11 pixels d'écran (un vrai train fait 3 m), sans descendre sous sa largeur réelle. */
+const CAR_WIDTH_PX = 11;
+const CAR_WIDTH_MIN_M = 3;
+/** Jour entre deux voitures, et entre deux rames accouplées (mètres). */
+const CAR_GAP_M = 1.1;
+const COUPLING_GAP_M = 1.5;
+/** Deux trains de même famille et de même terminus à moins de cette distance sont accouplés (mètres). */
+const COUPLING_DISTANCE_M = 30;
+const EARTH_RADIUS_M = 6_378_137;
+/** Taille d'un pixel d'écran au zoom 0, en mètres à l'équateur (tuiles de 512 pixels). */
+const METERS_PER_PIXEL_Z0 = (2 * Math.PI * EARTH_RADIUS_M) / 512;
+
+/** Contour d'un polygone : sommets [lon, lat, z]. */
+type Polygon = Array<[number, number, number]>;
+
+type CapKind = 'pointu' | 'rond' | 'carre';
+
+/** Composition d'un train : longueur de chaque voiture (mètres), forme du nez et de la queue. */
+interface Consist {
+  cars: readonly number[];
+  nose: CapKind;
+  tail: CapKind;
+}
+
+const repeat = (n: number, length: number) => Array<number>(n).fill(length);
+const CONSISTS = {
+  /** Rame TGV : deux motrices et huit remorques, 200 m. */
+  highSpeed: { cars: [22, ...repeat(8, 19), 22], nose: 'pointu', tail: 'pointu' },
+  /** Automotrice TER : quatre caisses, 80 m. */
+  regional: { cars: [21, 19, 19, 21], nose: 'rond', tail: 'rond' },
+  /** Tram-train : trois caisses courtes, 42 m. */
+  tramTrain: { cars: [14, 14, 14], nose: 'rond', tail: 'rond' },
+  /** Intercités : une locomotive et six voitures, 173 m. */
+  intercity: { cars: [17, ...repeat(6, 26)], nose: 'rond', tail: 'carre' },
+  /** Intercités de nuit : plus de voitures (couchettes, wagons-lits), 225 m. */
+  night: { cars: [17, ...repeat(8, 26)], nose: 'rond', tail: 'carre' },
+} satisfies Record<string, Consist>;
+
+function consistOf(train: Train): Consist {
+  if (train.family === 'grande-vitesse') return CONSISTS.highSpeed;
+  if (train.family === 'intercites') return train.category.includes('nuit') ? CONSISTS.night : CONSISTS.intercity;
+  return train.category === 'TramTrain' ? CONSISTS.tramTrain : CONSISTS.regional;
+}
+
+const sum = (values: readonly number[]) => values.reduce((total, v) => total + v, 0);
+
+/** Une rame dessinée : son chemin, ses voitures, ses extrémités. */
+interface Rame {
+  train: Train;
+  /** Mètres par « pixel » de largeur : une rame de 11 pixels de large mesure `11 × pixelM` mètres. */
+  pixelM: number;
+  color: [number, number, number];
+  /** Chemin de toute la rame (sommets lon, lat, z à plat). */
+  path: Float64Array;
+  /** Voitures : sommets à plat. */
+  cars: Float64Array[];
+  /** Polygones du nez et de la queue : contour clair, contour sombre, couleur. */
+  caps: Array<{ halo: Polygon; key: Polygon; fill: Polygon }>;
+}
+
+/** Voiture d'une rame, pour la couche des voitures. */
+interface CarPath {
+  rame: Rame;
+  path: Float64Array;
+}
+
+/** Polyligne du corps de la rame, de la tête vers l'arrière (tampon réutilisé d'une image à l'autre). */
+const body = { x: [] as number[], y: [] as number[], lat: [] as number[], z: [] as number[], d: [] as number[], n: 0 };
+
+function pushBody(x: number, y: number, lat: number, z: number, d: number): void {
+  const i = body.n++;
+  body.x[i] = x;
+  body.y[i] = y;
+  body.lat[i] = lat;
+  body.z[i] = z;
+  body.d[i] = d;
+}
+
+/**
+ * Remplit `body` : le chemin du train depuis sa tête jusqu'à `needM` mètres derrière,
+ * en suivant les sommets de la voie (donc les courbes et les aiguillages). Si le chemin
+ * connu s'arrête avant (le train vient de quitter son terminus), il se prolonge en ligne
+ * droite, dans l'axe du premier tronçon.
+ *
+ * Les distances se calculent dans le plan Web Mercator, comme l'affichage : un mètre
+ * y vaut 1 / (rayon de la Terre × cos latitude).
+ */
+function collectBody(train: Train, head: Head, needM: number, metersPerUnit: number): void {
+  body.n = 0;
+  const k = head.vertex;
+  const f = head.fraction;
+  const flat = train.flatPath;
+  let x = head.position[0] * DEG;
+  let y = train.my[k]! + (train.my[k + 1]! - train.my[k]!) * f;
+  let lat = head.position[1];
+  let z = head.position[2];
+  pushBody(x, y, lat, z, 0);
+  let d = 0;
+  // Le sommet k est derrière la tête, sauf si elle est exactement dessus.
+  for (let i = f > 0 ? k : k - 1; i >= 0 && d < needM; i--) {
+    const vx = train.lon[i]! * DEG;
+    const vy = train.my[i]!;
+    const length = Math.hypot(vx - x, vy - y) * metersPerUnit;
+    if (length < 1e-3) continue;
+    d += length;
+    x = vx;
+    y = vy;
+    lat = flat[i * 3 + 1]!;
+    z = flat[i * 3 + 2]!;
+    pushBody(x, y, lat, z, d);
+  }
+  if (d < needM) {
+    // Fin du chemin connu : prolongement droit, à l'opposé du sens de marche.
+    const angle = train.angles[0]! * DEG;
+    const units = (needM - d) / metersPerUnit;
+    const ex = x - Math.cos(angle) * units;
+    const ey = y - Math.sin(angle) * units;
+    pushBody(ex, ey, lat + ((ey - y) * Math.cos(lat * DEG)) / DEG, z, needM);
+  }
+}
+
+/** Point du corps à l'abscisse curviligne `s` (mètres) : écrit dans `out` [x, y, lat, z]. */
+function bodyAt(s: number, out: number[]): void {
+  let i = 0;
+  while (i + 2 < body.n && body.d[i + 1]! < s) i++;
+  const d0 = body.d[i]!;
+  const d1 = body.d[i + 1]!;
+  const t = d1 > d0 ? Math.min(1, Math.max(0, (s - d0) / (d1 - d0))) : 0;
+  out[0] = body.x[i]! + (body.x[i + 1]! - body.x[i]!) * t;
+  out[1] = body.y[i]! + (body.y[i + 1]! - body.y[i]!) * t;
+  out[2] = body.lat[i]! + (body.lat[i + 1]! - body.lat[i]!) * t;
+  out[3] = body.z[i]! + (body.z[i + 1]! - body.z[i]!) * t;
+}
+
+const scratchA = [0, 0, 0, 0];
+const scratchB = [0, 0, 0, 0];
+
+/** Ajoute à `out` les sommets (lon, lat, z) du corps entre les abscisses a et b. */
+function pushSlice(out: number[], a: number, b: number): void {
+  bodyAt(a, scratchA);
+  out.push(scratchA[0]! / DEG, scratchA[2]!, scratchA[3]!);
+  for (let i = 0; i < body.n; i++) {
+    const d = body.d[i]!;
+    if (d > a && d < b) out.push(body.x[i]! / DEG, body.lat[i]!, body.z[i]!);
+  }
+  bodyAt(b, scratchA);
+  out.push(scratchA[0]! / DEG, scratchA[2]!, scratchA[3]!);
+}
+
+/**
+ * Polygone d'une extrémité de rame : `p` est le bout du corps, `q` un point à l'intérieur.
+ * Les dimensions sont en mètres ; le tracé se fait dans le plan Mercator (qui conserve les
+ * angles) puis revient en longitude et latitude. Même forme que sur la planche : un nez
+ * pointu (grande vitesse), arrondi, ou presque carré.
+ */
+function capPolygon(
+  p: number[],
+  q: number[],
+  kind: CapKind,
+  halfWidth: number,
+  length: number,
+  overlap: number,
+  metersPerUnit: number,
+): Polygon {
+  let ux = p[0]! - q[0]!;
+  let uy = p[1]! - q[1]!;
+  const norm = Math.hypot(ux, uy) || 1;
+  ux /= norm;
+  uy /= norm;
+  const nx = -uy;
+  const ny = ux;
+  const unit = 1 / metersPerUnit;
+  const hw = halfWidth * unit;
+  const len = length * unit;
+  const back = overlap * unit;
+  const bend = kind === 'pointu' ? 0.7 : 1.25;
+  const tip = kind === 'pointu' ? 1 : 0.55;
+  const cosLat = Math.cos(p[2]! * DEG);
+  const px = p[0]!;
+  const py = p[1]!;
+  const out: Polygon = [];
+  const add = (x: number, y: number) => out.push([x / DEG, p[2]! + ((y - py) * cosLat) / DEG, p[3]!]);
+  add(px + nx * hw - ux * back, py + ny * hw - uy * back);
+  add(px + nx * hw, py + ny * hw);
+  // Deux courbes quadratiques : du flanc gauche à la pointe, puis de la pointe au flanc droit.
+  const steps = 6;
+  const quad = (ax: number, ay: number, cx: number, cy: number, bx: number, by: number) => {
+    for (let i = 1; i <= steps; i++) {
+      const t = i / steps;
+      const m = 1 - t;
+      add(m * m * ax + 2 * m * t * cx + t * t * bx, m * m * ay + 2 * m * t * cy + t * t * by);
+    }
+  };
+  const tx = px + ux * len * tip;
+  const ty = py + uy * len * tip;
+  quad(px + nx * hw, py + ny * hw, px + nx * hw + ux * len * bend, py + ny * hw + uy * len * bend, tx, ty);
+  quad(tx, ty, px - nx * hw + ux * len * bend, py - ny * hw + uy * len * bend, px - nx * hw, py - ny * hw);
+  add(px - nx * hw - ux * back, py - ny * hw - uy * back);
+  return out;
+}
+
+/** Largeur des traits d'une rame, en « pixels » (convertis en mètres par `rame.pixelM`). */
+const RAME_PX = {
+  select: CAR_WIDTH_PX + 13,
+  selectCore: CAR_WIDTH_PX + 9,
+  halo: CAR_WIDTH_PX + 4,
+  key: CAR_WIDTH_PX + 1.75,
+  car: CAR_WIDTH_PX,
+  shine: CAR_WIDTH_PX * 0.28,
+};
+
+/** Mètres par pixel d'écran au zoom donné, à la latitude donnée. */
+const metersPerPixel = (zoom: number, lat: number) => (METERS_PER_PIXEL_Z0 * Math.cos(lat * DEG)) / 2 ** zoom;
+
+/** Place des rames : décalage derrière la tête (mètres) et accouplement avec les rames précédentes. */
+interface Slot {
+  head: Head;
+  start: number;
+  /** Une rame accouplée devant la nôtre. */
+  hasLeader: boolean;
+  /** Une rame accouplée derrière la nôtre. */
+  hasFollower: boolean;
+}
+
+/**
+ * Deux trains de même famille et de même terminus au même endroit sont deux rames
+ * accouplées : la seconde est dessinée derrière la première.
+ */
+function placeSlots(heads: readonly Head[]): Slot[] {
+  const slots: Slot[] = [];
+  for (const head of heads) {
+    const { train } = head;
+    const lat = head.position[1];
+    const terminus = train.stations[train.stations.length - 1];
+    const slot: Slot = { head, start: 0, hasLeader: false, hasFollower: false };
+    for (const other of slots) {
+      const o = other.head.train;
+      if (o.family !== train.family || o.stations[o.stations.length - 1] !== terminus) continue;
+      const dx = (other.head.position[0] - head.position[0]) * Math.cos(lat * DEG) * 111_320;
+      const dy = (other.head.position[1] - head.position[1]) * 110_540;
+      if (Math.hypot(dx, dy) > COUPLING_DISTANCE_M) continue;
+      slot.start = Math.max(slot.start, other.start + sum(consistOf(o).cars) + COUPLING_GAP_M);
+      slot.hasLeader = true;
+      other.hasFollower = true;
+    }
+    slots.push(slot);
+  }
+  return slots;
+}
+
+/** Dessine les rames des trains visibles, voiture par voiture le long de leur chemin. */
+function buildRames(heads: readonly Head[], zoom: number, colorOf: (head: Head) => [number, number, number]): Rame[] {
+  const rames: Rame[] = [];
+  const values: number[] = [];
+  const spans: Array<{ rame: Rame; from: number; to: number; car: number | null }> = [];
+
+  for (const { head, start, hasLeader, hasFollower } of placeSlots(heads)) {
+    const { train } = head;
+    const consist = consistOf(train);
+    const lat = head.position[1];
+    const mpp = metersPerPixel(zoom, lat);
+    const metersPerUnit = EARTH_RADIUS_M * Math.cos(lat * DEG);
+    const pixelM = Math.max(CAR_WIDTH_MIN_M, CAR_WIDTH_PX * mpp) / CAR_WIDTH_PX;
+    const total = sum(consist.cars);
+
+    collectBody(train, head, start + total + 6, metersPerUnit);
+    const rame: Rame = { train, pixelM, color: colorOf(head), path: new Float64Array(0), cars: [], caps: [] };
+
+    // Chemin de la rame, puis chaque voiture ; un jour les sépare tant qu'elles mesurent plusieurs pixels.
+    const at = values.length;
+    pushSlice(values, start, start + total);
+    spans.push({ rame, from: at, to: values.length, car: null });
+    const gap = consist.cars[0]! / mpp >= 6 ? CAR_GAP_M : 0;
+    let s = start;
+    for (const length of consist.cars) {
+      const from = values.length;
+      pushSlice(values, s + gap / 2, s + length - gap / 2);
+      spans.push({ rame, from, to: values.length, car: rame.cars.length });
+      rame.cars.push(new Float64Array(0));
+      s += length;
+    }
+
+    // Nez et queue : le bout du corps et un point un peu à l'intérieur donnent la direction.
+    // Entre deux rames accouplées, les bouts sont plats pour qu'elles se touchent.
+    const inside = Math.min(Math.max(2, 3 * mpp), total / 4);
+    const ends: Array<[number, number, CapKind]> = [
+      [start, start + inside, hasLeader ? 'carre' : consist.nose],
+      [start + total, start + total - inside, hasFollower ? 'carre' : consist.tail],
+    ];
+    const width = CAR_WIDTH_PX * pixelM;
+    for (const [sp, sq, kind] of ends) {
+      bodyAt(sp, scratchA);
+      bodyAt(sq, scratchB);
+      const length = kind === 'pointu' ? width * 1.5 : kind === 'rond' ? width * 0.6 : width * 0.2;
+      const half = (CAR_WIDTH_PX / 2) * pixelM;
+      const outer = ((CAR_WIDTH_PX + 1.75) / 2) * pixelM;
+      rame.caps.push({
+        halo: capPolygon(scratchA, scratchB, kind, outer + 1.5 * pixelM, length + 1.5 * pixelM, pixelM, metersPerUnit),
+        key: capPolygon(scratchA, scratchB, kind, outer, length + 0.9 * pixelM, pixelM, metersPerUnit),
+        fill: capPolygon(scratchA, scratchB, kind, half, length, pixelM, metersPerUnit),
+      });
+    }
+    rames.push(rame);
+  }
+
+  // Les sommets de toutes les rames dans un seul tampon : chaque chemin en est une tranche.
+  const buffer = Float64Array.from(values);
+  for (const span of spans) {
+    const view = buffer.subarray(span.from, span.to);
+    if (span.car === null) span.rame.path = view;
+    else span.rame.cars[span.car] = view;
+  }
+  return rames;
+}
+
+/** Fenêtre de la carte, élargie de la longueur d'une rame : les trains hors de vue ne sont pas calculés. */
+let mapRef: MapLibreMap | undefined;
+const VIEW_PADDING_DEG = 0.012;
+
+function inView(head: Head, bounds: { west: number; east: number; south: number; north: number } | null): boolean {
+  if (!bounds) return true;
+  const [lon, lat] = head.position;
+  return lon >= bounds.west && lon <= bounds.east && lat >= bounds.south && lat <= bounds.north;
+}
+
+function viewBounds(): { west: number; east: number; south: number; north: number } | null {
+  if (!mapRef) return null;
+  const bounds = mapRef.getBounds();
+  return {
+    west: bounds.getWest() - VIEW_PADDING_DEG,
+    east: bounds.getEast() + VIEW_PADDING_DEG,
+    south: bounds.getSouth() - VIEW_PADDING_DEG,
+    north: bounds.getNorth() + VIEW_PADDING_DEG,
+  };
+}
+
+/** Couches des rames : halo, contour, voitures, reflets, extrémités (dans l'ordre de dessin). */
+function rameLayers(rames: readonly Rame[], chosen: Train | undefined, parameters: object) {
+  const cars: CarPath[] = rames.flatMap((rame) => rame.cars.map((path) => ({ rame, path })));
+  const chosenRame = chosen ? rames.filter((rame) => rame.train === chosen) : [];
+  const pathCommon = {
+    positionFormat: 'XYZ' as const,
+    _pathType: 'open' as const,
+    widthUnits: 'meters' as const,
+    jointRounded: true,
+    capRounded: false,
+    parameters,
+  };
+  const polygons = (id: string, pick: 'halo' | 'key' | 'fill', color: Color, pickable = false) =>
+    new SolidPolygonLayer<{ rame: Rame; polygon: Polygon }>({
+      id,
+      data: rames.flatMap((rame) => rame.caps.map((cap) => ({ rame, polygon: cap[pick] }))),
+      getPolygon: (d) => d.polygon,
+      getFillColor: pickable ? (d) => [...d.rame.color, 255] as Color : color,
+      filled: true,
+      extruded: false,
+      pickable,
+      parameters,
+    });
+  return [
+    // Sélection : un anneau blanc et sombre tout autour de la rame, comme pour les points.
+    chosenRame.length > 0 &&
+      new PathLayer<Rame>({
+        ...pathCommon,
+        id: 'trains/rames/choix-blanc',
+        data: chosenRame,
+        getPath: (d) => d.path,
+        getColor: [255, 255, 255, 245],
+        getWidth: (d) => RAME_PX.select * d.pixelM,
+        capRounded: true,
+      }),
+    chosenRame.length > 0 &&
+      new PathLayer<Rame>({
+        ...pathCommon,
+        id: 'trains/rames/choix-sombre',
+        data: chosenRame,
+        getPath: (d) => d.path,
+        getColor: KEY,
+        getWidth: (d) => RAME_PX.selectCore * d.pixelM,
+        capRounded: true,
+      }),
+    new PathLayer<Rame>({
+      ...pathCommon,
+      id: 'trains/rames/halo',
+      data: rames as Rame[],
+      getPath: (d) => d.path,
+      getColor: HALO,
+      getWidth: (d) => RAME_PX.halo * d.pixelM,
+    }),
+    polygons('trains/rames/halo-bouts', 'halo', HALO),
+    new PathLayer<Rame>({
+      ...pathCommon,
+      id: 'trains/rames/contour',
+      data: rames as Rame[],
+      getPath: (d) => d.path,
+      getColor: KEY,
+      getWidth: (d) => RAME_PX.key * d.pixelM,
+    }),
+    polygons('trains/rames/contour-bouts', 'key', KEY),
+    new PathLayer<CarPath>({
+      ...pathCommon,
+      id: 'trains/rames/voitures',
+      data: cars,
+      getPath: (d) => d.path,
+      getColor: (d) => [...d.rame.color, 255] as Color,
+      getWidth: (d) => RAME_PX.car * d.rame.pixelM,
+      pickable: true,
+    }),
+    new PathLayer<CarPath>({
+      ...pathCommon,
+      id: 'trains/rames/reflets',
+      data: cars,
+      getPath: (d) => d.path,
+      getColor: [255, 255, 255, 102],
+      getWidth: (d) => RAME_PX.shine * d.rame.pixelM,
+    }),
+    polygons('trains/rames/bouts', 'fill', KEY, true),
+  ];
+}
 
 // --- Traînées ---
 
@@ -875,7 +1373,6 @@ function trails(data: TrainsData, t: number, byDelay: boolean): TrailWindow['bin
 const STATION_MIN_ZOOM = 8.5;
 const BOARD_ROWS = 10;
 const RING: Color = [22, 26, 38, 220];
-const ACCENT: Color = [79, 140, 255];
 const PASSED_GREY: Color = [150, 156, 170, 235];
 
 /** Un arrêt du train sélectionné, avec son étiquette. */
@@ -1077,6 +1574,15 @@ export const trains = defineModule<TrainsData>({
   refreshIntervalMs: 60_000, // le temps réel SNCF change environ chaque minute
   timeStepMs: 0, // animé : les trains bougent à chaque image
   followsTerrain: true,
+  // Pas de couche native : on garde seulement la carte, pour ne calculer de près que les trains dans la vue.
+  native: {
+    add(map) {
+      mapRef = map;
+    },
+    remove() {
+      mapRef = undefined;
+    },
+  },
 
   settings: [
     {
@@ -1133,12 +1639,25 @@ export const trains = defineModule<TrainsData>({
     const parameters = OVER_MAP;
     const iconOf = (head: Head) =>
       byDelay ? delayIcon(FAMILY_STYLE[head.train.family].nose, head.delayClass) : familyIcon(head.train.family);
+    const colorOf = (head: Head) => (byDelay ? DELAY_STYLE[head.delayClass].rgb : FAMILY_STYLE[head.train.family].color);
+    const close = view.zoom >= CARS_ZOOM;
 
     const markers = chosenTrain ? stopMarkers(chosenTrain, data.pathVersion) : [];
     const passedStops = chosenTrain ? markers.filter((m) => (chosenTrain.dep[m.index] ?? 0) < t).length : 0;
     // Étiquettes : tous les arrêts vu de près, seulement départ, terminus et prochain arrêt vu de loin.
     const nextStop = chosenTrain?.head.nextStop ?? null;
     const labels = view.zoom >= 8 ? markers : markers.filter((_, i) => i === 0 || i === markers.length - 1 || i === nextStop);
+
+    // Gares : leur taille dit leur trafic, la grande a un anneau et un point central.
+    const stationScale = zoomRamp(view.zoom, STATION_MIN_ZOOM, 12, 0.75, 1);
+    const stationPosition = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
+    const stationRadius = (s: Station) => STATION_RADIUS_PX[s.size];
+
+    // De près, la rame entière à la place de la tête, pour les seuls trains dans la vue.
+    const bounds = close ? viewBounds() : null;
+    const rames = close ? buildRames(heads.filter((head) => inView(head, bounds)), view.zoom, colorOf) : [];
+    // De loin, l'anneau de sélection suit la taille de la tête.
+    const headPixels = Math.min(TRAIN_MAX_PX, Math.max(headMinPixels(view.zoom), TRAIN_SIZE_M / metersPerPixel(view.zoom, chosenTrain?.head.position[1] ?? 46)));
 
     return [
       new TripsLayer({
@@ -1151,7 +1670,7 @@ export const trains = defineModule<TrainsData>({
         trailLength: TRAIL_SECONDS,
         fadeTrail: true,
         widthUnits: 'pixels',
-        getWidth: 3,
+        getWidth: TRAIL_WIDTH_PX,
         capRounded: true,
         jointRounded: true,
         parameters,
@@ -1159,40 +1678,58 @@ export const trains = defineModule<TrainsData>({
       chosenTrain && routeLayers(chosenTrain, t, parameters),
       view.zoom >= STATION_MIN_ZOOM &&
         new ScatterplotLayer<Station>({
+          id: 'trains/gares-halo',
+          data: data.stations,
+          getPosition: stationPosition,
+          radiusUnits: 'pixels',
+          getRadius: (s) => stationRadius(s) + STATION_LINE_PX[s.size] / 2 + STATION_HALO_PX,
+          radiusScale: stationScale,
+          getFillColor: HALO,
+          billboard: true,
+          updateTriggers: { getPosition: terrain.version },
+          parameters,
+        }),
+      view.zoom >= STATION_MIN_ZOOM &&
+        new ScatterplotLayer<Station>({
           id: 'trains/gares',
           data: data.stations,
-          getPosition: (s) => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)],
-          radiusUnits: 'meters',
-          getRadius: 70,
-          radiusMinPixels: 3,
-          radiusMaxPixels: 7,
+          getPosition: stationPosition,
+          radiusUnits: 'pixels',
+          getRadius: stationRadius,
+          radiusScale: stationScale,
           getFillColor: [255, 255, 255],
           stroked: true,
-          getLineColor: RING,
+          getLineColor: KEY,
           lineWidthUnits: 'pixels',
-          getLineWidth: 1.5,
+          getLineWidth: (s) => STATION_LINE_PX[s.size],
           billboard: true,
           pickable: true,
           autoHighlight: true,
-          highlightColor: [79, 140, 255, 200],
+          highlightColor: [20, 26, 38, 150],
+          updateTriggers: { getPosition: terrain.version },
+          parameters,
+        }),
+      view.zoom >= STATION_MIN_ZOOM &&
+        new ScatterplotLayer<Station>({
+          id: 'trains/gares-centre',
+          data: data.centred,
+          getPosition: stationPosition,
+          radiusUnits: 'pixels',
+          getRadius: (s) => stationRadius(s) * STATION_DOT_RATIO,
+          radiusScale: stationScale,
+          getFillColor: KEY,
+          billboard: true,
           updateTriggers: { getPosition: terrain.version },
           parameters,
         }),
       chosenStation &&
-        new ScatterplotLayer<Station>({
-          id: 'trains/gare-choisie',
-          data: [chosenStation],
-          getPosition: (s) => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)],
-          radiusUnits: 'pixels',
-          getRadius: 11,
-          filled: false,
-          stroked: true,
-          getLineColor: ACCENT,
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
-          billboard: true,
+        selectionRing(
+          'trains/gare-choisie',
+          [chosenStation],
+          stationPosition,
+          (s) => (stationRadius(s) + 5) * stationScale + 2,
           parameters,
-        }),
+        ),
       chosenTrain &&
         new ScatterplotLayer<StopMarker>({
           id: 'trains/selection/arrets',
@@ -1210,43 +1747,38 @@ export const trains = defineModule<TrainsData>({
           updateTriggers: { getFillColor: passedStops },
           parameters,
         }),
-      new IconLayer<Head>({
-        id: 'trains/positions',
-        data: heads,
-        iconAtlas: icons.atlas,
-        iconMapping: icons.mapping,
-        getIcon: iconOf,
-        getPosition: (head) => head.position,
-        getAngle: (head) => head.angle,
-        // À plat sur la carte : le train tourne avec elle et suit son sens de marche.
-        billboard: false,
-        sizeUnits: 'meters',
-        getSize: TRAIN_SIZE_M,
-        sizeMinPixels: TRAIN_MIN_PX,
-        sizeMaxPixels: TRAIN_MAX_PX,
-        pickable: true,
-        autoHighlight: true,
-        highlightColor: [255, 255, 255, 110],
-        parameters,
-      }),
-      chosenTrain &&
-        isRunning(chosenTrain, t) &&
-        new IconLayer<Head>({
-          id: 'trains/selection/train',
-          data: [chosenTrain.head],
-          iconAtlas: icons.atlas,
-          iconMapping: icons.mapping,
-          getIcon: iconOf,
-          getPosition: (head) => head.position,
-          getAngle: (head) => head.angle,
-          billboard: false,
-          sizeUnits: 'meters',
-          getSize: TRAIN_SIZE_M * 1.6,
-          sizeMinPixels: TRAIN_MIN_PX * 1.7,
-          sizeMaxPixels: TRAIN_MAX_PX * 1.4,
-          pickable: true,
-          parameters,
-        }),
+      close
+        ? rameLayers(rames, chosenTrain, parameters)
+        : [
+            new IconLayer<Head>({
+              id: 'trains/positions',
+              data: heads,
+              iconAtlas: icons.atlas,
+              iconMapping: icons.mapping,
+              getIcon: iconOf,
+              getPosition: (head) => head.position,
+              getAngle: (head) => head.angle,
+              // À plat sur la carte : le train tourne avec elle et suit son sens de marche.
+              billboard: false,
+              sizeUnits: 'meters',
+              getSize: TRAIN_SIZE_M,
+              sizeMinPixels: headMinPixels(view.zoom),
+              sizeMaxPixels: TRAIN_MAX_PX,
+              pickable: true,
+              autoHighlight: true,
+              highlightColor: [255, 255, 255, 110],
+              parameters,
+            }),
+            chosenTrain &&
+              isRunning(chosenTrain, t) &&
+              selectionRing(
+                'trains/selection/tete',
+                [chosenTrain.head],
+                (head) => head.position,
+                headPixels * 0.95 + 2,
+                parameters,
+              ),
+          ],
       chosenTrain &&
         new TextLayer<StopMarker>({
           id: 'trains/selection/noms',
@@ -1270,8 +1802,10 @@ export const trains = defineModule<TrainsData>({
   },
 
   select(object) {
-    const picked = object as Partial<Head & StopMarker & Station>;
-    if (picked.train) return { type: 'train', id: picked.train.id } satisfies TrainsSelection;
+    const picked = object as Partial<Head & StopMarker & Station & { rame: Rame }>;
+    // Une tête, une voiture ou un bout de rame : le même train.
+    const train = picked.train ?? picked.rame?.train;
+    if (train) return { type: 'train', id: train.id } satisfies TrainsSelection;
     if (picked.station) return { type: 'gare', key: picked.station.key } satisfies TrainsSelection;
     if (typeof picked.key === 'string') return { type: 'gare', key: picked.key } satisfies TrainsSelection;
     return null;

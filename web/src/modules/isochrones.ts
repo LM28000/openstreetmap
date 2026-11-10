@@ -119,6 +119,8 @@ interface ApiIsochrone {
   extraStops: number[];
   extraSeconds: number[];
   extraTransfers: number[];
+  /** Habitants à portée des arrêts atteints (carreaux INSEE, voir `server/src/tiles/popgrid.rs`) ; `null` : grille pas prête. */
+  population: { total: number; bandMinutes: number; bands: number[] } | null;
 }
 
 /** Genre d'un arrêt supplémentaire (voir `server/src/multimodal.rs`). */
@@ -207,6 +209,8 @@ export interface IsochroneData {
   /** Le serveur a-t-il pris en compte les cars et Île-de-France demandés ? (Faux tant qu'ils se chargent.) */
   multimodal: boolean;
   realtime: boolean;
+  /** Habitants atteints dans la durée demandée, au total et par tranche de temps. */
+  population?: { total: number; bandMinutes: number; bands: number[] };
   grid?: Grid;
   /** Image de la zone déjà colorée pour une part de nuit (voir `native.update`). */
   rendered?: { night: number; url: string; coordinates: Coordinates };
@@ -314,7 +318,7 @@ async function loadIsochrone(signal: AbortSignal, time: number, settings: Readon
   const grid = buildGrid(origin ? [origin, ...reached, ...extraReached] : [...reached, ...extraReached], maxMinutes * 60);
   // « Multimodal » : on a demandé plus que des trains et le serveur l'a fait (il charge les cars et Île-de-France en tâche de fond).
   const multimodal = json.extras !== null;
-  return { query, network, extras, origin, reached, extraReached, byCode, multimodal, realtime: json.realtime, grid };
+  return { query, network, extras, origin, reached, extraReached, byCode, multimodal, realtime: json.realtime, population: json.population ?? undefined, grid };
 }
 
 // --- La zone lisse : transformée de distance sur une grille ---
@@ -452,6 +456,29 @@ const hhmm = (seconds: number) => formatTime(seconds * 1000);
 function limitLabel(minutes: number): string {
   if (minutes < 60) return `${minutes} min`;
   return minutes % 60 === 0 ? `${minutes / 60} h` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/** « 1,2 million d’habitants », « 227 000 habitants » : arrondi à ce que le calcul permet de dire (carreaux de 200 m, marche à vol d'oiseau). */
+export function formatInhabitants(n: number): string {
+  if (n >= 1e6) {
+    const millions = n / 1e6;
+    const text = millions.toLocaleString('fr-FR', { maximumFractionDigits: millions >= 10 ? 0 : 1 });
+    return `${text} million${millions >= 2 ? 's' : ''} d’habitants`;
+  }
+  const rounded = n >= 10_000 ? Math.round(n / 1000) * 1000 : Math.round(n / 100) * 100;
+  return `${rounded.toLocaleString('fr-FR')} habitant${rounded >= 2 ? 's' : ''}`;
+}
+
+/** Habitants atteints par tranche de temps de trajet, en chiffres simples : « 1 h à 1 h 30 : 125 000 · cumul 353 000 ». */
+function populationFields(population: NonNullable<IsochroneData['population']>): Array<[string, string]> {
+  const step = population.bandMinutes;
+  let cumulative = 0;
+  const round = (n: number) => (Math.round(n / (n >= 10_000 ? 1000 : 100)) * (n >= 10_000 ? 1000 : 100)).toLocaleString('fr-FR');
+  return population.bands.map((count, i): [string, string] => {
+    cumulative += count;
+    const label = i === 0 ? `Moins de ${limitLabel(step)}` : `${limitLabel(i * step)} à ${limitLabel((i + 1) * step)}`;
+    return [label, `${round(count)} · cumul ${round(cumulative)}`];
+  });
 }
 
 /** Dimanche de Pâques (algorithme de Meeus), pour les fériés mobiles. */
@@ -637,9 +664,12 @@ function describeOrigin(data: IsochroneData): InfoContent | null {
       ...(stops > 0 ? [{ value: stops.toLocaleString('fr-FR'), label: 'arrêts de car, métro…' }] : []),
       { value: formatDuration(Math.max(0, ...data.reached.map((s) => s.seconds), ...data.extraReached.map((s) => s.seconds))), label: 'la plus lointaine' },
     ],
+    fields: data.population ? populationFields(data.population) : undefined,
     note: [
       reducedServiceDay(data.query.departure) &&
         `${reducedServiceDay(data.query.departure)} : service réduit, environ deux fois moins de trains qu’un jour de semaine.`,
+      data.population &&
+        'Habitants : carreaux de 200 m (INSEE) à portée à pied d’un arrêt atteint dans la durée demandée (4,5 km/h, détour de 30 %, 1,2 km d’une gare, 1 km d’un car ou métro). Sans bus urbains ni vélo : un minimum.',
       'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle à 15 km/h (route ou vélo), chaque arrêt de car jusqu’à 15 km, et chaque station de métro ou de RER jusqu’à 2 km à pied.',
     ]
       .filter(Boolean)
@@ -849,7 +879,8 @@ export const isochrones = defineModule<IsochroneData>({
     const warning = reduced ? ` · ${reduced} : moins de trains` : '';
     const more = stops > 0 ? ` et ${stops.toLocaleString('fr-FR')} arrêt${stops > 1 ? 's' : ''}` : '';
     const loading = !data.multimodal && data.query.modes !== 'trains' ? ' · cars et Île-de-France en cours de chargement' : '';
-    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''}${more} en moins de ${limit}${warning}${loading}`;
+    const people = data.population ? ` · ${formatInhabitants(data.population.total)} à moins de ${limit}` : '';
+    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''}${more} en moins de ${limit}${people}${warning}${loading}`;
   },
 
   native: {

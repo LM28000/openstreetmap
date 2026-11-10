@@ -29,6 +29,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Lecture en flux des GTFS des réseaux (mêmes versions et fonctionnalités que gtfs-structures, déjà compilé).
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
+sevenz-rust2 = { version = "0.22.2", default-features = false }
 
 [profile.release]
 lto = "thin"

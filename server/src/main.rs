@@ -18,6 +18,8 @@
 //! - `HISTORIQUE_JOURS` (7) : durée de conservation des positions enregistrées, en jours (l'archive SNCF est gardée) ;
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
+//! - `TUILES_EFFACER_SOURCES` (aucune) : si définie, la source d'un jeu de tuiles est effacée après sa fabrication ;
+//! - `INSEE_CARREAUX_URL` (millésime 2019 de l'INSEE) : adresse du zip des carreaux de population ;
 //! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.
 
 mod accidents;
@@ -42,6 +44,7 @@ mod realtime;
 mod ships;
 mod satellites;
 mod state;
+mod tiles;
 mod timetable;
 mod tracks;
 mod transit;
@@ -83,6 +86,12 @@ impl Config {
 
 #[tokio::main]
 async fn main() -> Result<()> {
+    // Lancé avec `--construire-tuiles <jeu>`, le programme ne sert rien : il fabrique une archive de tuiles et s'arrête
+    // (c'est ainsi que le serveur la fait fabriquer, dans un processus à part : voir `tiles/serve.rs`).
+    let args: Vec<String> = std::env::args().collect();
+    if let Some(code) = tiles::serve::run_build_command(&args) {
+        std::process::exit(code);
+    }
     tracing_subscriber::fmt()
         .with_env_filter(EnvFilter::try_from_default_env().unwrap_or_else(|_| EnvFilter::new("info,tower_http=warn")))
         .init();
@@ -117,6 +126,7 @@ async fn main() -> Result<()> {
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
     tokio::spawn(air::poll_forever(http.clone(), state.clone()));
     tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    state.tiles().spawn(http.clone(), config.data_dir.clone());
     tokio::spawn(multimodal::load::load_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     // Historique des couches mobiles (avions, bateaux, transports) et des retards des trains : demande `ARCHIVE_DIR`.

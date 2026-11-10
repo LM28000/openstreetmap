@@ -50,6 +50,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['photos', 'monuments'],
   },
   {
+    // Les habitants (terre de Sienne) et jusqu'où l'on va en transports (framboise) : deux teintes sans lien avec les autres couches.
+    id: 'population',
+    label: 'Population',
+    description: 'habitants au carreau de 200 m, isochrones',
+    modules: ['population', 'isochrones'],
+  },
+  {
     id: 'ville',
     label: 'Ma ville',
     description: 'bus, vélos, trafic, bornes',

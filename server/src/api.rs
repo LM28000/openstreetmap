@@ -48,7 +48,7 @@ use crate::realtime::Realtime;
 use crate::state::AppState;
 
 /// Plage maximale d'une requête.
-const MAX_WINDOW_S: i64 = 12 * 3600;
+pub(crate) const MAX_WINDOW_S: i64 = 12 * 3600;
 /// Un train très en retard peut encore rouler longtemps après son arrivée prévue.
 const MAX_DELAY_S: i64 = 3 * 3600;
 
@@ -166,7 +166,7 @@ async fn trains(
     Ok(([(header::CONTENT_TYPE, "application/json")], body))
 }
 
-fn trains_json(network: &Network, realtime: Option<&Realtime>, from: i64, to: i64) -> serde_json::Result<Vec<u8>> {
+pub(crate) fn trains_json(network: &Network, realtime: Option<&Realtime>, from: i64, to: i64) -> serde_json::Result<Vec<u8>> {
     let timetable = &network.timetable;
     let tracks = network.tracks.as_deref();
     let mut categories = Indexer::default();

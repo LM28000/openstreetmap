@@ -78,6 +78,7 @@ server/                le serveur (Rust : tokio, axum)
   src/realtime.rs      retards en temps réel (GTFS-RT), archivage optionnel
   src/gtfs_rt.rs       le format protobuf du temps réel, déclaré à la main (pas besoin de protoc)
   src/rails.rs         voies OSM : téléchargement, graphe, plus court chemin (A*)
+  src/satellites.rs    éléments orbitaux CelesTrak (toutes les 3 h, gardés dans data/satellites/)
   src/dem.rs           altitudes du relief (tuiles Mapterhorn)
   src/tracks.rs        tracé réel de chaque tronçon entre deux gares, avec altitude
   src/api.rs           l'API HTTP
@@ -174,6 +175,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 - **MapLibre est volontairement en version 5.** deck.gl 9.4 utilise des éléments internes de MapLibre que la version 6 a renommés : la carte plante dès que le relief 3D est actif. Il faudra repasser en v6 quand deck.gl la prendra en charge.
 - **Le globe et le relief ne vont jamais ensemble.** MapLibre 5 ne gère pas complètement le relief sur le globe, et faire pivoter la carte peut alors la figer. Passer au globe coupe donc le relief. Le réactiver ramène la carte à plat.
 - **Des erreurs 404 sur `tiles.mapterhorn.com` apparaissent dans la console.** C'est normal : Mapterhorn ne fournit pas de tuiles au-dessus de l'océan.
+- **Satellites : CelesTrak n'autorise qu'un téléchargement par groupe et par renouvellement (toutes les 2 h)**, sous peine d'erreur 403 puis de blocage de l'adresse. Seul le serveur télécharge, au plus toutes les 3 h, et garde chaque réponse dans `data/satellites/` : relancer le serveur ne retélécharge rien. Les positions sont calculées par le navigateur (SGP4, `satellite.js`). Les icônes, étiquettes et lignes « instanciées » de deck.gl ne s'affichent pas sur le globe : la couche utilise des disques découpés en formes (`shapeExtension.ts`).
 - **Les dépendances doivent avoir plus de 24 h.** pnpm refuse sur cette machine les paquets publiés depuis moins de 24 heures. Il ne faut pas contourner cette règle par une exemption.
 
 ## Feuille de route

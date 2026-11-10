@@ -23,6 +23,8 @@ struct Inner {
     /// Réponses JSON prêtes à servir, préparées par les collecteurs.
     bikes: RwLock<Option<Arc<Vec<u8>>>>,
     fires: RwLock<Option<Arc<Vec<u8>>>>,
+    satellites: RwLock<Option<Arc<Vec<u8>>>>,
+    starlink: RwLock<Option<Arc<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -34,6 +36,8 @@ impl AppState {
             timetable_changed: Notify::new(),
             bikes: RwLock::new(None),
             fires: RwLock::new(None),
+            satellites: RwLock::new(None),
+            starlink: RwLock::new(None),
         }))
     }
 
@@ -83,5 +87,21 @@ impl AppState {
 
     pub fn set_fires(&self, body: Vec<u8>) {
         *self.0.fires.write().expect("verrou des feux") = Some(Arc::new(body));
+    }
+
+    pub fn satellites(&self) -> Option<Arc<Vec<u8>>> {
+        self.0.satellites.read().expect("verrou des satellites").clone()
+    }
+
+    pub fn set_satellites(&self, body: Vec<u8>) {
+        *self.0.satellites.write().expect("verrou des satellites") = Some(Arc::new(body));
+    }
+
+    pub fn starlink(&self) -> Option<Arc<Vec<u8>>> {
+        self.0.starlink.read().expect("verrou de Starlink").clone()
+    }
+
+    pub fn set_starlink(&self, body: Vec<u8>) {
+        *self.0.starlink.write().expect("verrou de Starlink") = Some(Arc::new(body));
     }
 }

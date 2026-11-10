@@ -3,6 +3,8 @@
 //! - `GET /api/health` : état du serveur (horaires chargés, fraîcheur du temps réel).
 //! - `GET /api/velos` : stations de vélos en libre-service de France, avec vélos et places disponibles.
 //! - `GET /api/feux` : feux détectés par satellite sur 7 jours.
+//! - `GET /api/satellites` : éléments orbitaux CelesTrak (stations, GPS, Galileo, météo, brillants) ;
+//!   `GET /api/satellites/starlink` : ceux de la constellation Starlink, à part car volumineux.
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
 //!   navigateur calcule lui-même la position de chaque train à chaque image.
@@ -35,6 +37,8 @@ pub fn router(state: AppState) -> Router {
         .route("/api/trains", get(trains))
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
+        .route("/api/satellites", get(|State(state): State<AppState>| async move { prepared(state.satellites(), "satellites") }))
+        .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

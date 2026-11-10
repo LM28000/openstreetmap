@@ -10,8 +10,10 @@
 
 :root {
   /* Jetons de l'interface (le chrome reste sombre quel que soit le thème de la carte). */
-  --ui-glass: rgba(14, 18, 27, 0.97);
-  --ui-glass-strong: rgba(11, 14, 21, 0.985);
+  /* Opaques : sans flou d'arrière-plan (coûteux), une transparence laisse seulement deviner
+     les libellés clairs de la carte derrière le texte. */
+  --ui-glass: rgb(14, 18, 27);
+  --ui-glass-strong: rgb(11, 14, 21);
   --ui-ink: #f1f4f9;
   --ui-muted: #9aa4b6;
   /* Un peu plus clair que la maquette (#6b7588) : il sert aussi à du texte, qui doit passer 4,5:1. */
@@ -706,6 +708,15 @@ p {
   margin: 0 -18px -18px;
   padding: 10px 18px 18px;
   background: var(--ui-glass-strong);
+}
+
+/* Fondu au-dessus des actions : la ligne du tableau qui passe dessous s'efface au lieu d'être coupée net. */
+.info .actions::before {
+  position: absolute;
+  inset: -22px 0 100% 0;
+  background: linear-gradient(to bottom, transparent, var(--ui-glass-strong));
+  content: '';
+  pointer-events: none;
 }
 
 .info__head {
@@ -1503,6 +1514,13 @@ p {
 .summary__text {
   display: grid;
   min-width: 0;
+}
+
+/* Sur la poignée, le type tient sur une ligne (« VIGILANCE MÉTÉO · JAUNE » passait à la ligne). */
+.summary__text .kicker {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .summary__title {

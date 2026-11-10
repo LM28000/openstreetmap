@@ -32,6 +32,9 @@ const PUBLISH_EVERY: Duration = Duration::from_secs(10);
 const FORGET_AFTER_S: i64 = 30 * 60;
 /// Sans aucun message pendant ce temps, la connexion est considérée comme morte.
 const SILENCE_TIMEOUT: Duration = Duration::from_secs(90);
+/// Connexion « à moitié » vivante : des fiches arrivent, mais plus aucune position (vu le
+/// 10 novembre 2026, une heure sans un navire après un redémarrage). On se reconnecte.
+const NO_POSITION_TIMEOUT: Duration = Duration::from_secs(180);
 const MAX_BACKOFF: Duration = Duration::from_secs(300);
 
 #[derive(Default, Clone)]
@@ -344,6 +347,7 @@ async fn stream(key: &str, ships: &mut HashMap<u32, Ship>, state: &AppState) -> 
     let mut publish = tokio::time::interval(PUBLISH_EVERY);
     let mut received = 0u64;
     let mut confirmed = false;
+    let mut last_position = tokio::time::Instant::now();
     loop {
         tokio::select! {
             frame = tokio::time::timeout(SILENCE_TIMEOUT, socket.next()) => {
@@ -371,11 +375,18 @@ async fn stream(key: &str, ships: &mut HashMap<u32, Ship>, state: &AppState) -> 
                     info!("bateaux : abonné au flux AIS");
                     continue;
                 }
+                let is_position = envelope.message_type.ends_with("PositionReport");
                 if apply(ships, envelope, Timestamp::now().as_second()) {
                     received += 1;
+                    if is_position {
+                        last_position = tokio::time::Instant::now();
+                    }
                 }
             }
             _ = publish.tick() => {
+                if last_position.elapsed() > NO_POSITION_TIMEOUT {
+                    bail!("aucune position reçue depuis {} s", NO_POSITION_TIMEOUT.as_secs());
+                }
                 let now = Timestamp::now().as_second();
                 ships.retain(|_, s| s.at == 0 || now - s.at <= FORGET_AFTER_S);
                 // Une fiche reçue sans jamais de position finit aussi par être oubliée.

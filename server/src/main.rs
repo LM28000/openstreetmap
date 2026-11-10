@@ -18,6 +18,7 @@ mod bikes;
 mod dem;
 mod fires;
 mod gtfs_rt;
+mod irve;
 mod network;
 mod planes;
 mod rails;
@@ -27,6 +28,9 @@ mod satellites;
 mod state;
 mod timetable;
 mod tracks;
+mod traffic;
+mod traffic_state;
+mod vigilance;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -81,6 +85,10 @@ async fn main() -> Result<()> {
     tokio::spawn(planes::poll_forever(http.clone(), state.clone()));
     tokio::spawn(ships::poll_forever(state.clone()));
     tokio::spawn(satellites::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(irve::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
 
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;

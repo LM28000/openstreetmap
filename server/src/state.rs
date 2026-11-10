@@ -29,6 +29,11 @@ struct Inner {
     ships: RwLock<Option<Bytes>>,
     satellites: RwLock<Option<Bytes>>,
     starlink: RwLock<Option<Bytes>>,
+    /// Couches rapides : bornes de recharge, trafic (événements, état des routes), vigilance météo.
+    irve: RwLock<Option<Bytes>>,
+    traffic: RwLock<Option<Bytes>>,
+    traffic_state: RwLock<Option<Bytes>>,
+    vigilance: RwLock<Option<Bytes>>,
 }
 
 impl AppState {
@@ -43,6 +48,10 @@ impl AppState {
             ships: RwLock::new(None),
             satellites: RwLock::new(None),
             starlink: RwLock::new(None),
+            irve: RwLock::new(None),
+            traffic: RwLock::new(None),
+            traffic_state: RwLock::new(None),
+            vigilance: RwLock::new(None),
         }))
     }
 
@@ -133,5 +142,37 @@ impl AppState {
 
     pub fn set_starlink(&self, body: Vec<u8>) {
         *self.0.starlink.write().expect("verrou de Starlink") = Some(Bytes::from(body));
+    }
+
+    pub fn irve(&self) -> Option<Bytes> {
+        self.0.irve.read().expect("verrou des bornes").clone()
+    }
+
+    pub fn set_irve(&self, body: Vec<u8>) {
+        *self.0.irve.write().expect("verrou des bornes") = Some(Bytes::from(body));
+    }
+
+    pub fn traffic(&self) -> Option<Bytes> {
+        self.0.traffic.read().expect("verrou du trafic").clone()
+    }
+
+    pub fn set_traffic(&self, body: Vec<u8>) {
+        *self.0.traffic.write().expect("verrou du trafic") = Some(Bytes::from(body));
+    }
+
+    pub fn traffic_state(&self) -> Option<Bytes> {
+        self.0.traffic_state.read().expect("verrou de l'état du trafic").clone()
+    }
+
+    pub fn set_traffic_state(&self, body: Vec<u8>) {
+        *self.0.traffic_state.write().expect("verrou de l'état du trafic") = Some(Bytes::from(body));
+    }
+
+    pub fn vigilance(&self) -> Option<Bytes> {
+        self.0.vigilance.read().expect("verrou de la vigilance").clone()
+    }
+
+    pub fn set_vigilance(&self, body: Vec<u8>) {
+        *self.0.vigilance.write().expect("verrou de la vigilance") = Some(Bytes::from(body));
     }
 }

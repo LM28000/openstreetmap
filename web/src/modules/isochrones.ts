@@ -333,6 +333,48 @@ function limitLabel(minutes: number): string {
   return minutes % 60 === 0 ? `${minutes / 60} h` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
 }
 
+/** Dimanche de Pâques (algorithme de Meeus), pour les fériés mobiles. */
+function easter(year: number): Date {
+  const a = year % 19;
+  const b = Math.floor(year / 100);
+  const c = year % 100;
+  const d = Math.floor(b / 4);
+  const e = b % 4;
+  const f = Math.floor((b + 8) / 25);
+  const g = Math.floor((b - f + 1) / 3);
+  const h = (19 * a + b - d - g + 15) % 30;
+  const i = Math.floor(c / 4);
+  const k = c % 4;
+  const l = (32 + 2 * e + 2 * i - h - k) % 7;
+  const m = Math.floor((a + 11 * h + 22 * l) / 451);
+  const month = Math.floor((h + l - 7 * m + 114) / 31);
+  const day = ((h + l - 7 * m + 114) % 31) + 1;
+  return new Date(year, month - 1, day);
+}
+
+/**
+ * Jour à service réduit pour un départ (secondes UTC) : jour férié en France ou dimanche. Les trains
+ * y sont deux fois moins nombreux (le 11 novembre 2026 : 5 900 courses contre 11 000 un jeudi),
+ * ce qui change beaucoup la zone atteinte : on le dit plutôt que de laisser croire à un manque de données.
+ */
+function reducedServiceDay(departure: number): string | null {
+  const date = new Date(departure * 1000);
+  const y = date.getFullYear();
+  const key = `${date.getMonth() + 1}-${date.getDate()}`;
+  const fixed: Record<string, string> = {
+    '1-1': 'Jour de l’an', '5-1': 'Fête du travail', '5-8': 'Victoire 1945', '7-14': 'Fête nationale',
+    '8-15': 'Assomption', '11-1': 'Toussaint', '11-11': 'Armistice', '12-25': 'Noël',
+  };
+  if (fixed[key]) return `${fixed[key]}, jour férié`;
+  const e = easter(y);
+  const shifted = (days: number) => new Date(y, e.getMonth(), e.getDate() + days);
+  for (const [days, name] of [[1, 'Lundi de Pâques'], [39, 'Ascension'], [50, 'Lundi de Pentecôte']] as const) {
+    const d = shifted(days);
+    if (d.getMonth() === date.getMonth() && d.getDate() === date.getDate()) return `${name}, jour férié`;
+  }
+  return date.getDay() === 0 ? 'Dimanche' : null;
+}
+
 /** Bornes et pas du curseur de durée (minutes). */
 const DURATION_RANGE = { min: 30, max: 480, step: 15 };
 
@@ -436,7 +478,13 @@ function describeOrigin(data: IsochroneData): InfoContent | null {
       { value: String(inside), label: 'gares atteintes' },
       { value: formatDuration(Math.max(0, ...data.reached.map((s) => s.seconds))), label: 'la plus lointaine' },
     ],
-    note: 'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle, à 15 km/h (route ou vélo).',
+    note: [
+      reducedServiceDay(data.query.departure) &&
+        `${reducedServiceDay(data.query.departure)} : service réduit, environ deux fois moins de trains qu’un jour de semaine.`,
+      'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle, à 15 km/h (route ou vélo).',
+    ]
+      .filter(Boolean)
+      .join(' '),
     // La durée se règle aussi d'ici, là où l'on regarde (le curseur complet est dans les réglages de la couche).
     actions: [
       { label: '− 30 min', onClick: () => nudgeDuration(data.query.maxMinutes, -30) },
@@ -574,7 +622,9 @@ export const isochrones = defineModule<IsochroneData>({
     if (!data?.origin || data.query.code !== originCode) return 'calcul en cours…';
     const n = data.reached.length;
     const limit = limitLabel(data.query.maxMinutes);
-    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''} en moins de ${limit}`;
+    const reduced = reducedServiceDay(data.query.departure);
+    const warning = reduced ? ` · ${reduced} : moins de trains` : '';
+    return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''} en moins de ${limit}${warning}`;
   },
 
   native: {

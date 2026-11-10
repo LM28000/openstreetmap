@@ -36,8 +36,25 @@ import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
 import { estimatedStatus, measuredStatus } from '../core/infoStatus';
 import { declutter, halfZoomBreaks } from '../map/declutter';
-import { CELL_HEIGHT, CELL_METERS, bubbleIcon, buildTransitAtlas, estimatedLegendIcon, legendIcon, lengthShare, lengthUnits, type Kind, type TransitAtlas } from './transitIcons';
+import {
+  CELL_HEIGHT,
+  CELL_METERS,
+  FOOT_CELL_METERS,
+  bubbleIcon,
+  buildFootprintAtlas,
+  buildTransitAtlas,
+  estimatedLegendIcon,
+  legendIcon,
+  lengthShare,
+  lengthUnits,
+  KINDS,
+  type Kind,
+  type TransitAtlas,
+} from './transitIcons';
 import { OVER_MAP } from '../map/parameters';
+import { meshLayer, RENDER_SETTING, wants3d } from '../models/meshLayer';
+import { orientation } from '../models/mesh';
+import { TRANSIT_LENGTH, transitMeshes } from '../models/transit';
 
 interface ApiLine {
   network: number;
@@ -164,6 +181,19 @@ export type TransitSelection = { type: 'vehicle'; key: string } | { type: 'netwo
 const VEHICLES_FROM_ZOOM = 9;
 /** À partir de ce zoom : le nom court de la ligne à côté de chaque véhicule. */
 const LABELS_FROM_ZOOM = 13;
+/**
+ * Maquettes 3D (réglage « Rendu ») à partir de ce zoom ; en dessous, les silhouettes à plat : au zoom 14
+ * un bus de 12 m fait moins de deux pixels : il faudrait l'agrandir de dix fois (une rame de métro de 40 m ferait alors 400 m).
+ */
+const MESH_FROM_ZOOM = 15;
+/** Hauteur (m) de la maquette au-dessus du relief CPU : les roues ne doivent pas s'enfoncer dans le relief rendu (maillage plus grossier). */
+const MESH_LIFT_M = 0.7;
+/** Position estimée en 3D : la maquette est translucide (alpha sur 255), posée sur une empreinte pointillée. */
+const GHOST_ALPHA = 125;
+const FOOTPRINT_DAY: Color = [22, 26, 38, 235];
+const FOOTPRINT_NIGHT: Color = [255, 255, 255, 235];
+/** Les positions sont à 4 m au-dessus du relief (pour les icônes à plat) : la maquette retranche cette hauteur. */
+const ICON_LIFT_M = 4;
 const LABEL_BOX_PX = { width: 46, height: 24 };
 const NETWORK_LABEL_BOX_PX = { width: 120, height: 20 };
 const NETWORK_LABEL_FROM_ZOOM = 4.5;
@@ -218,6 +248,23 @@ const LICENCES: Record<string, string> = {
   'fr-lo': 'Licence Ouverte',
   'odc-odbl': 'ODbL',
 };
+
+let footprintCache: TransitAtlas | undefined;
+function footprints(): TransitAtlas {
+  footprintCache ??= buildFootprintAtlas(TRANSIT_LENGTH);
+  return footprintCache;
+}
+
+let kindCache: { data: TransitData; byKind: Record<Kind, Vehicle[]>; estimated: Vehicle[] } | undefined;
+/** Les véhicules de chaque mode (une couche de maquettes par mode), recalculés à chaque chargement seulement. */
+function byKind(data: TransitData): { byKind: Record<Kind, Vehicle[]>; estimated: Vehicle[] } {
+  if (kindCache?.data !== data) {
+    const byKind: Record<Kind, Vehicle[]> = { bus: [], tram: [], metro: [], other: [] };
+    for (const v of data.vehicles) byKind[v.line.kind].push(v);
+    kindCache = { data, byKind, estimated: data.vehicles.filter((v) => v.estimate) };
+  }
+  return kindCache;
+}
 
 let atlasCache: TransitAtlas | undefined;
 function atlas(): TransitAtlas {
@@ -436,7 +483,7 @@ function place(data: TransitData, time: number, terrain: { elevation(lon: number
       v.position[1] = v.lat;
     }
     if (needsGround) {
-      v.position[2] = terrain.elevation(v.position[0], v.position[1]) + 4;
+      v.position[2] = terrain.elevation(v.position[0], v.position[1]) + ICON_LIFT_M;
       v.groundVersion = terrain.version;
     }
     moved = true;
@@ -452,6 +499,11 @@ function place(data: TransitData, time: number, terrain: { elevation(lon: number
 function glideStepMs(zoom: number): number {
   const metersPerPixel = (156_543 * Math.cos((46.5 * Math.PI) / 180)) / 2 ** zoom;
   return Math.min(Math.max((1.5 * metersPerPixel * 1000) / 17, 500), 2000);
+}
+
+/** Seuils tous les quarts de zoom : la taille des maquettes suit l'échelle (agrandissement minimal en pixels), qui n'est recalculée qu'à ces seuils. */
+function quarterZoomBreaks(from: number): number[] {
+  return Array.from({ length: Math.round((18 - from) * 4) + 1 }, (_, i) => from + i / 4);
 }
 
 const nf = (n: number, digits = 0) => n.toLocaleString('fr-FR', { maximumFractionDigits: digits });
@@ -542,8 +594,9 @@ function busMinPx(zoom: number): number {
   return 18;
 }
 
-/** Longueur minimale à l'écran d'un véhicule de ce mode (pixels). */
-const minLengthPx = (kind: Kind, zoom: number) => (busMinPx(zoom) * lengthUnits(kind)) / lengthUnits('bus');
+/** Longueur minimale à l'écran d'un véhicule de ce mode (pixels) ; `real` : d'après les longueurs des maquettes 3D, sinon des silhouettes. */
+const minLengthPx = (kind: Kind, zoom: number, real = false) =>
+  real ? (busMinPx(zoom) * TRANSIT_LENGTH[kind]) / TRANSIT_LENGTH.bus : (busMinPx(zoom) * lengthUnits(kind)) / lengthUnits('bus');
 
 export const transit = defineModule<TransitData>({
   id: 'transports',
@@ -555,8 +608,9 @@ export const transit = defineModule<TransitData>({
     'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche). Positions estimées par la carte d’après ces horaires',
   refreshIntervalMs: 30_000,
   timeStepMs: (view) => glideStepMs(view.zoom),
-  zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), 11, ...halfZoomBreaks(LABELS_FROM_ZOOM)],
+  zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), 11, ...halfZoomBreaks(LABELS_FROM_ZOOM), ...quarterZoomBreaks(MESH_FROM_ZOOM)].sort((a, b) => a - b),
   followsTerrain: true,
+  settings: [RENDER_SETTING],
 
   legend(): LegendItem[] {
     return [
@@ -568,9 +622,10 @@ export const transit = defineModule<TransitData>({
       {
         color: 'transparent',
         icon: estimatedLegendIcon('bus', MODE_COLORS.bus),
-        label: 'Contour pointillé : position estimée d’après les horaires du réseau, qui ne publie pas ses positions (mêmes silhouettes et mêmes couleurs)',
+        label:
+          'Contour pointillé : position estimée d’après les horaires du réseau, qui ne publie pas ses positions (mêmes silhouettes et mêmes couleurs). En maquette 3D : véhicule translucide sur une empreinte pointillée',
       },
-      { color: 'transparent', label: 'Le véhicule pointe dans le sens de sa marche ; de près, il a sa longueur réelle. Le numéro de la ligne s’affiche à côté, dès le zoom 13.' },
+      { color: 'transparent', label: 'Dès le zoom 15, réglage « Rendu » : maquettes 3D de taille réelle (bus de 12 m, tramway de 34 m, rame de métro de 40 m) ou silhouettes à plat. Le véhicule pointe dans le sens de sa marche ; de près, il a sa longueur réelle. Le numéro de la ligne s’affiche à côté, dès le zoom 13.' },
       { color: 'transparent', icon: bubbleIcon(), label: 'Vue d’ensemble : un rond par réseau, plus gros avec le nombre de véhicules' },
       { color: 'transparent', label: 'La couleur est celle de la ligne quand le réseau la donne ; sinon celle du mode (ci-dessus).' },
     ];
@@ -590,7 +645,7 @@ export const transit = defineModule<TransitData>({
     return `${nf(n)} véhicule${n > 1 ? 's' : ''} sur ${nf(m)} réseau${m > 1 ? 'x' : ''}${estimated}${stale}`;
   },
 
-  deckLayers({ data, time, terrain, selection, view }) {
+  deckLayers({ data, time, terrain, selection, view, settings, night }) {
     if (!data || !isLive(time)) return [];
     const parameters = OVER_MAP;
     const chosen = selection as TransitSelection | null;
@@ -694,10 +749,72 @@ export const transit = defineModule<TransitData>({
       parameters,
     };
     const moving = { getPosition: [data.motion, terrain.version], getAngle: data.motion };
+    const models = wants3d(settings) && view.zoom >= MESH_FROM_ZOOM;
+    // Maquettes : taille réelle de près ; de loin, la même longueur minimale à l'écran que les silhouettes.
+    const metersPerPixel = (lat: number) => (156_543 * Math.cos((lat * Math.PI) / 180)) / 2 ** view.zoom;
+    const grow = (v: Vehicle) => {
+      const length = TRANSIT_LENGTH[v.line.kind];
+      return Math.max(1, minLengthPx(v.line.kind, view.zoom, true) / (length / metersPerPixel(v.position[1])));
+    };
+    const sizeTrigger = view.zoom.toFixed(2);
+    const meshes = models ? transitMeshes() : undefined;
+    const kinds = models ? byKind(data) : undefined;
+    const footIcons = models ? footprints() : undefined;
+    const ghost = (v: Vehicle): Color => (v.estimate ? [v.fill[0]!, v.fill[1]!, v.fill[2]!, GHOST_ALPHA] : v.fill);
     // Distance de l'étiquette au véhicule : au-delà de sa demi-longueur (à ce niveau de zoom).
     const meters = (156_543 * Math.cos((46.5 * Math.PI) / 180)) / 2 ** (Math.floor(view.zoom * 2) / 2) / 2;
-    const badgeOffset = Math.max(minLengthPx('bus', view.zoom) * 0.5, (CELL_METERS * lengthShare('bus') * 0.5) / meters) + 6;
+    const badgeOffset = models
+      ? Math.max(minLengthPx('bus', view.zoom, true) * 0.5, (TRANSIT_LENGTH.bus * 0.5) / meters) + 6
+      : Math.max(minLengthPx('bus', view.zoom) * 0.5, (CELL_METERS * lengthShare('bus') * 0.5) / meters) + 6;
     return [
+      // Position estimée en 3D : une empreinte pointillée au sol, sous la maquette translucide.
+      models &&
+        footIcons &&
+        new IconLayer<Vehicle>({
+          id: 'transports/empreintes',
+          data: kinds?.estimated ?? [],
+          iconAtlas: footIcons.atlas,
+          iconMapping: footIcons.mapping,
+          getIcon: (v) => v.line.kind,
+          getPosition: (v) => [v.position[0], v.position[1], v.position[2] - ICON_LIFT_M + MESH_LIFT_M * grow(v) * 0.5],
+          getAngle: (v) => -v.bearing,
+          // Trait sombre sur le fond clair du jour, clair sur le fond sombre de la nuit.
+          getColor: night > 0.5 ? FOOTPRINT_NIGHT : FOOTPRINT_DAY,
+          getSize: (v) => FOOT_CELL_METERS * grow(v),
+          sizeUnits: 'meters',
+          sizeMinPixels: 0,
+          sizeMaxPixels: 20_000,
+          billboard: false,
+          parameters: { depthCompare: 'less-equal', depthWriteEnabled: false, cullMode: 'none' },
+          updateTriggers: { getPosition: [data.motion, terrain.version, sizeTrigger], getAngle: data.motion, getSize: sizeTrigger },
+        }),
+      ...(meshes && kinds
+        ? KINDS.map((kind) =>
+            meshLayer<Vehicle>({
+              id: `transports/maquettes/${kind}`,
+              data: kinds.byKind[kind],
+              mesh: meshes[kind],
+              getPosition: (v) => v.position,
+              getOrientation: (v) => orientation(v.bearing),
+              getScale: (v) => {
+                const g = grow(v);
+                return [g, g, g];
+              },
+              // La position est à ICON_LIFT_M du relief (icônes à plat) : on la ramène à la hauteur voulue, qui grandit avec la maquette.
+              getTranslation: (v) => [0, 0, MESH_LIFT_M * grow(v) - ICON_LIFT_M],
+              getColor: ghost,
+              pickable: true,
+              updateTriggers: {
+                getPosition: [data.motion, terrain.version],
+                getOrientation: data.motion,
+                getScale: sizeTrigger,
+                getTranslation: sizeTrigger,
+                getColor: data.collectedAt,
+              },
+            }),
+          )
+        : []),
+      !models &&
       new IconLayer<Vehicle>({
         ...common,
         id: 'transports/contours',
@@ -706,6 +823,7 @@ export const transit = defineModule<TransitData>({
         getColor: (v) => v.halo,
         updateTriggers: moving,
       }),
+      !models &&
       new IconLayer<Vehicle>({
         ...common,
         id: 'transports/vehicules',
@@ -722,8 +840,8 @@ export const transit = defineModule<TransitData>({
                 data: [picked],
                 getPosition: (v) => v.position,
                 radiusUnits: 'meters',
-                getRadius: CELL_METERS * lengthShare(picked.line.kind) * 0.6,
-                radiusMinPixels: minLengthPx(picked.line.kind, view.zoom) * 0.6 + 4,
+                getRadius: models ? TRANSIT_LENGTH[picked.line.kind] * 0.6 : CELL_METERS * lengthShare(picked.line.kind) * 0.6,
+                radiusMinPixels: minLengthPx(picked.line.kind, view.zoom, models) * 0.6 + 4,
                 filled: false,
                 stroked: true,
                 getLineColor: color,

@@ -21,7 +21,11 @@ import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { measuredStatus } from '../core/infoStatus';
 import { OVER_MAP } from '../map/parameters';
+import { orientation } from '../models/mesh';
+import { meshLayer, RENDER_SETTING, wants3d } from '../models/meshLayer';
+import { modelOf, scaleOf, shipMeshes, SHIP_MODELS, type ShipModel } from '../models/ships';
 import {
+  BEAM_RATIO,
   CELL,
   HULL_LENGTH,
   NOMINAL_LENGTH,
@@ -93,6 +97,12 @@ export interface Ship extends ApiShip {
   wakeIcon?: string;
   /** Position extrapolée, mise à jour à chaque pas pour les navires en route. */
   position: [number, number, number];
+  /** Maquette 3D, et son échelle [longueur, largeur, hauteur] pour les cotes de l'AIS. */
+  model: ShipModel;
+  scale: [number, number, number];
+  /** Altitude de l'eau à cet endroit (m, 0 au large ; fleuves et bassins) : calculée une fois par version du relief. */
+  groundZ: number;
+  groundVersion: number;
 }
 
 export interface ShipsData {
@@ -103,6 +113,8 @@ export interface ShipsData {
   /** Par taille, les plus petits d'abord (les grands se dessinent par-dessus). */
   bySize: Record<SizeClass, Ship[]>;
   wakesBySize: Record<SizeClass, Ship[]>;
+  /** Par maquette 3D. */
+  byModel: Record<ShipModel, Ship[]>;
   /** Les navires qui ont un nom, les plus grands d'abord (ordre de priorité des étiquettes). */
   named: Ship[];
   disabled: string | null;
@@ -119,6 +131,8 @@ const RING_HALO: Color = [255, 255, 255, 240];
 const MAX_EXTRAPOLATION_S = 300;
 const LIVE_TOLERANCE_MS = 60_000;
 const LABEL_MIN_ZOOM = 11;
+/** En dessous de ce zoom, les maquettes ne seraient qu'une tache : les silhouettes à plat restent. */
+const MESH_MIN_ZOOM = 10;
 /** Un nom s'affiche dès que la coque fait cette longueur à l'écran (pixels), ou à partir du zoom ci-dessous quel que soit le navire. */
 const LABEL_MIN_PX = 24;
 const LABEL_ALL_ZOOM = 15;
@@ -202,6 +216,10 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
     // Sans longueur : la longueur courante du type ; un petit émetteur (classe B) est un petit bateau.
     const sizeM = Math.min(Math.max(declared ?? (s.classB ? Math.min(NOMINAL_LENGTH[type], 12) : NOMINAL_LENGTH[type]), 3), 400);
     const beam = beamClassOf(type, declared, s.width);
+    const model = modelOf(type, sizeM);
+    // Largeur dessinée : celle de l'AIS, sauf déclaration absurde (comme pour la classe de largeur des silhouettes).
+    const ratio = s.width && declared ? s.width / declared / BEAM_RATIO[type] : 0;
+    const beamM = ratio >= 0.3 && ratio <= 3 ? s.width! : sizeM * BEAM_RATIO[type];
     const band = moving ? wakeBandOf(s.sog ?? 0) : -1;
     return {
       ...s,
@@ -214,13 +232,19 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
       hullIcon: hullKey(type, beam),
       wakeIcon: band >= 0 ? wakeKey(wakeWidthOf(type, beam), band) : undefined,
       position: [s.lon, s.lat, 0],
+      model,
+      scale: scaleOf(model, sizeM, beamM),
+      groundZ: 0,
+      groundVersion: -1,
     };
   });
   // Les petits d'abord, les grands par-dessus.
   ships.sort((a, b) => a.sizeM - b.sizeM);
   const bySize: ShipsData['bySize'] = { petit: [], moyen: [], grand: [] };
   const wakesBySize: ShipsData['wakesBySize'] = { petit: [], moyen: [], grand: [] };
+  const byModel = Object.fromEntries(SHIP_MODELS.map((m) => [m, [] as Ship[]])) as ShipsData['byModel'];
   for (const ship of ships) {
+    byModel[ship.model].push(ship);
     bySize[ship.sizeClass].push(ship);
     if (ship.wakeIcon) wakesBySize[ship.sizeClass].push(ship);
   }
@@ -230,6 +254,7 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
     moving: ships.filter((s) => s.moving),
     bySize,
     wakesBySize,
+    byModel,
     named: ships.filter((s) => s.name).reverse(),
     disabled: json.disabled ?? null,
     updatedAt: json.updatedAt,
@@ -320,7 +345,7 @@ function placeLabels(data: ShipsData, zoom: number): Label[] {
 const CELL_SCALE = CELL / HULL_LENGTH;
 
 /** Zooms où l'affichage change : tailles minimales, puis étiquettes au quart de niveau. */
-const ZOOM_BREAKS = [FAR_ZOOM, MID_ZOOM, ...Array.from({ length: (17 - LABEL_MIN_ZOOM) * 4 + 1 }, (_, i) => LABEL_MIN_ZOOM + i / 4)];
+const ZOOM_BREAKS = [FAR_ZOOM, MID_ZOOM, MESH_MIN_ZOOM, ...Array.from({ length: (17 - LABEL_MIN_ZOOM) * 4 + 1 }, (_, i) => LABEL_MIN_ZOOM + i / 4)];
 
 export const ships = defineModule<ShipsData>({
   id: 'bateaux',
@@ -331,6 +356,7 @@ export const ships = defineModule<ShipsData>({
   refreshIntervalMs: 15_000,
   timeStepMs: (view) => stepMs(view.zoom),
   zoomBreaks: ZOOM_BREAKS,
+  settings: [RENDER_SETTING],
 
   legend() {
     return [
@@ -353,7 +379,7 @@ export const ships = defineModule<ShipsData>({
     return `${data.ships.length.toLocaleString('fr-FR')} navires, dont ${data.moving.length.toLocaleString('fr-FR')} en route`;
   },
 
-  deckLayers({ data, time, selection, view }) {
+  deckLayers({ data, time, terrain, selection, view, settings }) {
     if (!data || data.disabled || !isLive(time)) return [];
     const now = Date.now();
     for (const ship of data.moving) extrapolate(ship, now);
@@ -374,6 +400,24 @@ export const ships = defineModule<ShipsData>({
       updateTriggers: { getPosition: now },
       parameters: OVER_MAP,
     };
+    const models = wants3d(settings) && view.zoom >= MESH_MIN_ZOOM;
+    const meshes = models ? shipMeshes() : undefined;
+    if (meshes) {
+      // Altitude de l'eau (fleuves, bassins) : une fois par version du relief, pas à chaque pas.
+      for (const ship of data.ships) {
+        if (ship.groundVersion !== terrain.version) {
+          ship.groundZ = Math.max(0, terrain.elevation(ship.lon, ship.lat));
+          ship.groundVersion = terrain.version;
+        }
+        ship.position[2] = ship.groundZ;
+      }
+    } else if (data.ships.length && data.ships[0]!.position[2] !== 0) {
+      for (const ship of data.ships) ship.position[2] = 0;
+    }
+    // Même agrandissement de loin que les silhouettes : la maquette entière, hauteur comprise.
+    const zoom = view.zoom;
+    const sizeTrigger = zoom.toFixed(2);
+    const grow = (s: Ship) => Math.max(1, (MIN_PX[s.sizeClass] * factor * metersPerPixel(zoom, s.lat)) / s.sizeM);
     const minPixels = (cls: SizeClass) => MIN_PX[cls] * factor * CELL_SCALE;
     return [
       // Tous les sillages sous toutes les coques.
@@ -387,17 +431,34 @@ export const ships = defineModule<ShipsData>({
             sizeMinPixels: minPixels(cls),
           }),
       ),
-      ...SIZE_CLASSES.map(
-        (cls) =>
-          new IconLayer<Ship>({
-            ...common,
-            id: `bateaux/navires-${cls}`,
-            data: data.bySize[cls],
-            getIcon: (s) => s.hullIcon,
-            sizeMinPixels: minPixels(cls),
-            pickable: true,
-          }),
-      ),
+      ...(meshes
+        ? SHIP_MODELS.map((model) =>
+            meshLayer<Ship>({
+              id: `bateaux/maquettes/${model}`,
+              data: data.byModel[model],
+              mesh: meshes[model],
+              getPosition: (s) => s.position,
+              getOrientation: (s) => orientation(s.bearing),
+              getScale: (s) => {
+                const g = grow(s);
+                return [s.scale[0] * g, s.scale[1] * g, s.scale[2] * g];
+              },
+              getColor: [255, 255, 255, 255],
+              pickable: true,
+              updateTriggers: { getPosition: [now, terrain.version], getScale: sizeTrigger },
+            }),
+          )
+        : SIZE_CLASSES.map(
+            (cls) =>
+              new IconLayer<Ship>({
+                ...common,
+                id: `bateaux/navires-${cls}`,
+                data: data.bySize[cls],
+                getIcon: (s) => s.hullIcon,
+                sizeMinPixels: minPixels(cls),
+                pickable: true,
+              }),
+          )),
       // Sélection : un anneau blanc sous un anneau sombre (jamais une couleur de plus).
       ...(chosen
         ? [RING_HALO, OUTLINE_KEY].map(

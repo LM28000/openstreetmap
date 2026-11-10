@@ -17,6 +17,7 @@ mod bikes;
 mod dem;
 mod fires;
 mod gtfs_rt;
+mod network;
 mod rails;
 mod realtime;
 mod state;

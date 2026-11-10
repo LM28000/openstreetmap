@@ -43,6 +43,15 @@ pub struct Tracks {
 }
 
 impl Tracks {
+    /// Les deux gares (indices des horaires) de chaque tronçon, dans le sens d'écriture de ses points.
+    pub fn ends(&self) -> Vec<(u32, u32)> {
+        let mut ends = vec![(0, 0); self.segments.len()];
+        for (&pair, &segment) in &self.by_pair {
+            ends[segment as usize] = pair;
+        }
+        ends
+    }
+
     /// Tronçon entre deux gares (indices des horaires), et s'il faut le lire à l'envers.
     pub fn find(&self, from: u32, to: u32) -> Option<(u32, bool)> {
         let reversed = from > to;
@@ -83,7 +92,9 @@ pub async fn build(http: &reqwest::Client, data_dir: &Path, timetable: &std::syn
     rails::ensure_downloaded(http, &rails_dir).await?;
 
     let started = Instant::now();
-    let pairs = timetable.station_pairs();
+    // Ordre fixe : les tracés gardent les mêmes numéros d'un démarrage à l'autre.
+    let mut pairs: Vec<(u32, u32)> = timetable.station_pairs().into_iter().collect();
+    pairs.sort_unstable();
     let pair_count = pairs.len();
     let stations: Vec<(f64, f64)> = timetable.stations.iter().map(|s| (s.lon, s.lat)).collect();
     let routed = tokio::task::spawn_blocking(move || -> Result<Vec<Routed>> {

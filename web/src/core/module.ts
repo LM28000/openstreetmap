@@ -138,6 +138,11 @@ export interface LayerModule<TData = unknown> {
   /** Crédit de la source de données (obligatoire : chaque source a sa licence). */
   attribution: string;
   visibleByDefault?: boolean;
+  /**
+   * Ordre de dessin, indépendant de l'ordre du panneau : les couches de plus petit
+   * `drawOrder` passent dessous (0 par défaut). Ex. les voies sous les trains.
+   */
+  drawOrder?: number;
 
   /** Charge ou calcule les données. Appelé à l'activation, puis toutes les `refreshIntervalMs`. */
   load?(ctx: LoadContext): Promise<TData>;

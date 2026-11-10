@@ -14,3 +14,4 @@ data/
 
 # Archives du temps réel (serveur maison)
 archive/
+.claude/worktrees/

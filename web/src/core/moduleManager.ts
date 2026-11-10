@@ -276,7 +276,8 @@ export class ModuleManager {
     this.dirty = false;
     this.layerOwners.clear();
     const layers: Layer[] = [];
-    for (const entry of this.entries.values()) {
+    const byDrawOrder = [...this.entries.values()].sort((a, b) => (a.module.drawOrder ?? 0) - (b.module.drawOrder ?? 0));
+    for (const entry of byDrawOrder) {
       if (!this.isVisible(entry)) continue;
       for (const layer of entry.layers) {
         layers.push(layer);

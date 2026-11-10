@@ -168,6 +168,21 @@ function nightCanvas(): HTMLCanvasElement {
   return canvas;
 }
 
+/**
+ * Fait recopier le canvas par MapLibre : play() puis pause() le recopie une fois et
+ * redessine la carte. Juste après le chargement, la source n'a pas encore de tuiles et
+ * MapLibre ignore la copie : on réessaie alors à chaque image jusqu'à ce qu'elle passe
+ * (sinon, en pause, l'ombre restait celle d'avant jusqu'au prochain déplacement).
+ */
+function pushCanvas(map: MapLibreMap, source: CanvasSource): void {
+  source.play();
+  source.pause();
+  if (Object.keys(source.tiles).length > 0) return;
+  map.once('render', () => {
+    if (map.getSource(SOURCE_ID) === source) pushCanvas(map, source);
+  });
+}
+
 export const dayNight = defineModule<undefined>({
   id: 'jour-nuit',
   name: 'Jour et nuit',
@@ -203,13 +218,12 @@ export const dayNight = defineModule<undefined>({
       if (!source) return;
       const box = boxForView(map);
       nightCanvas().getContext('2d')?.putImageData(renderNightImage(time, box), 0, 0);
-      if (JSON.stringify(box) !== JSON.stringify(currentBox)) {
-        source.setCoordinates(toCoordinates(box));
-        currentBox = box;
-      }
-      // play() puis pause() : MapLibre recopie le canvas une fois puis redessine la carte.
-      source.play();
-      source.pause();
+      pushCanvas(map, source);
+      // Avec le relief, MapLibre garde les couches raster en textures par tuile et ne les
+      // redessine que si la source change de « révision » : redonner les coordonnées, même
+      // inchangées, la fait changer (sinon, vue de loin, l'ombre restait celle du chargement).
+      source.setCoordinates(toCoordinates(box));
+      currentBox = box;
       applySunLight(map, time);
     },
     remove(map) {

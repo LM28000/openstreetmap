@@ -80,7 +80,9 @@ server/                le serveur (Rust : tokio, axum)
   src/rails.rs         voies OSM : téléchargement, graphe, plus court chemin (A*)
   src/dem.rs           altitudes du relief (tuiles Mapterhorn)
   src/tracks.rs        tracé réel de chaque tronçon entre deux gares, avec altitude
+  src/network.rs       le réseau (gares et tracés) tel que l'envoie l'API, sous une version
   src/api.rs           l'API HTTP
+  src/bikes.rs …       collecteurs des autres couches (vélos, feux…)
 data/                  données téléchargées (jamais versionnées)
 ```
 
@@ -121,14 +123,15 @@ Options utiles :
 | `summary` | Résumé court, recalculé chaque seconde. |
 | `followsTerrain` | Pose les objets sur le relief, avec `terrain.elevation(lon, lat)`. |
 | `followsView` | Redessine la couche après chaque déplacement de la carte. |
+| `drawOrder` | Ordre de dessin, indépendant de celui du panneau (ex. les voies sous les trains). |
 | `native` | Couches MapLibre natives, pour les images drapées sur le relief (nuit, radar de pluie, photos anciennes). |
 
 ## Comment les trains sont placés
 
 1. Le serveur charge les horaires théoriques (52 000 trajets) et interroge le temps réel SNCF toutes les 30 secondes.
 2. Pour chaque paire de gares consécutives, il cherche le chemin sur les voies OSM : c'est un plus court chemin sur un graphe d'environ un million de points (A*). Il attribue ensuite à chaque point l'altitude du relief. Sur les ponts et dans les tunnels, une pente régulière remplace le sol, qui n'y est pas à la hauteur du rail.
-3. Le site demande les trains de quelques heures autour de l'instant affiché. Pour chaque tronçon entre deux gares, il calcule un **profil de vitesse** : le train accélère au départ, roule à la vitesse permise de la voie (balise OSM `maxspeed`, connue pour 96 % des points), sans dépasser celle de son matériel (320 km/h en grande vitesse, 200 en Intercités, 160 en TER), puis freine avant la gare. Ce profil « au plus vite » est ensuite étiré pour tomber pile sur l'horaire, réel ou prévu, car les horaires comportent toujours une marge.
-4. À chaque image, le site place chaque train le long de son tracé selon ce profil, et le dessine dans son sens de marche.
+3. Le site télécharge une fois le **réseau** (toutes les gares et tous les tracés, 1,7 Mo compressés), publié sous une version qui est l'empreinte de son contenu : le navigateur le garde en cache, même d'une visite à l'autre. Puis il demande chaque minute les trains de quelques heures autour de l'instant affiché (environ 170 Ko compressés à l'heure de pointe, contre 1,5 Mo quand les tracés étaient renvoyés à chaque fois). Pour chaque tronçon entre deux gares, il calcule un **profil de vitesse** : le train accélère au départ, roule à la vitesse permise de la voie (balise OSM `maxspeed`, connue pour 96 % des points), sans dépasser celle de son matériel (320 km/h en grande vitesse, 200 en Intercités, 160 en TER), puis freine avant la gare. Ce profil « au plus vite » est ensuite étiré pour tomber pile sur l'horaire, réel ou prévu, car les horaires comportent toujours une marge.
+4. À chaque image, le site place chaque train le long de son tracé selon ce profil, et le dessine dans son sens de marche. Seule la portion des chemins proche de l'instant affiché est envoyée à la carte graphique pour les traînées (dix fois moins de sommets) : le rafraîchissement du temps réel ne fige plus l'animation.
 5. Si un tronçon n'a pas de tracé (voie absente d'OSM, gare trop loin d'une voie), le train y va en ligne droite. La fiche du train l'indique.
 
 La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la position GPS de ses trains en open data.
@@ -142,6 +145,7 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
 | Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
+| Voies ferrées | Les lignes empruntées par les trains de voyageurs, telles que le serveur les a calculées sur les voies OSM. Trait discret, ou nuances de gris selon la vitesse maximale de la ligne (épaisseur comprise). Fiche au clic : gares du tronçon, longueur, répartition des vitesses, lien vers OpenRailwayMap. | OpenStreetMap |
 | Vélos en libre-service | Les 5 800 stations des 84 réseaux de France (Vélib', Vélo'v, VélôToulouse…), relues chaque minute. Mode « Vélos » pour en trouver un, « Places » pour le rendre ; vu de près, le nombre disponible sur chaque station. Une station hors service est un simple anneau gris. | réseaux GBFS via [transport.data.gouv.fr](https://transport.data.gouv.fr) |
 | Vigilance crues | Niveau de vigilance des 337 tronçons de rivières surveillés, de vert à rouge (épaisseur du trait selon le niveau). Couche MapLibre drapée sur le relief. | [Vigicrues](https://www.vigicrues.gouv.fr) |
 | Feux | Points chauds détectés par satellite sur 7 jours (incendies, brûlages agricoles, sites industriels). La couleur dit l'âge à l'instant affiché, la taille la puissance du feu : on les voit apparaître en rejouant la semaine. | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) (VIIRS) |
@@ -181,7 +185,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 | Phase | Contenu |
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
-| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. Le serveur maison archive aussi le temps réel brut. Reste : réponse plus légère (à chaque rafraîchissement du temps réel, une image de ~150 ms le temps que deck.gl renvoie les traînées à la carte graphique) |
+| **1. Trains** (fait) | Horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit, voies ferrées par vitesse. Le réseau est mis en cache par le navigateur et le rafraîchissement ne fige plus l'animation. Le serveur maison archive aussi le temps réel brut. |
 | **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues, électricité par région, vélos en libre-service, feux. Reste : qualité de l'air (l'API d'Atmo France demande un compte) |
 | 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |

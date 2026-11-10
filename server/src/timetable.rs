@@ -207,7 +207,11 @@ fn build(path: &Path) -> Result<Timetable> {
     let mut service_index = std::collections::HashMap::<String, u32>::new();
     let mut trips = Vec::new();
 
-    for trip in gtfs.trips.values() {
+    // Ordre fixe (celui des identifiants) : à horaires identiques, indices identiques, et
+    // donc même réseau, d'un démarrage à l'autre (voir `network.rs`).
+    let mut gtfs_trips: Vec<_> = gtfs.trips.values().collect();
+    gtfs_trips.sort_unstable_by(|a, b| a.id.cmp(&b.id));
+    for trip in gtfs_trips {
         let Ok(route) = gtfs.get_route(&trip.route_id) else { continue };
         if !matches!(route.route_type, RouteType::Rail | RouteType::Tramway) {
             continue;

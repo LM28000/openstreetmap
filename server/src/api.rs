@@ -6,10 +6,14 @@
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
 //!   navigateur calcule lui-même la position de chaque train à chaque image.
+//! - `GET /api/reseau/{version}` : les gares et les tracés auxquels renvoient les
+//!   trains (voir `network.rs`). Ne change jamais pour une version donnée.
+//! - `GET /api/reseau` : la version actuelle du réseau.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
-use axum::extract::{Query, State};
+use axum::body::Bytes;
+use axum::extract::{Path, Query, State};
 use axum::http::{StatusCode, header};
 use axum::response::IntoResponse;
 use axum::routing::get;
@@ -19,10 +23,9 @@ use serde::{Deserialize, Serialize};
 use tower_http::compression::CompressionLayer;
 use tower_http::trace::TraceLayer;
 
+use crate::network::Network;
 use crate::realtime::Realtime;
 use crate::state::AppState;
-use crate::timetable::Timetable;
-use crate::tracks::Tracks;
 
 /// Plage maximale d'une requête.
 const MAX_WINDOW_S: i64 = 12 * 3600;
@@ -33,6 +36,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/trains", get(trains))
+        .route("/api/reseau", get(network_version))
+        .route("/api/reseau/{version}", get(network))
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .layer(CompressionLayer::new())
@@ -53,12 +58,11 @@ struct TrainsResponse<'a> {
     from: i64,
     to: i64,
     realtime: Option<RealtimeInfo>,
-    /// Gares utilisées par les trains ci-dessous (les trains y renvoient par indice).
-    stations: Vec<StationOut<'a>>,
-    /// Tracés sur les voies, au format « polyline » de Google étendu : quadruplets
-    /// (latitude × 10⁵, longitude × 10⁵, altitude en m, vitesse maximale en km/h de la portion
-    /// qui part du point, 0 si inconnue), chacun codé en écart avec le précédent.
-    tracks: Vec<String>,
+    /// Version du réseau (gares et tracés) auquel renvoient les indices des trains.
+    network: &'a str,
+    /// Catégories et lignes, que les trains désignent par indice.
+    categories: Vec<&'a str>,
+    lines: Vec<&'a str>,
     trains: Vec<TrainOut<'a>>,
 }
 
@@ -70,35 +74,30 @@ struct RealtimeInfo {
 }
 
 #[derive(Serialize)]
-struct StationOut<'a> {
-    name: &'a str,
-    lon: f64,
-    lat: f64,
-}
-
-#[derive(Serialize)]
-#[serde(rename_all = "camelCase")]
 struct TrainOut<'a> {
-    id: &'a str,
     number: &'a str,
-    category: &'a str,
-    line: &'a str,
-    /// Indices dans `stations`, dans l'ordre de passage.
+    /// Le numéro et l'heure du premier départ identifient une circulation ; dans le cas
+    /// (rare) où deux circulations les partagent, ce rang les distingue.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    variant: Option<u32>,
+    /// Indices dans `categories` et `lines`.
+    category: u32,
+    line: u32,
+    /// Indices des gares du réseau, dans l'ordre de passage.
     stations: Vec<u32>,
-    /// Tracé entre chaque gare et la suivante : `k > 0` = `tracks[k - 1]` dans le sens
-    /// d'écriture, `k < 0` = `tracks[-k - 1]` à l'envers, `0` = pas de tracé (ligne droite).
+    /// Tracé entre chaque gare et la suivante : `k > 0` = tracé `k - 1` du réseau dans le
+    /// sens d'écriture, `k < 0` = tracé `-k - 1` à l'envers, `0` = pas de tracé (ligne droite).
     tracks: Vec<i32>,
-    /// Horaires prévus (secondes UTC).
-    arr: Vec<i64>,
-    dep: Vec<i64>,
-    /// Horaires réels, si le temps réel parle de ce train.
+    /// Horaires prévus, arrivée et départ de chaque arrêt en alternance : le premier en
+    /// secondes UTC, chacun des suivants en écart avec le précédent.
+    times: Vec<i64>,
+    /// Retards (secondes) dans le même ordre, si le temps réel parle de ce train.
     #[serde(skip_serializing_if = "Option::is_none")]
-    arr_rt: Option<Vec<i64>>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    dep_rt: Option<Vec<i64>>,
+    delays: Option<Vec<i64>>,
     /// Indices des arrêts non desservis.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     skipped: Vec<u32>,
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
     canceled: bool,
 }
 
@@ -109,90 +108,74 @@ async fn trains(
     if query.to <= query.from || query.to - query.from > MAX_WINDOW_S {
         return Err((StatusCode::BAD_REQUEST, "plage horaire invalide (de 1 s à 12 h)".to_string()));
     }
-    let timetable = state.timetable();
+    let network = state.network();
     let realtime = state.realtime();
-    let tracks = state.tracks_for(&timetable);
     // Calcul un peu long (quelques millisecondes) : hors de la boucle asynchrone.
-    let body = tokio::task::spawn_blocking(move || {
-        trains_json(&timetable, realtime.as_deref(), tracks.as_deref(), query.from, query.to)
-    })
-    .await
-    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
-    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
+    let body = tokio::task::spawn_blocking(move || trains_json(&network, realtime.as_deref(), query.from, query.to))
+        .await
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?;
     Ok(([(header::CONTENT_TYPE, "application/json")], body))
 }
 
-fn trains_json(
-    timetable: &Timetable,
-    realtime: Option<&Realtime>,
-    tracks: Option<&Tracks>,
-    from: i64,
-    to: i64,
-) -> serde_json::Result<Vec<u8>> {
-    let mut station_ids: HashMap<u32, u32> = HashMap::new();
-    let mut stations = Vec::new();
-    let mut track_ids: HashMap<u32, i32> = HashMap::new();
-    let mut encoded_tracks = Vec::new();
+fn trains_json(network: &Network, realtime: Option<&Realtime>, from: i64, to: i64) -> serde_json::Result<Vec<u8>> {
+    let timetable = &network.timetable;
+    let tracks = network.tracks.as_deref();
+    let mut categories = Indexer::default();
+    let mut lines = Indexer::default();
+    let mut identities = HashSet::new();
     let mut trains = Vec::new();
 
     for run in timetable.runs_between(from - MAX_DELAY_S, to) {
         let stops = &run.trip.stops;
-        let arr: Vec<i64> = stops.iter().map(|s| run.day_start + i64::from(s.arrival)).collect();
-        let dep: Vec<i64> = stops.iter().map(|s| run.day_start + i64::from(s.departure)).collect();
+        let planned: Vec<i64> = stops
+            .iter()
+            .flat_map(|s| [run.day_start + i64::from(s.arrival), run.day_start + i64::from(s.departure)])
+            .collect();
         let live = realtime.and_then(|rt| rt.apply(&run, &timetable.stop_points));
 
         // Fenêtre réelle de circulation, retards compris.
         let (start, end) = match &live {
             Some(l) => (l.departure.first().copied(), l.arrival.last().copied()),
-            None => (dep.first().copied(), arr.last().copied()),
+            None => (planned.get(1).copied(), planned.len().checked_sub(2).map(|i| planned[i])),
         };
         let (Some(start), Some(end)) = (start, end) else { continue };
         if end < from || start > to {
             continue;
         }
 
-        let indices = stops
-            .iter()
-            .map(|s| {
-                *station_ids.entry(s.station).or_insert_with(|| {
-                    let station = &timetable.stations[s.station as usize];
-                    stations.push(StationOut { name: &station.name, lon: station.lon, lat: station.lat });
-                    (stations.len() - 1) as u32
-                })
-            })
-            .collect();
-
-        // Chaque tracé n'est envoyé qu'une fois, même si plusieurs trains l'empruntent.
+        let mut variant = 0;
+        while !identities.insert((run.trip.number.as_str(), planned[1], variant)) {
+            variant += 1;
+        }
         let train_tracks = stops
             .windows(2)
-            .map(|pair| {
-                let Some((segment, reversed)) = tracks.and_then(|t| t.find(pair[0].station, pair[1].station)) else {
-                    return 0;
-                };
-                let local = *track_ids.entry(segment).or_insert_with(|| {
-                    let s = &tracks.expect("tracés présents").segments[segment as usize];
-                    encoded_tracks.push(encode_track(&s.points, &s.heights, &s.limits));
-                    encoded_tracks.len() as i32
-                });
-                if reversed { -local } else { local }
+            .map(|pair| match tracks.and_then(|t| t.find(pair[0].station, pair[1].station)) {
+                Some((segment, reversed)) => {
+                    let k = segment as i32 + 1;
+                    if reversed { -k } else { k }
+                }
+                None => 0,
             })
             .collect();
+        let times = planned.iter().scan(0, |previous, &t| Some(t - std::mem::replace(previous, t))).collect();
 
-        let (arr_rt, dep_rt, skipped, canceled) = match live {
-            Some(l) => (Some(l.arrival), Some(l.departure), l.skipped, l.canceled),
-            None => (None, None, Vec::new(), false),
+        let (delays, skipped, canceled) = match live {
+            Some(l) => {
+                let actual = l.arrival.iter().zip(&l.departure).flat_map(|(&a, &d)| [a, d]);
+                (Some(actual.zip(&planned).map(|(a, &p)| a - p).collect()), l.skipped, l.canceled)
+            }
+            None => (None, Vec::new(), false),
         };
         trains.push(TrainOut {
-            id: &run.trip.id,
             number: &run.trip.number,
-            category: &run.trip.category,
-            line: &run.trip.line,
-            stations: indices,
+            variant: (variant > 0).then_some(variant),
+            category: categories.index(&run.trip.category),
+            line: lines.index(&run.trip.line),
+            stations: stops.iter().map(|s| s.station).collect(),
             tracks: train_tracks,
-            arr,
-            dep,
-            arr_rt,
-            dep_rt,
+            times,
+            delays,
             skipped,
             canceled,
         });
@@ -203,57 +186,68 @@ fn trains_json(
         from,
         to,
         realtime: realtime.map(|rt| RealtimeInfo { feed_timestamp: rt.feed_timestamp, fetched_at: rt.fetched_at }),
-        stations,
-        tracks: encoded_tracks,
+        network: &network.version,
+        categories: categories.values,
+        lines: lines.values,
         trains,
     })
 }
 
-/// Code un tracé au format « polyline » (voir `TrainsResponse::tracks`) : chaque valeur
-/// est l'écart avec le point précédent, écrit en caractères imprimables par paquets de 5 bits.
-fn encode_track(points: &[(f64, f64)], heights: &[f32], limits: &[u16]) -> String {
-    let mut out = String::with_capacity(points.len() * 11);
-    let mut previous = [0i64; 4];
-    for ((&(lon, lat), &height), &limit) in points.iter().zip(heights).zip(limits) {
-        let current = [(lat * 1e5).round() as i64, (lon * 1e5).round() as i64, height.round() as i64, i64::from(limit)];
-        for (value, last) in current.iter().zip(previous.iter_mut()) {
-            encode_value(value - *last, &mut out);
-            *last = *value;
-        }
-    }
-    out
+/// Liste de textes sans doublon, chacun désigné par son indice.
+#[derive(Default)]
+struct Indexer<'a> {
+    values: Vec<&'a str>,
+    positions: HashMap<&'a str, u32>,
 }
 
-fn encode_value(value: i64, out: &mut String) {
-    let mut v = if value < 0 { !(value << 1) } else { value << 1 };
-    while v >= 0x20 {
-        out.push(char::from(((0x20 | (v & 0x1f)) + 63) as u8));
-        v >>= 5;
+impl<'a> Indexer<'a> {
+    fn index(&mut self, value: &'a str) -> u32 {
+        *self.positions.entry(value).or_insert_with(|| {
+            self.values.push(value);
+            (self.values.len() - 1) as u32
+        })
     }
-    out.push(char::from((v + 63) as u8));
 }
 
+/// Version actuelle du réseau, pour qui veut le réseau sans passer par les trains.
+async fn network_version(State(state): State<AppState>) -> impl IntoResponse {
+    ([(header::CACHE_CONTROL, "no-cache")], Json(serde_json::json!({ "version": state.network().version })))
+}
+
+/// Le réseau d'une version donnée ne change jamais : le navigateur peut le garder en cache.
+async fn network(State(state): State<AppState>, Path(version): Path<String>) -> axum::response::Response {
+    let network = state.network();
+    if network.version != version {
+        return (StatusCode::NOT_FOUND, "version du réseau périmée : recharger les trains").into_response();
+    }
+    (
+        [(header::CONTENT_TYPE, "application/json"), (header::CACHE_CONTROL, "public, max-age=31536000, immutable")],
+        network.body.clone(),
+    )
+        .into_response()
+}
 
 /// Réponse préparée par un collecteur, ou 503 tant que la première collecte n'est pas finie.
-fn prepared(body: Option<std::sync::Arc<Vec<u8>>>, what: &str) -> axum::response::Response {
+fn prepared(body: Option<Bytes>, what: &str) -> axum::response::Response {
     match body {
-        Some(body) => ([(header::CONTENT_TYPE, "application/json")], body.as_ref().clone()).into_response(),
+        Some(body) => ([(header::CONTENT_TYPE, "application/json")], body).into_response(),
         None => (StatusCode::SERVICE_UNAVAILABLE, format!("{what} : première collecte en cours")).into_response(),
     }
 }
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
-    let timetable = state.timetable();
+    let network = state.network();
+    let timetable = &network.timetable;
     let realtime = state.realtime();
     let now = Timestamp::now().as_second();
     let runs = timetable.runs_between(now, now);
     let live = realtime
         .as_deref()
         .map_or(0, |rt| runs.iter().filter(|run| rt.apply(run, &timetable.stop_points).is_some()).count());
-    let tracks = state.tracks_for(&timetable);
     Json(serde_json::json!({
         "timetable": { "version": timetable.feed_version, "trips": timetable.trip_count() },
-        "tracks": tracks.map(|t| serde_json::json!({ "segments": t.segments.len(), "stationPairs": t.pair_count })),
+        "network": network.version,
+        "tracks": network.tracks.as_ref().map(|t| serde_json::json!({ "segments": t.segments.len(), "stationPairs": t.pair_count })),
         "realtime": realtime.map(|rt| serde_json::json!({
             "feedTimestamp": rt.feed_timestamp,
             "fetchedAt": rt.fetched_at,
@@ -261,19 +255,4 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         })),
         "now": { "running": runs.len(), "withRealtime": live },
     }))
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn polyline_comme_google() {
-        // Exemple de la documentation Google (sans altitude) : (38.5, -120.2), (40.7, -120.95).
-        let mut out = String::new();
-        for v in [3_850_000, -12_020_000, 220_000, -75_000] {
-            encode_value(v, &mut out);
-        }
-        assert_eq!(out, "_p~iF~ps|U_ulLnnqC");
-    }
 }

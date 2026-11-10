@@ -3,10 +3,11 @@
  * l'instant t, sur les vraies voies, avec leurs retards en temps réel.
  *
  * Le serveur (dossier `server/`) envoie, pour une période de quelques heures, les
- * trains avec leurs arrêts, leurs horaires prévus et réels, et le tracé des voies
- * entre chaque gare (calculé sur les voies OpenStreetMap). Le navigateur calcule
- * lui-même la position de chaque train à chaque image : aucun échange réseau
- * pendant l'animation, et le replay fonctionne comme le direct.
+ * trains avec leurs arrêts et leurs horaires prévus et réels. Les gares et le tracé
+ * des voies entre elles (calculé sur les voies OpenStreetMap) arrivent à part, une
+ * fois par version du réseau : ils ne changent pas d'un rafraîchissement à l'autre.
+ * Le navigateur calcule lui-même la position de chaque train à chaque image : aucun
+ * échange réseau pendant l'animation, et le replay fonctionne comme le direct.
  *
  * Entre deux gares, on suppose une vitesse constante le long du tracé. Si le
  * serveur n'a pas (encore) de tracé pour un tronçon, le train y va en ligne droite.
@@ -16,55 +17,53 @@ import { TripsLayer } from '@deck.gl/geo-layers';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type InfoTable, type TerrainSampler } from '../core/module';
 import { formatTime } from '../ui/format';
+import {
+  type ApiStation,
+  DEG,
+  fetchJson,
+  latitudeFromMercatorY,
+  loadNetwork,
+  mercatorY,
+  type RailNetwork,
+  ServerError,
+  type Track,
+  trackOf,
+} from './railNetwork';
 import { buildTrainAtlas, type Nose, type TrainAtlas, type TrainIconSpec } from './trainIcons';
 
 // --- Réponse de l'API (voir server/src/api.rs) ---
 
-interface ApiStation {
-  name: string;
-  lon: number;
-  lat: number;
-}
-
 interface ApiTrain {
-  id: string;
   number: string;
-  category: string;
-  line: string;
+  /** Distingue deux circulations de même numéro et de même premier départ (rare). */
+  variant?: number;
+  /** Indices dans `ApiResponse.categories` et `ApiResponse.lines`. */
+  category: number;
+  line: number;
+  /** Indices des gares du réseau. */
   stations: number[];
-  /** Tracé entre chaque gare et la suivante : k > 0 = tracks[k-1], k < 0 = tracks[-k-1] à l'envers, 0 = aucun. */
-  tracks?: number[];
-  arr: number[];
-  dep: number[];
-  arrRt?: number[];
-  depRt?: number[];
+  /** Tracé entre chaque gare et la suivante : k > 0 = tracé k-1 du réseau, k < 0 = tracé -k-1 à l'envers, 0 = aucun. */
+  tracks: number[];
+  /** Horaires prévus, arrivée et départ de chaque arrêt en alternance : le premier en secondes UTC, les suivants en écart. */
+  times: number[];
+  /** Retards (secondes), dans le même ordre, si le temps réel parle de ce train. */
+  delays?: number[];
   skipped?: number[];
-  canceled: boolean;
+  canceled?: boolean;
 }
 
 interface ApiResponse {
   from: number;
   to: number;
   realtime: { feedTimestamp: number; fetchedAt: number } | null;
-  stations: ApiStation[];
-  tracks?: string[];
+  /** Version du réseau auquel renvoient les indices (`/api/reseau/{version}`). */
+  network: string;
+  categories: string[];
+  lines: string[];
   trains: ApiTrain[];
 }
 
 // --- Modèle côté navigateur ---
-
-/** Un tracé décodé : longitude, latitude, ordonnée Mercator, altitude, distance cumulée. */
-interface Track {
-  lon: Float64Array;
-  lat: Float64Array;
-  my: Float64Array;
-  /** Altitude du rail en mètres (sans exagération du relief). */
-  z: Float32Array;
-  /** Distance depuis le début du tracé, en mètres. */
-  along: Float64Array;
-  /** Vitesse maximale (km/h, 0 : inconnue) de la portion qui part de chaque point. */
-  limit: Float32Array;
-}
 
 type Family = 'ter' | 'grande-vitesse' | 'intercites';
 type DelayClass = 'inconnu' | 'heure' | 'retard' | 'gros-retard';
@@ -232,7 +231,6 @@ const TRAIL_SECONDS = 15 * 60;
 /** Période chargée autour de l'instant affiché. */
 const LOAD_BEFORE_S = 30 * 60;
 const LOAD_AFTER_S = 3 * 3600;
-const DEG = Math.PI / 180;
 
 const CATEGORY_NAMES: Record<string, string> = {
   'Train TER': 'TER',
@@ -243,89 +241,34 @@ const CATEGORY_NAMES: Record<string, string> = {
 
 // --- Géométrie ---
 
-function mercatorY(lat: number): number {
-  return Math.log(Math.tan(Math.PI / 4 + (lat * DEG) / 2));
-}
-
-function latitudeFromMercatorY(y: number): number {
-  return (2 * Math.atan(Math.exp(y)) - Math.PI / 2) / DEG;
-}
-
 /** Cap d'un tronçon tel qu'il apparaît sur la carte (Web Mercator), en degrés deck.gl. */
 function heading(lon1: number, my1: number, lon2: number, my2: number): number {
   return Math.atan2(my2 - my1, (lon2 - lon1) * DEG) / DEG;
-}
-
-/** Décode un tracé « polyline » étendu à l'altitude et à la vitesse maximale (voir server/src/api.rs). */
-function decodeTrack(encoded: string): Track {
-  const values: number[] = [];
-  let index = 0;
-  while (index < encoded.length) {
-    let result = 0;
-    let shift = 0;
-    let byte: number;
-    do {
-      byte = encoded.charCodeAt(index++) - 63;
-      result |= (byte & 0x1f) << shift;
-      shift += 5;
-    } while (byte >= 0x20 && index < encoded.length);
-    values.push(result & 1 ? ~(result >> 1) : result >> 1);
-  }
-  const count = Math.floor(values.length / 4);
-  const track: Track = {
-    lon: new Float64Array(count),
-    lat: new Float64Array(count),
-    my: new Float64Array(count),
-    z: new Float32Array(count),
-    along: new Float64Array(count),
-    limit: new Float32Array(count),
-  };
-  let lat = 0;
-  let lon = 0;
-  let z = 0;
-  let limit = 0;
-  for (let i = 0; i < count; i++) {
-    lat += values[i * 4]!;
-    lon += values[i * 4 + 1]!;
-    z += values[i * 4 + 2]!;
-    limit += values[i * 4 + 3]!;
-    track.limit[i] = limit;
-    track.lat[i] = lat / 1e5;
-    track.lon[i] = lon / 1e5;
-    track.my[i] = mercatorY(lat / 1e5);
-    track.z[i] = z;
-    if (i > 0) {
-      const dx = (track.lon[i]! - track.lon[i - 1]!) * Math.cos(track.lat[i]! * DEG) * 111_320;
-      const dy = (track.lat[i]! - track.lat[i - 1]!) * 110_540;
-      track.along[i] = track.along[i - 1]! + Math.hypot(dx, dy);
-    }
-  }
-  return track;
 }
 
 // --- Chargement ---
 
 async function loadTrains(signal: AbortSignal, time: number): Promise<TrainsData> {
   const t = Math.floor(time / 1000);
-  let response: Response;
-  try {
-    response = await fetch(`/api/trains?from=${t - LOAD_BEFORE_S}&to=${t + LOAD_AFTER_S}`, { signal });
-  } catch (error) {
-    if (signal.aborted) throw error;
-    throw new Error('serveur des trains injoignable (lancer « cargo run » dans server/)');
+  // Deux essais : le réseau peut changer de version entre les deux requêtes (nouveaux horaires, tracés prêts).
+  for (let attempt = 0; ; attempt++) {
+    const json = await fetchJson<ApiResponse>(`/api/trains?from=${t - LOAD_BEFORE_S}&to=${t + LOAD_AFTER_S}`, signal);
+    try {
+      return parse(json, await loadNetwork(json.network, signal));
+    } catch (error) {
+      if (attempt === 0 && error instanceof ServerError && error.status === 404) continue;
+      throw error;
+    }
   }
-  if (!response.ok) throw new Error(`le serveur des trains a répondu ${response.status}`);
-  return parse((await response.json()) as ApiResponse);
 }
 
 /** Sommets d'un tronçon entre deux gares : le tracé réel s'il existe, sinon la ligne droite. */
 function intervalVertices(
   ref: number,
-  tracks: Track[],
+  track: Track | undefined,
   from: ApiStation,
   to: ApiStation,
 ): IntervalVertices {
-  const track = ref !== 0 ? tracks[Math.abs(ref) - 1] : undefined;
   if (!track || track.lon.length < 2) {
     const dx = (to.lon - from.lon) * Math.cos(from.lat * DEG) * 111_320;
     const dy = (to.lat - from.lat) * 110_540;
@@ -488,7 +431,6 @@ type TrainGeometry = Pick<
  * Le temps réel est rechargé chaque minute, mais les tracés ne changent pas et la
  * plupart des trains gardent leurs horaires : on réutilise ce qui a déjà été calculé.
  */
-let trackCache = new Map<string, Track>();
 let geometryCache = new Map<string, TrainGeometry>();
 /** Origine fixe des horodatages de traînée, pour que les chemins mis en cache restent valables. */
 let timeBase: number | undefined;
@@ -497,26 +439,43 @@ function stationKey(s: ApiStation): string {
   return `${s.name}|${s.lon.toFixed(4)}|${s.lat.toFixed(4)}`;
 }
 
-function parse(json: ApiResponse): TrainsData {
+/** Horaires d'un train : arrivées et départs prévus, et réels si le temps réel en parle. */
+function decodeTimes(api: ApiTrain) {
+  const count = api.stations.length;
+  const plannedArr = new Array<number>(count);
+  const plannedDep = new Array<number>(count);
+  let t = 0;
+  for (let i = 0; i < count; i++) {
+    plannedArr[i] = t += api.times[2 * i] ?? 0;
+    plannedDep[i] = t += api.times[2 * i + 1] ?? 0;
+  }
+  const delays = api.delays;
+  if (!delays) return { plannedArr, plannedDep, arr: plannedArr, dep: plannedDep };
+  return {
+    plannedArr,
+    plannedDep,
+    arr: plannedArr.map((v, i) => v + (delays[2 * i] ?? 0)),
+    dep: plannedDep.map((v, i) => v + (delays[2 * i + 1] ?? 0)),
+  };
+}
+
+function parse(json: ApiResponse, net: RailNetwork): TrainsData {
   const started = performance.now();
   const base = (timeBase ??= json.from);
-  const nextTrackCache = new Map<string, Track>();
-  const tracks = (json.tracks ?? []).map((encoded) => {
-    const track = trackCache.get(encoded) ?? decodeTrack(encoded);
-    nextTrackCache.set(encoded, track);
-    return track;
-  });
-  trackCache = nextTrackCache;
   const nextGeometryCache = new Map<string, TrainGeometry>();
   const geometries: TrainGeometry[] = [];
   let reused = 0;
-  const stations: Station[] = json.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [] }));
+  const stations: Station[] = net.stations.map((s) => ({ key: stationKey(s), name: s.name, lon: s.lon, lat: s.lat, visits: [] }));
   const trains: Train[] = [];
   let canceled = 0;
 
   for (const api of json.trains) {
-    const family = FAMILY_OF[api.category] ?? 'ter';
-    const common = { id: api.id, number: api.number, category: api.category, family, line: api.line };
+    const category = json.categories[api.category] ?? '';
+    const family = FAMILY_OF[category] ?? 'ter';
+    const times = decodeTimes(api);
+    // Le numéro et l'heure prévue du premier départ identifient la circulation d'un chargement à l'autre.
+    const id = `${api.number}@${times.plannedDep[0] ?? 0}${api.variant ? `#${api.variant}` : ''}`;
+    const common = { id, number: api.number, category, family, line: json.lines[api.line] ?? '' };
 
     if (api.canceled) {
       // Un train supprimé ne roule pas, mais figure (supprimé) dans les tableaux des gares.
@@ -525,10 +484,10 @@ function parse(json: ApiResponse): TrainsData {
       const run: Run = {
         ...common,
         stations: runStations,
-        arr: api.arr,
-        dep: api.dep,
-        plannedArr: api.arr,
-        plannedDep: api.dep,
+        arr: times.plannedArr,
+        dep: times.plannedDep,
+        plannedArr: times.plannedArr,
+        plannedDep: times.plannedDep,
         realtime: true,
         canceled: true,
         skipped: new Set(),
@@ -550,22 +509,15 @@ function parse(json: ApiResponse): TrainsData {
     if (runStations.some((s) => s === undefined)) continue;
     const stops = runStations as Station[];
     const slice = (values: number[]) => values.slice(first, last + 1);
-    const arr = slice(api.arrRt ?? api.arr);
-    const dep = slice(api.depRt ?? api.dep);
+    const arr = slice(times.arr);
+    const dep = slice(times.dep);
 
-    // Même train, mêmes arrêts, mêmes horaires, mêmes tracés : même chemin qu'au chargement précédent.
-    const trackRefs = api.tracks ?? [];
-    const key = [
-      api.id,
-      first,
-      last,
-      dep.join(','),
-      arr.join(','),
-      trackRefs.map((ref) => (ref === 0 ? 0 : Math.sign(ref) * (json.tracks?.[Math.abs(ref) - 1]?.length ?? 0))).join(','),
-    ].join('|');
+    // Même réseau, même train, mêmes arrêts, mêmes horaires : même chemin qu'au chargement précédent.
+    const refs = api.tracks.slice(first, last);
+    const key = [net.version, id, first, last, dep.join(','), arr.join(','), refs.join(',')].join('|');
     let geometry = geometryCache.get(key);
     if (geometry) reused++;
-    else geometry = computeGeometry(api, first, stops, dep, arr, tracks, family, base);
+    else geometry = computeGeometry(refs, net, stops, dep, arr, family, category, base);
     nextGeometryCache.set(key, geometry);
     geometries.push(geometry);
 
@@ -574,9 +526,9 @@ function parse(json: ApiResponse): TrainsData {
       stations: stops,
       arr,
       dep,
-      plannedArr: slice(api.arr),
-      plannedDep: slice(api.dep),
-      realtime: api.arrRt !== undefined,
+      plannedArr: slice(times.plannedArr),
+      plannedDep: slice(times.plannedDep),
+      realtime: api.delays !== undefined,
       canceled: false,
       skipped: new Set([...skippedAll].filter((i) => i > first && i < last).map((i) => i - first)),
       onTracks: geometry.onTracks,
@@ -630,18 +582,18 @@ function parse(json: ApiResponse): TrainsData {
 
 /** Chemin d'un train sur les voies et heure de passage en chaque point (profil de vitesse). */
 function computeGeometry(
-  api: ApiTrain,
-  first: number,
+  refs: number[],
+  net: RailNetwork,
   stops: Station[],
   dep: number[],
   arr: number[],
-  tracks: Track[],
   family: Family,
+  category: string,
   base: number,
 ): TrainGeometry {
   // Chemin complet : pour chaque tronçon, les points de voie avec leur heure de passage,
   // selon un profil de vitesse réaliste (accélération, vitesse de la ligne, freinage).
-  const running = { ...RUNNING[family], vmax: VMAX_BY_CATEGORY[api.category] ?? RUNNING[family].vmax };
+  const running = { ...RUNNING[family], vmax: VMAX_BY_CATEGORY[category] ?? RUNNING[family].vmax };
   const lon: number[] = [];
   const myList: number[] = [];
   const z: number[] = [];
@@ -652,8 +604,8 @@ function computeGeometry(
   let realLength = 0;
   let totalLength = 0;
   for (let i = 0; i + 1 < stops.length; i++) {
-    const ref = api.tracks?.[first + i] ?? 0;
-    const vertices = intervalVertices(ref, tracks, stops[i]!, stops[i + 1]!);
+    const ref = refs[i] ?? 0;
+    const vertices = intervalVertices(ref, trackOf(net, ref), stops[i]!, stops[i + 1]!);
     const leave = dep[i] ?? 0;
     const reach = arr[i + 1] ?? leave;
     const length = vertices.along[vertices.along.length - 1] ?? 0;
@@ -801,6 +753,120 @@ function delayText(delay: number | null): string {
 
 const hhmm = (seconds: number | undefined) => (seconds === undefined ? '?' : formatTime(seconds * 1000));
 const displayCategory = (category: string) => CATEGORY_NAMES[category] ?? category;
+
+// --- Traînées ---
+
+/**
+ * Une traînée ne montre que le dernier quart d'heure : on n'envoie donc à la carte
+ * graphique que la portion des chemins proche de l'instant affiché, et non les trajets
+ * entiers (dix fois moins de sommets à l'heure de pointe). Sans cela, chaque
+ * rafraîchissement du temps réel figeait l'animation ~150 ms, le temps de renvoyer
+ * 1,5 million de sommets.
+ *
+ * La fenêtre couvre la traînée et un peu d'avance ; elle est recalculée quand
+ * l'instant affiché en sort, et s'allonge quand le temps défile vite (pour ne pas la
+ * recalculer à chaque image). Les sommets sont passés à deck.gl déjà à plat (format
+ * binaire), sans qu'il ait à parcourir les trains un par un.
+ */
+interface TrailWindow {
+  data: TrainsData;
+  pathVersion: number;
+  byDelay: boolean;
+  /** Instants couverts (secondes UTC). */
+  from: number;
+  to: number;
+  binary: {
+    length: number;
+    startIndices: Uint32Array;
+    attributes: {
+      getPath: { value: Float64Array; size: 3 };
+      getTimestamps: { value: Float32Array; size: 1 };
+      getColor: { value: Uint8Array; size: 4 };
+    };
+  };
+}
+
+const TRAIL_AHEAD_MIN_S = 10 * 60;
+const TRAIL_AHEAD_MAX_S = 4 * 3600;
+/** Secondes réelles que doit durer une fenêtre, quelle que soit la vitesse du temps. */
+const TRAIL_WINDOW_REAL_S = 20;
+
+let trailWindow: TrailWindow | undefined;
+/** Vitesse de défilement du temps observée (secondes affichées par seconde réelle). */
+const pace = { t: Number.NaN, real: 0, rate: 1 };
+
+function observePace(t: number): number {
+  const real = performance.now() / 1000;
+  const elapsed = real - pace.real;
+  const advanced = Math.abs(t - pace.t);
+  // Les sauts (frise, retour au direct) ne disent rien de la vitesse : on les ignore.
+  if (elapsed > 0 && elapsed < 1 && advanced < 3600) {
+    const rate = Math.min(advanced / elapsed, 50_000);
+    pace.rate += (rate - pace.rate) * Math.min(1, elapsed / 2);
+  }
+  pace.t = t;
+  pace.real = real;
+  return pace.rate;
+}
+
+function trails(data: TrainsData, t: number, byDelay: boolean): TrailWindow['binary'] {
+  const rate = observePace(t);
+  const current = trailWindow;
+  if (
+    current?.data === data &&
+    current.pathVersion === data.pathVersion &&
+    current.byDelay === byDelay &&
+    t - TRAIL_SECONDS >= current.from &&
+    t <= current.to
+  ) {
+    return current.binary;
+  }
+
+  const ahead = Math.min(TRAIL_AHEAD_MAX_S, Math.max(TRAIL_AHEAD_MIN_S, rate * TRAIL_WINDOW_REAL_S));
+  const from = t - TRAIL_SECONDS - 60;
+  const to = t + ahead;
+  // 1. Portion de chaque chemin dans la fenêtre (un sommet de marge de chaque côté).
+  const ranges: Array<[Train, number, number]> = [];
+  let vertices = 0;
+  for (const train of data.trains) {
+    const { times } = train;
+    const n = times.length;
+    if (n < 2 || times[n - 1]! < from || times[0]! > to) continue;
+    const first = vertexBefore(times, from);
+    const last = Math.min(n - 1, vertexBefore(times, to) + 1);
+    if (last <= first) continue;
+    ranges.push([train, first, last]);
+    vertices += last - first + 1;
+  }
+  // 2. Recopie à plat.
+  const startIndices = new Uint32Array(ranges.length);
+  const positions = new Float64Array(vertices * 3);
+  const timestamps = new Float32Array(vertices);
+  const colors = new Uint8Array(vertices * 4);
+  let offset = 0;
+  ranges.forEach(([train, first, last], i) => {
+    const count = last - first + 1;
+    startIndices[i] = offset;
+    positions.set(train.flatPath.subarray(first * 3, (last + 1) * 3), offset * 3);
+    timestamps.set(train.timestamps.subarray(first, last + 1), offset);
+    // En mode « retard », seules les têtes sont colorées : la traînée reste neutre.
+    const color = byDelay ? TRAIL_GREY : [...FAMILY_STYLE[train.family].color, 200];
+    for (let k = offset; k < offset + count; k++) colors.set(color as number[], k * 4);
+    offset += count;
+  });
+
+  const binary = {
+    length: ranges.length,
+    startIndices,
+    attributes: {
+      getPath: { value: positions, size: 3 as const },
+      getTimestamps: { value: timestamps, size: 1 as const },
+      getColor: { value: colors, size: 4 as const },
+    },
+  };
+  trailWindow = { data, pathVersion: data.pathVersion, byDelay, from, to, binary };
+  return binary;
+}
 
 // --- Sélection : trajet, arrêts, tableaux d'affichage ---
 
@@ -1074,14 +1140,12 @@ export const trains = defineModule<TrainsData>({
     const labels = view.zoom >= 8 ? markers : markers.filter((_, i) => i === 0 || i === markers.length - 1 || i === nextStop);
 
     return [
-      new TripsLayer<Train>({
+      new TripsLayer({
         id: 'trains/traines',
-        data: data.trains,
-        getPath: (train) => train.flatPath,
+        // Données binaires : les accesseurs sont remplacés par les tableaux de `attributes`.
+        data: trails(data, t, byDelay),
+        _pathType: 'open',
         positionFormat: 'XYZ',
-        getTimestamps: (train) => train.timestamps,
-        // En mode « retard », seules les têtes sont colorées : la traînée reste neutre.
-        getColor: (train) => (byDelay ? TRAIL_GREY : [...FAMILY_STYLE[train.family].color, 200]),
         currentTime: t - data.base,
         trailLength: TRAIL_SECONDS,
         fadeTrail: true,
@@ -1089,7 +1153,6 @@ export const trains = defineModule<TrainsData>({
         getWidth: 3,
         capRounded: true,
         jointRounded: true,
-        updateTriggers: { getPath: data.pathVersion, getColor: byDelay },
         parameters,
       }),
       chosenTrain && routeLayers(chosenTrain, t, parameters),

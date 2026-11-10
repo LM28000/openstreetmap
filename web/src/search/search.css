@@ -1,0 +1,312 @@
+/*
+ * Recherche universelle. Les couleurs viennent des jetons --ui-* de l'interface
+ * (chrome sombre neutre, aucune teinte de données) ; les valeurs de repli ne servent
+ * que si la feuille de style générale ne les définit pas.
+ */
+
+.search {
+  position: relative;
+  width: 100%;
+  font-size: 14px;
+  line-height: 1.4;
+  color: var(--ui-ink, #f1f4f9);
+}
+
+.search__bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  height: 46px;
+  padding: 0 12px 0 14px;
+  border: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+  border-radius: 14px;
+  background: var(--ui-glass, rgba(14, 18, 27, 0.88));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.search__bar--open {
+  background: var(--ui-glass-strong, rgba(11, 14, 21, 0.95));
+}
+
+/* Le focus se voit sur toute la barre, pas seulement sur le champ. */
+.search__bar:focus-within {
+  outline: 2px solid var(--ui-ink, #f1f4f9);
+  outline-offset: 1px;
+}
+
+.search__icon,
+.search__kind {
+  flex: none;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.8;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+
+.search__icon {
+  width: 18px;
+  height: 18px;
+  color: var(--ui-muted, #9aa4b6);
+}
+
+.search__input {
+  flex: 1;
+  min-width: 0;
+  height: 100%;
+  padding: 0;
+  border: 0;
+  outline: none;
+  background: transparent;
+  color: var(--ui-ink, #f1f4f9);
+  font: inherit;
+  font-size: 16px; /* 16 px : le navigateur d'un téléphone ne zoome pas à la saisie */
+}
+
+.search__input::placeholder {
+  color: var(--ui-muted, #9aa4b6);
+}
+
+kbd {
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 11px;
+}
+
+.search__key,
+.search__hints kbd,
+.search__enter {
+  padding: 2px 6px;
+  border: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  color: var(--ui-muted, #9aa4b6);
+  white-space: nowrap;
+}
+
+.search__clear {
+  flex: none;
+  width: 26px;
+  height: 26px;
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  background: var(--ui-control, rgba(255, 255, 255, 0.07));
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 18px;
+  line-height: 1;
+  cursor: pointer;
+}
+
+.search__clear:hover {
+  color: var(--ui-ink, #f1f4f9);
+}
+
+.search__clear:focus-visible,
+.search__link:focus-visible,
+.search__chip:focus-visible {
+  outline: 2px solid var(--ui-ink, #f1f4f9);
+  outline-offset: 1px;
+}
+
+/* Lu par les lecteurs d'écran seulement. */
+.search__sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.search__panel {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  right: 0;
+  display: flex;
+  flex-direction: column;
+  max-height: min(72vh, 560px);
+  overflow: hidden;
+  border: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+  border-radius: 16px;
+  background: var(--ui-glass-strong, rgba(11, 14, 21, 0.95));
+  box-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+  -webkit-backdrop-filter: blur(10px);
+  backdrop-filter: blur(10px);
+}
+
+.search__filters {
+  display: flex;
+  gap: 6px;
+  padding: 10px 12px 6px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  border-bottom: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+}
+
+.search__chip {
+  flex: none;
+  padding: 3px 10px;
+  border: 0;
+  border-radius: 999px;
+  background: var(--ui-control, rgba(255, 255, 255, 0.07));
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.search__chip--on {
+  background: var(--ui-pin-bg, #ffffff);
+  color: var(--ui-pin-ink, #0e121b);
+}
+
+.search__list {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding: 4px 6px 6px;
+  overscroll-behavior: contain;
+}
+
+.search__group {
+  padding: 10px 10px 4px;
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 11px;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+.search__group--row {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.search__option {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  min-height: 48px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  cursor: pointer;
+}
+
+.search__option--active {
+  background: var(--ui-control, rgba(255, 255, 255, 0.07));
+}
+
+.search__kind {
+  width: 18px;
+  height: 18px;
+  color: var(--ui-muted, #9aa4b6);
+}
+
+.search__text {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+}
+
+.search__title {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-weight: 500;
+}
+
+.search__subtitle {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 12px;
+}
+
+.search__live {
+  flex: none;
+  max-width: 45%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ui-muted, #9aa4b6);
+  font-family: ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  font-size: 12px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Un retard important : la seule teinte, un ambre pâle, comme dans les fiches. */
+.search__live--alert {
+  color: var(--ui-alert, #ffd29a);
+}
+
+.search__note {
+  margin: 0;
+  padding: 12px 16px;
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 13px;
+}
+
+.search__note--warn {
+  color: var(--ui-alert, #ffd29a);
+}
+
+.search__link {
+  padding: 0;
+  border: 0;
+  background: none;
+  color: var(--ui-ink, #f1f4f9);
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 2px;
+  text-transform: none;
+  letter-spacing: 0;
+  cursor: pointer;
+}
+
+.search__hints {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 16px;
+  padding: 9px 16px 11px;
+  border-top: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+  color: var(--ui-muted, #9aa4b6);
+  font-size: 12px;
+}
+
+/* Sur un écran tactile, pas de clavier à décrire. */
+@media (hover: none) {
+  .search__hints,
+  .search__enter,
+  .search__key {
+    display: none;
+  }
+}
+
+/* Repère posé sur un lieu trouvé : un rond blanc cerclé de sombre, comme les épingles de l'interface. */
+.search-pin {
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ui-pin-bg, #ffffff);
+  box-shadow:
+    0 0 0 3px rgba(14, 18, 27, 0.9),
+    0 6px 16px rgba(0, 0, 0, 0.35);
+  animation: search-pin-in 0.4s ease-out;
+}
+
+@keyframes search-pin-in {
+  from {
+    transform: scale(0.2);
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .search-pin {
+    animation: none;
+  }
+}

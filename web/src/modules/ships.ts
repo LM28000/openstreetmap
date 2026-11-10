@@ -43,7 +43,7 @@ interface ApiShip {
 
 type Family = 'marchandises' | 'passagers' | 'petits' | 'autres';
 
-interface Ship extends ApiShip {
+export interface Ship extends ApiShip {
   family: Family;
   moving: boolean;
   /** Direction affichée (degrés depuis le nord, sens horaire). */
@@ -52,7 +52,7 @@ interface Ship extends ApiShip {
   position: [number, number, number];
 }
 
-interface ShipsData {
+export interface ShipsData {
   ships: Ship[];
   byMmsi: Map<number, Ship>;
   disabled: string | null;

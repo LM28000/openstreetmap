@@ -44,7 +44,7 @@ interface ApiPlane {
 
 type Band = 0 | 1 | 2 | 3 | 4 | 'ground';
 
-interface Plane {
+export interface Plane {
   hex: string;
   callsign?: string;
   registration?: string;
@@ -79,14 +79,14 @@ interface Plane {
   groundVersion: number;
 }
 
-interface PlanesData {
+export interface PlanesData {
   planes: Plane[];
   byHex: Map<string, Plane>;
   /** Instant de la collecte du serveur (ms). */
   collectedAt: number;
 }
 
-interface PlanesSelection {
+export interface PlanesSelection {
   hex: string;
 }
 

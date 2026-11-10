@@ -94,6 +94,52 @@ export interface InfoContent {
   /** Tableaux : arrêts d'un train, départs d'une gare… */
   tables?: InfoTable[];
   link?: { href: string; label: string };
+
+  // --- Fiche unifiée : tous ces champs sont facultatifs, une fiche sans eux s'affiche comme avant. ---
+
+  /** Type de l'objet, en petites capitales au-dessus du titre (« Train · TGV INOUI »). Par défaut : nom du module. */
+  kind?: string;
+  /** Statut de la donnée, en pastille sous le titre (« En direct · il y a 6 s »). */
+  status?: InfoStatus;
+  /** Chiffres clés (trois au plus : les suivants sont ignorés), en cases égales, avant le détail. */
+  figures?: InfoFigure[];
+  /**
+   * Boutons du bas, après « Suivre » et « Partager » (ajoutés par la fiche elle-même :
+   * un module ne les déclare pas). `link` s'affiche à la suite, avec le même style.
+   */
+  actions?: InfoAction[];
+}
+
+/**
+ * Nature de la donnée affichée : le rouge n'est réservé qu'à `live`.
+ * - `live` : reçue en temps réel (point rouge) ;
+ * - `replay` : rejouée depuis l'historique (anneau) ;
+ * - `estimated` : position ou valeur calculée, pas mesurée (anneau en pointillés) ;
+ * - `scheduled` : horaire théorique ou prévision (point gris) ;
+ * - `none` : pastille de texte seule, sans point.
+ */
+export interface InfoStatus {
+  tone: 'live' | 'replay' | 'estimated' | 'scheduled' | 'none';
+  text: string;
+}
+
+export interface InfoFigure {
+  /** Valeur, déjà formatée (« 293 », « 09:15 »). */
+  value: string;
+  /** Unité, en petit après la valeur (« km/h »). */
+  unit?: string;
+  /** Légende sous la valeur (« estimés », « arrivée »). */
+  label: string;
+}
+
+export interface InfoAction {
+  label: string;
+  /** Lien externe, ouvert dans un nouvel onglet. */
+  href?: string;
+  /** Action locale (sans `href`). */
+  onClick?: () => void;
+  /** Bouton blanc, mis en avant. « Suivre » l'est déjà quand il existe : à réserver aux fiches sans position. */
+  primary?: boolean;
 }
 
 export interface InfoTable {

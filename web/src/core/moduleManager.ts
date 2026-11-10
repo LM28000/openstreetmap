@@ -178,23 +178,35 @@ export class ModuleManager {
     this.map = undefined;
   }
 
-  setVisible(id: string, visible: boolean): void {
+  /**
+   * `persist: false` : l'état vient d'une adresse partagée ; il ne doit pas écraser les préférences
+   * de ce navigateur, qui restent la valeur par défaut quand l'adresse ne dit rien.
+   */
+  setVisible(id: string, visible: boolean, { persist = true }: { persist?: boolean } = {}): void {
     const entry = this.entries.get(id);
     if (!entry || this.isVisible(entry) === visible) return;
     this.patch(id, { visible });
-    writeStorage(VISIBILITY_KEY, mapValues(this.snapshot, (state) => state.visible));
+    if (persist) writeStorage(VISIBILITY_KEY, mapValues(this.snapshot, (state) => state.visible));
     if (!visible && this.selection?.moduleId === id) this.setSelection(null, null);
     if (!this.map) return;
     if (visible) this.activate(entry);
     else this.deactivate(entry);
   }
 
-  setSetting(id: string, settingId: string, value: string): void {
+  /** Affiche exactement ces couches et masque les autres (une scène, ou l'état d'une adresse). */
+  setVisibleOnly(ids: Iterable<string>, options: { persist?: boolean } = {}): void {
+    const wanted = new Set(ids);
+    for (const module of this.modules) this.setVisible(module.id, wanted.has(module.id), options);
+  }
+
+  setSetting(id: string, settingId: string, value: string, { persist = true }: { persist?: boolean } = {}): void {
     const entry = this.entries.get(id);
     const state = this.snapshot[id];
     if (!entry || !state || state.settings[settingId] === value) return;
+    const setting = entry.module.settings?.find((s) => s.id === settingId);
+    if (!setting?.options.some((option) => option.value === value)) return; // valeur inconnue (adresse périmée)
     this.patch(id, { settings: { ...state.settings, [settingId]: value } });
-    writeStorage(SETTINGS_KEY, mapValues(this.snapshot, (s) => s.settings));
+    if (persist) writeStorage(SETTINGS_KEY, mapValues(this.snapshot, (s) => s.settings));
     entry.version++;
   }
 

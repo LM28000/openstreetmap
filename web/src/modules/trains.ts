@@ -16,7 +16,8 @@ import type { Color } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
 import { IconLayer, PathLayer, ScatterplotLayer, SolidPolygonLayer, TextLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { defineModule, type InfoContent, type InfoTable, type TerrainSampler } from '../core/module';
+import { defineModule, type InfoAction, type InfoContent, type InfoFigure, type InfoTable, type TerrainSampler } from '../core/module';
+import { measuredStatus, plainStatus, scheduledStatus } from '../core/infoStatus';
 import { formatTime } from '../ui/format';
 import {
   type ApiStation,
@@ -1455,44 +1456,105 @@ function stopsTable(train: Train, t: number): InfoTable {
   };
 }
 
-function describeTrain(train: Train, t: number): InfoContent {
+/** Retard en chiffre clé : « +6 » min, « −3 » min (avance), « 0 » min à l'heure. */
+function delayFigure(delay: number | null): InfoFigure {
+  if (delay === null) return { value: '—', label: 'retard inconnu' };
+  const minutes = Math.round(delay / 60);
+  const sign = minutes > 0 ? '+' : minutes < 0 ? '−' : '';
+  return { value: `${sign}${Math.abs(minutes)}`, unit: 'min', label: minutes < 0 ? 'd’avance' : minutes === 0 ? 'à l’heure' : 'de retard' };
+}
+
+/** Lien vers la carte OpenRailwayMap centrée sur un point (une page sans pistage, pour voir la voie et sa signalisation). */
+function railMapAction(lon: number, lat: number, zoom: number): InfoAction {
+  return {
+    label: 'OpenRailwayMap',
+    href: `https://www.openrailwaymap.org/?style=standard&lat=${lat.toFixed(3)}&lon=${lon.toFixed(3)}&zoom=${zoom}`,
+  };
+}
+
+function describeTrain(train: Train, t: number, data: TrainsData, time: number): InfoContent {
   const running = updateHead(train, t);
   const { head } = train;
   const last = train.stations.length - 1;
   const origin = train.stations[0]!;
   const terminus = train.stations[last]!;
   const fields: Array<[string, string]> = [];
+  const figures: InfoFigure[] = [];
 
   if (!running) {
+    // Pas encore parti ou déjà arrivé : les chiffres sont les horaires du trajet.
     const departure = train.dep[0] ?? 0;
-    fields.push(['État', t < departure ? `départ à ${hhmm(departure)}` : `arrivé à ${hhmm(train.arr[last])}`]);
+    const arrival = train.arr[last] ?? 0;
+    const minutes = Math.round((arrival - departure) / 60);
+    const long = minutes >= 60;
+    figures.push(
+      { value: hhmm(departure), label: t < departure ? 'départ' : 'parti' },
+      { value: hhmm(arrival), label: t < departure ? 'arrivée' : 'arrivé' },
+      { value: long ? `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}` : String(minutes), unit: long ? undefined : 'min', label: 'de trajet' },
+    );
   } else {
-    fields.push(['Retard', delayText(head.delay)]);
-    fields.push(['Vitesse', head.atStop !== null ? 'à quai' : `≈ ${Math.round(head.speed)} km/h (estimée)`]);
-    if (head.atStop === null && head.limit > 0) fields.push(['Vitesse autorisée', `${head.limit} km/h`]);
+    const speed: InfoFigure =
+      head.atStop !== null ? { value: '0', unit: 'km/h', label: 'à quai' } : { value: String(Math.round(head.speed)), unit: 'km/h', label: 'vitesse estimée' };
+    // À quai, le chiffre utile est l'heure de départ ; en route, l'heure d'arrivée au prochain arrêt.
+    let next: InfoFigure | undefined;
     if (head.atStop !== null && head.atStop < last) {
-      fields.push(['À quai', `${train.stations[head.atStop]!.name}, départ ${hhmm(train.dep[head.atStop])}`]);
+      next = { value: hhmm(train.dep[head.atStop]), label: `départ de ${train.stations[head.atStop]!.name}` };
     } else if (head.nextStop !== null) {
-      fields.push(['Prochain arrêt', `${train.stations[head.nextStop]!.name}, ${hhmm(train.arr[head.nextStop])}`]);
+      next = { value: hhmm(train.arr[head.nextStop]), label: train.stations[head.nextStop]!.name };
     }
+    // Sans temps réel, le retard n'existe pas : la vitesse passe en premier (c'est elle que montre la poignée).
+    if (train.realtime) figures.push(delayFigure(head.delay), speed);
+    else figures.push(speed);
+    if (next) figures.push(next);
+    if (head.atStop === null && head.limit > 0) fields.push(['Vitesse autorisée', `${head.limit} km/h`]);
   }
   if (train.line) fields.push(['Ligne', train.line]);
-  if (!train.realtime) fields.push(['Source', 'horaire théorique']);
   if (train.onTracks < 0.99) fields.push(['Tracé', `${Math.round(train.onTracks * 100)} % sur les voies réelles`]);
 
+  // Le retard vient du temps réel ; la position, elle, est toujours calculée. Sans temps réel, tout est théorique.
+  const status = train.canceled
+    ? plainStatus('Train supprimé')
+    : train.realtime
+      ? measuredStatus(time, data.realtimeAt === null ? undefined : data.realtimeAt * 1000)
+      : scheduledStatus('Horaire prévu');
+  const [lon, lat] = running ? head.position : [origin.lon, origin.lat];
+
   return {
+    kind: `Train · ${displayCategory(train.category)}`,
     title: `${displayCategory(train.category)} ${train.number}`,
     subtitle: `${origin.name} → ${terminus.name}`,
+    status,
+    figures,
     fields,
     tables: [stopsTable(train, t)],
+    actions: [railMapAction(lon!, lat!, 11)],
   };
 }
 
-function describeStation(station: Station, t: number): InfoContent {
+function describeStation(station: Station, t: number, data: TrainsData, time: number): InfoContent {
+  // Départs de l'heure qui vient (supprimés exclus) : leur nombre, la part « à l'heure » (moins de 5 min), le prochain.
+  const soon = station.visits
+    .filter(({ run, stop }) => !run.canceled && !run.skipped.has(stop) && stop < run.stations.length - 1)
+    .map(({ run, stop }) => ({ run, actual: run.dep[stop] ?? 0, delay: (run.dep[stop] ?? 0) - (run.plannedDep[stop] ?? 0) }))
+    .filter(({ actual }) => actual >= t - 60 && actual <= t + 3600)
+    .sort((a, b) => a.actual - b.actual);
+  const known = soon.filter(({ run }) => run.realtime);
+  const onTime = known.filter(({ delay }) => delay < 5 * 60).length;
+  const next = soon[0];
+  const realtime = data.realtimeAt !== null && known.length > 0;
+
   return {
+    kind: 'Gare',
     title: station.name,
-    subtitle: 'Gare · tableau d’affichage',
+    subtitle: 'tableau d’affichage',
+    status: realtime ? measuredStatus(time, data.realtimeAt! * 1000) : scheduledStatus('Horaires prévus'),
+    figures: [
+      { value: String(soon.length), label: 'départs dans l’heure' },
+      { value: known.length > 0 ? String(Math.round((onTime / known.length) * 100)) : '—', unit: known.length > 0 ? '%' : undefined, label: 'à l’heure' },
+      { value: next ? hhmm(next.actual) : '—', label: next ? `${displayCategory(next.run.category)} ${next.run.number}` : 'prochain départ' },
+    ],
     tables: [boardTable(station, t, true), boardTable(station, t, false)],
+    actions: [railMapAction(station.lon, station.lat, 15)],
   };
 }
 
@@ -1814,9 +1876,9 @@ export const trains = defineModule<TrainsData>({
   describe(selection, { data, time }) {
     const t = time / 1000;
     const train = selectedTrain(data, selection);
-    if (train) return describeTrain(train, t);
+    if (train && data) return describeTrain(train, t, data, time);
     const station = selectedStation(data, selection);
-    return station ? describeStation(station, t) : null;
+    return station && data ? describeStation(station, t, data, time) : null;
   },
 
   focus(selection, { data, time }) {

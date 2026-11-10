@@ -21,9 +21,9 @@
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, LineLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
-import { defineModule, type InfoContent, type LegendItem } from '../core/module';
+import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
-import { formatRelative } from '../ui/format';
+import { measuredStatus } from '../core/infoStatus';
 import {
   buildPlaneAtlas,
   planeClass,
@@ -227,6 +227,27 @@ function metersPerPixel(lat: number, zoom: number): number {
   return (METERS_PER_PIXEL_ZOOM0 * Math.max(0.05, Math.cos((lat * Math.PI) / 180))) / 2 ** zoom;
 }
 
+/**
+ * Part du minimum en pixels conservée selon le zoom : de loin, une centaine d'avions de 15 à 32 px
+ * ne feraient qu'une tache ; on les rapetisse (sans les perdre de vue) jusqu'à retrouver la taille
+ * pleine au zoom 6,5. Interpolation linéaire : 40 % au zoom 2, 60 % au zoom 4, 100 % à 6,5.
+ */
+const MINIMUM_SHARE: ReadonlyArray<[zoom: number, share: number]> = [
+  [2, 0.4],
+  [4, 0.6],
+  [6.5, 1],
+];
+
+function minimumShare(zoom: number): number {
+  if (zoom <= MINIMUM_SHARE[0]![0]) return MINIMUM_SHARE[0]![1];
+  for (let i = 1; i < MINIMUM_SHARE.length; i++) {
+    const [z1, s1] = MINIMUM_SHARE[i]!;
+    const [z0, s0] = MINIMUM_SHARE[i - 1]!;
+    if (zoom <= z1) return s0 + ((s1 - s0) * (zoom - z0)) / (z1 - z0);
+  }
+  return 1;
+}
+
 const SIZING = Object.fromEntries(PLANE_CLASSES.map((cls) => [cls, planeSizing(cls)])) as Record<PlaneClass, ReturnType<typeof planeSizing>>;
 
 /**
@@ -235,7 +256,7 @@ const SIZING = Object.fromEntries(PLANE_CLASSES.map((cls) => [cls, planeSizing(c
  */
 function displayed(plane: Plane, zoom: number): { cellMeters: number; spanMeters: number } {
   const { cellMeters, spanMeters, minSpanPx } = SIZING[plane.cls];
-  const grow = Math.max(1, (minSpanPx * metersPerPixel(plane.lat, zoom)) / spanMeters);
+  const grow = Math.max(1, (minSpanPx * minimumShare(zoom) * metersPerPixel(plane.lat, zoom)) / spanMeters);
   return { cellMeters: cellMeters * grow, spanMeters: spanMeters * grow };
 }
 
@@ -550,20 +571,24 @@ export const planes = defineModule<PlanesData>({
     const fields: Array<[string, string]> = [];
     if (plane.registration) fields.push(['Immatriculation', plane.registration]);
     if (plane.type) fields.push(['Type', plane.type]);
-    if (plane.ground) {
-      fields.push(['Altitude', 'au sol']);
-    } else if (at.altM !== null) {
-      const level = plane.altBaroFt !== undefined ? ` · ${flightLevel(plane.altBaroFt)}` : '';
-      fields.push(['Altitude', `${nf(at.altM)} m (${nf(at.altM / FT)} ft)${level}`]);
-    }
-    if (plane.speedKt > 0 || !plane.ground) fields.push(['Vitesse sol', `${nf(plane.speedKt * 1.852)} km/h (${nf(plane.speedKt)} nœuds)`]);
-    if (!plane.ground) {
-      fields.push(['Cap', `${nf(plane.track)}°`]);
-      fields.push(['Montée', describeClimb(plane.climbFpm)]);
-    }
+    // Altitude, vitesse et cap sont dans les chiffres clés ; restent la montée et les identifiants.
+    if (!plane.ground) fields.push(['Montée', describeClimb(plane.climbFpm)]);
     if (plane.squawk) fields.push(['Squawk', plane.squawk]);
     if (plane.emergency) fields.push(['Urgence déclarée', plane.emergency]);
-    fields.push(['Position vue', formatRelative(plane.observedAt, time)]);
+    fields.push(['Code OACI', plane.hex.toUpperCase()]);
+
+    const figures: InfoFigure[] = [
+      plane.ground
+        ? { value: '0', unit: 'm', label: 'au sol' }
+        : at.altM !== null
+          ? { value: nf(at.altM), unit: 'm', label: plane.altBaroFt !== undefined ? `altitude · ${flightLevel(plane.altBaroFt)}` : 'altitude' }
+          : { value: '—', label: 'altitude' },
+      { value: nf(plane.speedKt * 1.852), unit: 'km/h', label: 'vitesse sol' },
+      plane.ground ? { value: '—', label: 'cap' } : { value: `${nf(plane.track)}°`, label: 'cap' },
+    ];
+    const measured = measuredStatus(time, plane.observedAt);
+    // Une urgence passe devant : c'est ce qu'on veut voir en premier, la fraîcheur de la position suit.
+    const status = plane.alert ? { ...measured, text: `Urgence · ${measured.text}` } : measured;
 
     const meaning = plane.squawk ? EMERGENCY_SQUAWKS[plane.squawk] : undefined;
     const alert = meaning
@@ -572,11 +597,13 @@ export const planes = defineModule<PlanesData>({
         ? `L’appareil signale une urgence (${plane.emergency}).`
         : undefined;
     return {
+      kind: plane.cls === 'heli' ? PLANE_NAMES.heli.name : `Avion · ${PLANE_NAMES[plane.cls].name}`,
       title: plane.callsign ?? plane.registration ?? plane.hex.toUpperCase(),
-      subtitle: `ICAO ${plane.hex.toUpperCase()}`,
+      status,
+      figures,
       fields,
       note: alert,
-      link: { href: `https://globe.adsb.lol/?icao=${plane.hex}`, label: 'Suivre sur globe.adsb.lol' },
+      actions: [{ label: 'globe.adsb.lol', href: `https://globe.adsb.lol/?icao=${plane.hex}` }],
     };
   },
 

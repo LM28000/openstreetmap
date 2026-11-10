@@ -33,7 +33,8 @@
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
-import { defineModule, type InfoContent, type LegendItem } from '../core/module';
+import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
+import { estimatedStatus, measuredStatus } from '../core/infoStatus';
 import { declutter, halfZoomBreaks } from '../map/declutter';
 import { CELL_HEIGHT, CELL_METERS, bubbleIcon, buildTransitAtlas, estimatedLegendIcon, legendIcon, lengthShare, lengthUnits, type Kind, type TransitAtlas } from './transitIcons';
 import { OVER_MAP } from '../map/parameters';
@@ -455,36 +456,36 @@ function glideStepMs(zoom: number): number {
 
 const nf = (n: number, digits = 0) => n.toLocaleString('fr-FR', { maximumFractionDigits: digits });
 
-function ageText(ts: number, time: number): string {
-  const s = Math.max(0, Math.round((time - ts) / 1000));
-  if (s < 5) return 'à l’instant';
-  if (s < 90) return `il y a ${s} s`;
-  return `il y a ${Math.round(s / 60)} min`;
-}
-
 /** Heure locale (« 14:32 »). */
 function clockText(ms: number): string {
   return new Date(ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
 }
 
-function delayText(seconds: number): string {
-  if (Math.abs(seconds) < ON_TIME_S) return 'à l’heure';
-  const minutes = Math.round(Math.abs(seconds) / 60);
-  return seconds > 0 ? `${minutes} min de retard` : `${minutes} min d’avance`;
-}
-
 /** Fiche d'un véhicule dont la position est estimée : dit d'où vient l'estimation, avec le prochain arrêt et le retard si on les connaît. */
 function describeEstimated(v: Vehicle, e: Estimate, line: Line, fields: Array<[string, string]>): InfoContent {
-  fields.push(['Position', e.theoretical ? 'estimée d’après l’horaire théorique' : 'estimée d’après les horaires en temps réel']);
-  if (e.to) fields.push(['Direction', e.to]);
-  if (e.next) fields.push(['Prochain arrêt', e.nextAt === undefined ? e.next : `${e.next} · ${clockText(e.nextAt)}`]);
   if (e.theoretical) fields.push(['Retard', 'inconnu : pas de temps réel pour cette circulation']);
-  else if (e.delayS !== undefined) fields.push(['Retard', delayText(e.delayS)]);
-  if (v.speedKmh !== undefined) fields.push(['Vitesse estimée', `${nf(v.speedKmh)} km/h`]);
   fields.push(['Licence des données', LICENCES[line.network.licence] ?? line.network.licence]);
+  // Le retard (s'il est connu) passe en premier : c'est le chiffre que la poignée du téléphone montre.
+  const figures: InfoFigure[] = [];
+  if (!e.theoretical && e.delayS !== undefined) {
+    const minutes = Math.round(e.delayS / 60);
+    const late = Math.abs(e.delayS) >= ON_TIME_S && minutes !== 0;
+    figures.push({
+      value: late ? `${minutes > 0 ? '+' : '−'}${Math.abs(minutes)}` : '0',
+      unit: 'min',
+      label: !late ? 'à l’heure' : minutes > 0 ? 'de retard' : 'd’avance',
+    });
+  }
+  if (v.speedKmh !== undefined) figures.push({ value: nf(v.speedKmh), unit: 'km/h', label: 'vitesse estimée' });
+  if (e.next) figures.push({ value: e.nextAt === undefined ? '—' : clockText(e.nextAt), label: e.next });
   return {
+    kind: kindLabel(line),
     title: lineTitle(line),
-    subtitle: `${line.network.name} · position estimée`,
+    subtitle: e.to ? `vers ${e.to}` : line.longName,
+    status: estimatedStatus(
+      e.theoretical ? 'Position estimée d’après l’horaire théorique' : 'Position estimée d’après les horaires en temps réel',
+    ),
+    figures,
     fields,
     note: `Ce réseau ne publie pas la position de ses véhicules, seulement ses horaires. La carte place le véhicule sur le tracé de sa ligne ${
       e.theoretical
@@ -492,6 +493,11 @@ function describeEstimated(v: Vehicle, e: Estimate, line: Line, fields: Array<[s
         : 'd’après l’heure prévue à chaque arrêt, corrigée du retard annoncé en temps réel'
     }, à vitesse régulière d’un arrêt au suivant. La position réelle peut différer de quelques centaines de mètres.`,
   };
+}
+
+/** « Bus · Tisséo » : le mode puis le réseau, au-dessus du titre de la fiche. */
+function kindLabel(line: Line): string {
+  return `${line.mode ? MODE_LABELS[line.mode] : 'Transport en commun'} · ${line.network.name}`;
 }
 
 function lineTitle(line: Line): string {
@@ -771,14 +777,19 @@ export const transit = defineModule<TransitData>({
       if (!net) return null;
       const lines = new Set(data.vehicles.filter((v) => v.line.network === net).map((v) => v.line.id ?? '?')).size;
       return {
+        kind: 'Réseau de transport',
         title: net.name,
-        subtitle: 'Réseau de transport',
-        fields: [
-          ['Véhicules en circulation', nf(net.count)],
-          ...(net.estimated > 0 ? [['dont positions estimées d’après les horaires', nf(net.estimated)] as [string, string]] : []),
-          ['Lignes en service', nf(lines)],
-          ['Licence des données', LICENCES[net.licence] ?? net.licence],
+        // Tout estimé : le réseau ne publie aucune position. Sinon au moins une est reçue, la pastille le dit.
+        status:
+          net.estimated === net.count
+            ? estimatedStatus('Positions estimées d’après les horaires')
+            : measuredStatus(time, data.collectedAt),
+        figures: [
+          { value: nf(net.count), label: 'véhicules en circulation' },
+          { value: nf(lines), label: 'lignes en service' },
+          ...(net.estimated > 0 ? [{ value: nf(net.estimated), label: 'positions estimées' }] : []),
         ],
+        fields: [['Licence des données', LICENCES[net.licence] ?? net.licence]],
         note:
           net.estimated > 0
             ? `Rond de la vue d’ensemble, placé au centre des véhicules du réseau. ${net.estimated === net.count ? 'Ce réseau ne publie pas la position de ses véhicules' : 'Une partie de ses véhicules est estimée'} : la carte les place d’après ses horaires en temps réel. Zoomez pour voir chaque véhicule.`
@@ -788,18 +799,21 @@ export const transit = defineModule<TransitData>({
     const v = data.byKey.get(sel.key);
     if (!v) return null;
     const line = v.line;
-    const fields: Array<[string, string]> = [['Réseau', line.network.name]];
-    fields.push(['Ligne', [line.name ?? line.id, line.longName].filter(Boolean).join(' · ') || 'inconnue (le flux ne la précise pas)']);
-    fields.push(['Mode', line.mode ? MODE_LABELS[line.mode] : 'non précisé']);
+    // Le réseau et le mode sont dans `kind`, la direction dans le sous-titre : les champs gardent le reste.
+    const fields: Array<[string, string]> = [];
+    if (!line.name && !line.id) fields.push(['Ligne', 'inconnue (le flux ne la précise pas)']);
     if (v.estimate) return describeEstimated(v, v.estimate, line, fields);
     fields.push(['Véhicule', v.id]);
-    if (v.speedKmh !== undefined) fields.push(['Vitesse', `${nf(v.speedKmh)} km/h`]);
-    if (v.headingDeg !== undefined) fields.push(['Cap', `${nf(v.headingDeg)}°`]);
-    fields.push(['Position relevée', ageText(v.ts, time)]);
     fields.push(['Licence des données', LICENCES[line.network.licence] ?? line.network.licence]);
+    const figures: InfoFigure[] = [];
+    if (v.speedKmh !== undefined) figures.push({ value: nf(v.speedKmh), unit: 'km/h', label: 'vitesse' });
+    if (v.headingDeg !== undefined) figures.push({ value: `${nf(v.headingDeg)}°`, label: 'cap' });
     return {
+      kind: kindLabel(line),
       title: lineTitle(line),
-      subtitle: `${line.network.name} · véhicule ${v.id}`,
+      subtitle: line.longName,
+      status: measuredStatus(time, v.ts),
+      figures,
       fields,
       note: 'Position GPS publiée par le réseau, relue toutes les 30 secondes ; le véhicule glisse d’une position à la suivante, avec un léger retard.',
     };

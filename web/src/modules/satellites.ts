@@ -23,6 +23,7 @@ import type { Color, Position } from '@deck.gl/core';
 import { IconLayer, PathLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent } from '../core/module';
+import { estimatedStatus } from '../core/infoStatus';
 import { formatDateTime, formatRelative } from '../ui/format';
 import {
   type ApiSatellite,
@@ -59,6 +60,13 @@ const FAMILIES: Record<Family, { label: string }> = {
   nav: { label: 'Navigation (GPS, Galileo)' },
   weather: { label: 'Météo' },
   bright: { label: 'Autre satellite brillant' },
+};
+/** Nom court de la famille, pour le type de la fiche (« Satellite · Navigation »). */
+const FAMILY_KIND: Record<Family, string> = {
+  station: 'Station spatiale',
+  nav: 'Navigation',
+  weather: 'Météo',
+  bright: 'Satellite brillant',
 };
 const GROUP_FAMILY: Record<string, Family> = {
   stations: 'station',
@@ -560,16 +568,8 @@ export const satellites = defineModule<SatellitesData>({
       ['N° NORAD', String(satellite.id)],
       ['Désignation internationale', satellite.intl],
     ];
-    if (exact) {
-      fields.push(
-        ['Altitude', `${km.format(exact.altKm)} km`],
-        ['Vitesse', `${twoDecimals.format(exact.speedKmS)} km/s (${km.format(exact.speedKmS * 3600)} km/h)`],
-      );
-    } else {
-      fields.push(['Position', 'indisponible à cet instant (le modèle ne converge plus)']);
-    }
+    if (!exact) fields.push(['Position', 'indisponible à cet instant (le modèle ne converge plus)']);
     fields.push(
-      ['Période', formatDuration(satellite.periodMin)],
       ['Inclinaison', `${oneDecimal.format(satellite.inclination)}°`],
       ['Orbite', `${km.format(satellite.perigeeKm)} × ${km.format(satellite.apogeeKm)} km (périgée × apogée)`],
     );
@@ -585,13 +585,21 @@ export const satellites = defineModule<SatellitesData>({
 
     const gap = Math.abs(time - satellite.epoch);
     return {
+      kind: `Satellite · ${family ? FAMILY_KIND[family] : 'Starlink'}`,
       title: satellite.name,
-      subtitle: family ? FAMILIES[family].label : 'Constellation Starlink',
+      // Aucune mesure ici : la position sort d'un modèle (SGP4) alimenté par les derniers éléments orbitaux.
+      status: estimatedStatus('Position calculée d’après les éléments orbitaux'),
+      figures: [
+        exact ? { value: km.format(exact.altKm), unit: 'km', label: 'altitude' } : { value: '—', label: 'altitude' },
+        exact ? { value: twoDecimals.format(exact.speedKmS), unit: 'km/s', label: 'vitesse' } : { value: '—', label: 'vitesse' },
+        { value: formatDuration(satellite.periodMin), label: 'période' },
+      ],
       fields,
       note:
         gap > 3 * 86_400_000
           ? 'Les éléments orbitaux sont éloignés de l’instant affiché : la position est approximative, avec une erreur de plusieurs kilomètres qui grandit avec le temps.'
           : 'Altitude affichée comprimée sur la carte. Les éléments orbitaux sont renouvelés par CelesTrak toutes les deux heures.',
+      actions: [{ label: 'CelesTrak', href: `https://celestrak.org/satcat/records.php?CATNR=${satellite.id}` }],
     };
   },
 

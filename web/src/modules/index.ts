@@ -13,9 +13,11 @@ import { fuel } from './fuel';
 import { planes } from './planes';
 import { power } from './power';
 import { railways } from './railways';
+import { rain } from './rain';
 import { satellites } from './satellites';
 import { ships } from './ships';
 import { trains } from './trains';
 import { transit } from './transit';
+import { wind } from './wind';
 
-export const MODULES: LayerModule[] = [trains, railways, planes, ships, transit, bikes, floods, fires, earthquakes, power, fuel, dayNight, satellites];
+export const MODULES: LayerModule[] = [trains, railways, planes, ships, transit, bikes, floods, fires, earthquakes, power, fuel, dayNight, satellites, rain, wind];

@@ -6,6 +6,7 @@
 //! - rassemble les vélos en libre-service de France (GBFS) et les feux détectés par satellite ;
 //! - relève les éléments orbitaux des satellites (CelesTrak), que le navigateur propage lui-même ;
 //! - rassemble les bus, trams et métros en direct des réseaux qui publient leurs positions ;
+//! - relève le champ de vent (Open-Meteo, modèle ARPEGE) toutes les 6 heures ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -29,6 +30,7 @@ mod state;
 mod timetable;
 mod tracks;
 mod transit;
+mod wind;
 
 use std::net::{IpAddr, SocketAddr};
 use std::path::PathBuf;
@@ -88,6 +90,7 @@ async fn main() -> Result<()> {
     tokio::spawn(ships::poll_forever(state.clone()));
     tokio::spawn(satellites::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(transit::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(wind::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     match &config.web_dir {
         Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),

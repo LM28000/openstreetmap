@@ -19,6 +19,7 @@
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.
 
+mod accidents;
 mod air;
 mod api;
 mod bikes;
@@ -107,6 +108,7 @@ async fn main() -> Result<()> {
     tokio::spawn(transit::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(wind::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(irve::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(accidents::poll_forever(http.clone(), config.data_dir.clone()));
     tokio::spawn(monuments::poll_forever(http.clone(), config.data_dir.clone()));
     tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
     tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));

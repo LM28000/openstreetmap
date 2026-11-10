@@ -1,17 +1,24 @@
 /**
- * Pictogrammes des véhicules de transport urbain, dessinés une fois dans un canvas
- * (« atlas ») que deck.gl découpe. Le mode se lit à la **forme**, jamais à la couleur seule :
- * - `bus` : rond ;
- * - `tram` : carré arrondi ;
- * - `metro` : losange ;
- * - `other` : triangle (train, bateau, câble : rares).
+ * Silhouettes des véhicules de transport urbain, vues de dessus, dessinées une fois dans un canvas
+ * (« atlas ») que deck.gl découpe. Tracés de la planche de symboles validée : le mode se lit à la
+ * **forme** et à la longueur, jamais à la couleur seule :
+ * - `bus` : une caisse de 12 m ;
+ * - `tram` : une rame articulée de trois éléments ;
+ * - `metro` : trois voitures accouplées ;
+ * - `other` : deux éléments articulés (train, bateau, câble : rares ; le flux ne dit pas qu'un bus est
+ *   articulé, la silhouette du bus articulé de la planche sert donc à ces modes-là).
  *
- * Chaque forme existe en trois versions blanches, teintées à l'affichage (`mask: true`) :
- * `<forme>-fill` (le corps, de la couleur de la ligne) et `<forme>-halo` (la même forme grossie,
- * en blanc ou en sombre selon la couleur du corps) : le contour garde lisible une couleur
- * officielle claire sur fond clair, ou sombre sur fond sombre. `<forme>-halo-est` est ce même
- * contour en **pointillé**, pour les véhicules dont la position est estimée d'après les horaires
- * et non mesurée : même couleur, même forme, seul le contour change.
+ * La proue est en haut de l'image (cap 0 = nord). Toutes les cellules ont la même échelle (un
+ * véhicule de N unités fait N × 5 px) et la même hauteur : une seule taille d'icône sur la carte
+ * suffit, et un tram est deux fois plus long qu'un bus à l'écran comme dans la rue.
+ *
+ * Chaque silhouette existe en trois versions blanches, teintées à l'affichage (`mask: true`) :
+ * `<forme>-fill` (le corps, de la couleur de la ligne ; un trait de pare-brise y est ajouré, ce qui
+ * montre l'avant) et `<forme>-halo` (la même forme grossie, en blanc ou en sombre selon la couleur
+ * du corps) : le contour garde lisible une couleur officielle claire sur fond clair, ou sombre sur
+ * fond sombre. `<forme>-halo-est` est ce même contour en **pointillé**, pour les véhicules dont la
+ * position est estimée d'après les horaires et non mesurée : même couleur, même forme, seul le
+ * contour change.
  */
 import type { IconLayerProps } from '@deck.gl/layers';
 
@@ -20,38 +27,65 @@ type IconMapping = NonNullable<IconLayerProps['iconMapping']>;
 export type Kind = 'bus' | 'tram' | 'metro' | 'other';
 export const KINDS: readonly Kind[] = ['bus', 'tram', 'metro', 'other'];
 
-const SIZE = 64;
-const GAP = 4;
-/** Épaisseur ajoutée de chaque côté par le contour, dans l'atlas (sur 64). */
-const HALO = 6;
-/** Contour pointillé : plus épais (il perd la moitié de sa surface en tirets) ; tirets et vides en unités de l'atlas (sur 64). */
-const HALO_DASHED = 7;
-const DASH: [number, number] = [11, 8];
+/** Pixels de l'atlas par unité de la planche (la caisse d'un bus fait 20 unités de long sur 10 de large). */
+const K = 5;
+const BODY_WIDTH = 10 * K;
+const GAP = 2 * K;
+const SEGMENTS: Record<Kind, number[]> = { bus: [20], other: [13, 11], tram: [14, 12, 14], metro: [12, 12, 12] };
+/** Longueur d'une unité sur le terrain (mètres) : un bus fait 13 m, une rame de tram 29 m. */
+const METERS_PER_UNIT = 0.65;
+export const CELL_WIDTH = 96;
+export const CELL_HEIGHT = 256;
+const CELL_GAP = 4;
+/** Hauteur d'une cellule sur le terrain (mètres) : la taille d'icône à donner à deck.gl. */
+export const CELL_METERS = (CELL_HEIGHT / K) * METERS_PER_UNIT;
+
+/** Longueur d'un véhicule (unités de la planche), avec ses intervalles. */
+export const lengthUnits = (kind: Kind) => SEGMENTS[kind].reduce((a, b) => a + b, 0) + 2 * (SEGMENTS[kind].length - 1);
+/** Longueur d'un véhicule rapportée à la hauteur d'une cellule. */
+export const lengthShare = (kind: Kind) => (lengthUnits(kind) * K) / CELL_HEIGHT;
+
+/** Épaisseur du contour autour du corps, dans l'atlas. */
+const HALO = 10;
+/** Contour pointillé : plus épais (il perd la moitié de sa surface en tirets) ; tirets et vides en pixels de l'atlas. */
+const HALO_DASHED = 11;
+const DASH: [number, number] = [16, 12];
 const OUTLINE_DARK = '#161a26';
 
+/** Les éléments du véhicule, centrés sur l'origine, avant en haut. */
 function path(ctx: CanvasRenderingContext2D, kind: Kind): void {
+  const segments = SEGMENTS[kind];
+  const w = BODY_WIDTH;
+  const total = segments.reduce((a, b) => a + b * K, 0) + GAP * (segments.length - 1);
+  let y = -total / 2;
   ctx.beginPath();
-  switch (kind) {
-    case 'bus':
-      ctx.arc(32, 32, 21, 0, Math.PI * 2);
-      break;
-    case 'tram':
-      ctx.roundRect(11, 11, 42, 42, 9);
-      break;
-    case 'metro':
-      ctx.moveTo(32, 4);
-      ctx.lineTo(60, 32);
-      ctx.lineTo(32, 60);
-      ctx.lineTo(4, 32);
-      ctx.closePath();
-      break;
-    case 'other':
-      ctx.moveTo(32, 8);
-      ctx.lineTo(58, 54);
-      ctx.lineTo(6, 54);
-      ctx.closePath();
-      break;
-  }
+  segments.forEach((units, i) => {
+    const length = units * K;
+    // L'avant est arrondi, l'arrière du dernier élément un peu moins carré que les jonctions.
+    const radius =
+      segments.length === 1
+        ? [w * 0.5, w * 0.5, w * 0.4, w * 0.4]
+        : i === 0
+          ? [w * 0.5, w * 0.5, w * 0.22, w * 0.22]
+          : i === segments.length - 1
+            ? [w * 0.22, w * 0.22, w * 0.4, w * 0.4]
+            : w * 0.22;
+    ctx.roundRect(-w / 2, y, w, length, radius);
+    y += length + GAP;
+  });
+}
+
+/** Pare-brise : un trait près de l'avant, sur le premier élément. */
+function windscreen(ctx: CanvasRenderingContext2D, kind: Kind): void {
+  const segments = SEGMENTS[kind];
+  const total = segments.reduce((a, b) => a + b * K, 0) + GAP * (segments.length - 1);
+  const y = -total / 2 + BODY_WIDTH * 0.36;
+  ctx.lineCap = 'round';
+  ctx.lineWidth = 8;
+  ctx.beginPath();
+  ctx.moveTo(-BODY_WIDTH * 0.28, y);
+  ctx.lineTo(BODY_WIDTH * 0.28, y);
+  ctx.stroke();
 }
 
 function drawBody(ctx: CanvasRenderingContext2D, kind: Kind, color: string): void {
@@ -70,16 +104,18 @@ function drawHalo(ctx: CanvasRenderingContext2D, kind: Kind, color: string): voi
   ctx.fill();
 }
 
-/** Contour pointillé : seul l'anneau extérieur du corps est dessiné, en tirets ; le corps le recouvre en dedans. */
+/** Contour pointillé : l'anneau extérieur du corps en tirets ; le corps le recouvre en dedans. */
 function drawDashedHalo(ctx: CanvasRenderingContext2D, kind: Kind, color: string): void {
   ctx.lineJoin = 'round';
   ctx.lineCap = 'butt';
   ctx.lineWidth = HALO_DASHED * 2;
   ctx.setLineDash(DASH);
   ctx.strokeStyle = color;
+  ctx.fillStyle = color;
   path(ctx, kind);
   ctx.stroke();
   ctx.setLineDash([]);
+  ctx.fill();
 }
 
 export interface TransitAtlas {
@@ -91,49 +127,55 @@ export interface TransitAtlas {
 export function buildTransitAtlas(): TransitAtlas {
   const names = KINDS.flatMap((kind) => [`${kind}-halo`, `${kind}-halo-est`, `${kind}-fill`] as const);
   const canvas = document.createElement('canvas');
-  canvas.width = names.length * (SIZE + GAP);
-  canvas.height = SIZE;
+  canvas.width = names.length * (CELL_WIDTH + CELL_GAP);
+  canvas.height = CELL_HEIGHT;
   const ctx = canvas.getContext('2d');
   const mapping: IconMapping = {};
   names.forEach((name, i) => {
-    const x = i * (SIZE + GAP);
+    const x = i * (CELL_WIDTH + CELL_GAP);
     if (ctx) {
       ctx.save();
-      ctx.translate(x, 0);
+      ctx.translate(x + CELL_WIDTH / 2, CELL_HEIGHT / 2);
       const kind = name.split('-')[0] as Kind;
       if (name.endsWith('halo-est')) drawDashedHalo(ctx, kind, '#ffffff');
       else if (name.endsWith('halo')) drawHalo(ctx, kind, '#ffffff');
-      else drawBody(ctx, kind, '#ffffff');
+      else {
+        drawBody(ctx, kind, '#ffffff');
+        // Le pare-brise est ajouré : le contour dessous (clair ou sombre) y apparaît à moitié.
+        ctx.globalCompositeOperation = 'destination-out';
+        ctx.strokeStyle = 'rgba(0,0,0,0.55)';
+        windscreen(ctx, kind);
+      }
       ctx.restore();
     }
-    mapping[name] = { x, y: 0, width: SIZE, height: SIZE, anchorX: SIZE / 2, anchorY: SIZE / 2, mask: true };
+    mapping[name] = { x, y: 0, width: CELL_WIDTH, height: CELL_HEIGHT, anchorX: CELL_WIDTH / 2, anchorY: CELL_HEIGHT / 2, mask: true };
   });
   return { atlas: canvas.toDataURL(), mapping };
 }
 
-/** Pictogramme pour la légende : corps coloré et contour, comme sur la carte. */
-export function legendIcon(kind: Kind, color: string): string {
+/** Légende (36 x 14 px affichés, dessinée en 4x) : le véhicule couché, avant à droite, corps coloré et contour. */
+function legendCanvas(kind: Kind, color: string, dashed: boolean): string {
   const canvas = document.createElement('canvas');
-  canvas.width = SIZE;
-  canvas.height = SIZE;
+  canvas.width = 144;
+  canvas.height = 56;
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
-  drawHalo(ctx, kind, OUTLINE_DARK);
+  ctx.translate(72, 28);
+  ctx.rotate(Math.PI / 2);
+  ctx.scale(0.5, 0.5);
+  if (dashed) drawDashedHalo(ctx, kind, OUTLINE_DARK);
+  else drawHalo(ctx, kind, OUTLINE_DARK);
   drawBody(ctx, kind, color);
+  ctx.strokeStyle = 'rgba(22,26,38,0.55)';
+  windscreen(ctx, kind);
   return canvas.toDataURL();
 }
 
+/** Pictogramme pour la légende : corps coloré et contour, comme sur la carte. */
+export const legendIcon = (kind: Kind, color: string) => legendCanvas(kind, color, false);
+
 /** Pictogramme pour la légende d'une position estimée : le même, avec le contour pointillé. */
-export function estimatedLegendIcon(kind: Kind, color: string): string {
-  const canvas = document.createElement('canvas');
-  canvas.width = SIZE;
-  canvas.height = SIZE;
-  const ctx = canvas.getContext('2d');
-  if (!ctx) return '';
-  drawDashedHalo(ctx, kind, OUTLINE_DARK);
-  drawBody(ctx, kind, color);
-  return canvas.toDataURL();
-}
+export const estimatedLegendIcon = (kind: Kind, color: string) => legendCanvas(kind, color, true);
 
 /** Rond de la vue d'ensemble pour la légende : un réseau, taille selon son nombre de véhicules. */
 export function bubbleIcon(): string {

@@ -62,12 +62,27 @@ export interface LoadContext {
   settings: Readonly<Record<string, string>>;
 }
 
-/** Un réglage proposé dans le panneau des couches, sous forme de choix exclusifs. */
+/**
+ * Un réglage proposé dans le panneau des couches : des choix exclusifs, ou un curseur (`range`).
+ * Pour un curseur, `options` reste la liste des valeurs toutes faites que propose la recherche.
+ */
 export interface ModuleSetting {
   id: string;
   label: string;
   options: ReadonlyArray<{ value: string; label: string }>;
   defaultValue: string;
+  /** Curseur de `min` à `max` par pas de `step` (valeurs numériques) ; `format` donne le texte affiché. */
+  range?: { min: number; max: number; step: number; format(value: number): string };
+}
+
+/** Vrai si `value` est une valeur permise du réglage (un choix proposé, ou un cran du curseur). */
+export function acceptsSetting(setting: ModuleSetting, value: string | undefined): value is string {
+  if (!value) return false;
+  if (setting.options.some((option) => option.value === value)) return true;
+  const range = setting.range;
+  if (!range) return false;
+  const n = Number(value);
+  return Number.isFinite(n) && n >= range.min && n <= range.max && Number.isInteger((n - range.min) / range.step);
 }
 
 export interface LegendItem {

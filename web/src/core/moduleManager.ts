@@ -7,7 +7,7 @@
  */
 import type { Layer, LayersList } from '@deck.gl/core';
 import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
-import type { FocusTarget, InfoContent, LayerModule, LegendItem, RenderContext, TerrainSampler } from './module';
+import { acceptsSetting, type FocusTarget, type InfoContent, type LayerModule, type LegendItem, type RenderContext, type TerrainSampler } from './module';
 import { currentNight } from '../map/baseMap';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -209,7 +209,7 @@ export class ModuleManager {
     const state = this.snapshot[id];
     if (!entry || !state || state.settings[settingId] === value) return;
     const setting = entry.module.settings?.find((s) => s.id === settingId);
-    if (!setting?.options.some((option) => option.value === value)) return; // valeur inconnue (adresse périmée)
+    if (!setting || !acceptsSetting(setting, value)) return; // valeur inconnue (adresse périmée)
     this.patch(id, { settings: { ...state.settings, [settingId]: value } });
     if (persist) writeStorage(SETTINGS_KEY, mapValues(this.snapshot, (s) => s.settings));
     entry.version++;
@@ -421,7 +421,7 @@ function initialSettings(module: LayerModule, saved: Record<string, string> | un
   const settings: Record<string, string> = {};
   for (const setting of module.settings ?? []) {
     const value = saved?.[setting.id];
-    settings[setting.id] = setting.options.some((o) => o.value === value) && value ? value : setting.defaultValue;
+    settings[setting.id] = acceptsSetting(setting, value) ? value : setting.defaultValue;
   }
   return settings;
 }

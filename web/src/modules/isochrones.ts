@@ -327,6 +327,21 @@ export function formatDuration(seconds: number): string {
 
 const hhmm = (seconds: number) => formatTime(seconds * 1000);
 
+/** Durée maximale réglée, en clair : « 45 min », « 3 h », « 3 h 15 ». */
+function limitLabel(minutes: number): string {
+  if (minutes < 60) return `${minutes} min`;
+  return minutes % 60 === 0 ? `${minutes / 60} h` : `${Math.floor(minutes / 60)} h ${String(minutes % 60).padStart(2, '0')}`;
+}
+
+/** Bornes et pas du curseur de durée (minutes). */
+const DURATION_RANGE = { min: 30, max: 480, step: 15 };
+
+/** Allonge ou raccourcit la durée maximale (depuis la fiche de la gare de départ). */
+function nudgeDuration(current: number, delta: number): void {
+  const next = Math.min(DURATION_RANGE.max, Math.max(DURATION_RANGE.min, current + delta));
+  if (next !== current) ModuleManager.current?.setSetting(MODULE_ID, 'duree', String(next));
+}
+
 const CATEGORY_NAMES: Record<string, string> = {
   'Train TER': 'TER',
   INTERCITES: 'Intercités',
@@ -416,13 +431,18 @@ function describeOrigin(data: IsochroneData): InfoContent | null {
     kind: 'Gare de départ',
     title: origin.name,
     subtitle: `jusqu’où en train, en partant à ${hhmm(data.query.departure)}`,
-    status: plainStatus(`${data.query.maxMinutes / 60} h au plus, ${data.query.transfers === 'illimite' ? 'correspondances libres' : `${data.query.transfers} correspondance${data.query.transfers === '1' ? '' : 's'} au plus`}`),
+    status: plainStatus(`${limitLabel(data.query.maxMinutes)} au plus, ${data.query.transfers === 'illimite' ? 'correspondances libres' : `${data.query.transfers} correspondance${data.query.transfers === '1' ? '' : 's'} au plus`}`),
     figures: [
       { value: String(inside), label: 'gares atteintes' },
       { value: formatDuration(Math.max(0, ...data.reached.map((s) => s.seconds))), label: 'la plus lointaine' },
     ],
     note: 'L’heure de départ est celle de la frise : faites-la glisser pour voir la zone changer. La zone colorée étend chaque gare atteinte jusqu’à 30 km autour d’elle, à 15 km/h (route ou vélo).',
-    actions: [{ label: 'Effacer', onClick: () => clearOrigin() }],
+    // La durée se règle aussi d'ici, là où l'on regarde (le curseur complet est dans les réglages de la couche).
+    actions: [
+      { label: '− 30 min', onClick: () => nudgeDuration(data.query.maxMinutes, -30) },
+      { label: '+ 30 min', onClick: () => nudgeDuration(data.query.maxMinutes, 30) },
+      { label: 'Effacer', onClick: () => clearOrigin() },
+    ],
   };
 }
 
@@ -499,6 +519,8 @@ export const isochrones = defineModule<IsochroneData>({
     {
       id: 'duree',
       label: 'Durée maximale',
+      // Curseur au quart d'heure, de 30 min à 8 h ; les valeurs rondes servent à la recherche.
+      range: { ...DURATION_RANGE, format: limitLabel },
       options: [
         { value: '120', label: '2 h' },
         { value: '180', label: '3 h' },
@@ -551,7 +573,7 @@ export const isochrones = defineModule<IsochroneData>({
     if (!originCode) return 'Cliquez une gare, puis « Jusqu’où en train ? », ou cherchez « depuis Rennes »';
     if (!data?.origin || data.query.code !== originCode) return 'calcul en cours…';
     const n = data.reached.length;
-    const limit = data.query.maxMinutes % 60 === 0 ? `${data.query.maxMinutes / 60} h` : `${data.query.maxMinutes} min`;
+    const limit = limitLabel(data.query.maxMinutes);
     return `Depuis ${data.origin.name} à ${hhmm(data.query.departure)} : ${n.toLocaleString('fr-FR')} gare${n > 1 ? 's' : ''} en moins de ${limit}`;
   },
 

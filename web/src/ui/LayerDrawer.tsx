@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
-import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule, type LegendItem } from '../core/module';
+import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule, type LegendItem, type ModuleSetting } from '../core/module';
 import type { ModuleManager, ModuleRuntimeState } from '../core/moduleManager';
 import { SCENES, activeScene, applyScene } from '../core/scenes';
 import { formatDateTime, formatRelative } from './format';
@@ -168,8 +168,19 @@ function LayerRow({ module, state, now, manager, open, onToggleOpen, rowRef }: L
       {open && (
         <div className="layer__detail" id={detailId}>
           <p className="layer__description">{module.description}</p>
-          {module.settings?.map((setting) => (
-            <div key={setting.id} className="segmented" role="radiogroup" aria-label={`${module.name} : ${setting.label}`}>
+          {module.settings?.map((setting) =>
+            setting.range ? (
+              <RangeSetting
+                key={setting.id}
+                setting={setting}
+                value={state.settings[setting.id] ?? setting.defaultValue}
+                label={`${module.name} : ${setting.label}`}
+                onCommit={(value) => manager.setSetting(module.id, setting.id, value)}
+              />
+            ) : (
+            <div key={setting.id} className="setting">
+            <span className="setting__label" aria-hidden="true">{setting.label}</span>
+            <div className="segmented" role="radiogroup" aria-label={`${module.name} : ${setting.label}`}>
               {setting.options.map((option) => (
                 <button
                   key={option.value}
@@ -183,7 +194,9 @@ function LayerRow({ module, state, now, manager, open, onToggleOpen, rowRef }: L
                 </button>
               ))}
             </div>
-          ))}
+            </div>
+            ),
+          )}
           {legend.length > 0 && <Legend items={legend} />}
           <p className="layer__source">
             Source et licence : {module.attribution}
@@ -194,6 +207,47 @@ function LayerRow({ module, state, now, manager, open, onToggleOpen, rowRef }: L
         </div>
       )}
     </div>
+  );
+}
+
+/**
+ * Réglage continu : un curseur. La valeur affichée suit le doigt ; elle n'est appliquée qu'après une
+ * courte pause (ou au lâcher), pour ne pas relancer un calcul à chaque cran pendant qu'on glisse.
+ */
+function RangeSetting({ setting, value, label, onCommit }: { setting: ModuleSetting; value: string; label: string; onCommit(value: string): void }) {
+  const range = setting.range!;
+  const [draft, setDraft] = useState(value);
+  const timer = useRef<ReturnType<typeof setTimeout> | undefined>(undefined);
+  useEffect(() => setDraft(value), [value]);
+  useEffect(() => () => clearTimeout(timer.current), []);
+  const commit = (next: string) => {
+    clearTimeout(timer.current);
+    if (next !== value) onCommit(next);
+  };
+  return (
+    <label className="range">
+      <span className="range__head">
+        <span className="range__label">{setting.label}</span>
+        <span className="range__value">{range.format(Number(draft))}</span>
+      </span>
+      <input
+        type="range"
+        min={range.min}
+        max={range.max}
+        step={range.step}
+        value={draft}
+        aria-label={label}
+        aria-valuetext={range.format(Number(draft))}
+        onChange={(event) => {
+          const next = event.currentTarget.value;
+          setDraft(next);
+          clearTimeout(timer.current);
+          timer.current = setTimeout(() => commit(next), 250);
+        }}
+        onPointerUp={(event) => commit(event.currentTarget.value)}
+        onKeyUp={(event) => commit(event.currentTarget.value)}
+      />
+    </label>
   );
 }
 

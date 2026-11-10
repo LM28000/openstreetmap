@@ -602,6 +602,48 @@ p {
   transform: translateX(14px);
 }
 
+/* Curseur (ex. durée maximale des isochrones) */
+.range {
+  display: grid;
+  gap: 6px;
+  max-width: 320px;
+}
+
+.range__head {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  font-size: 12.5px;
+}
+
+.range__label {
+  color: var(--ui-muted);
+}
+
+.range__value {
+  color: var(--ui-ink);
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.range input[type='range'] {
+  width: 100%;
+  margin: 0;
+  accent-color: var(--ui-ink);
+  cursor: pointer;
+}
+
+/* Un réglage à choix : son titre au-dessus des boutons (« Correspondances », « Rendu »…) */
+.setting {
+  display: grid;
+  gap: 6px;
+}
+
+.setting__label {
+  color: var(--ui-muted);
+  font-size: 12.5px;
+}
+
 /* Choix exclusifs (ex. « Par type / Par retard ») */
 .segmented {
   display: inline-flex;

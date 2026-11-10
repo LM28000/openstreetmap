@@ -54,8 +54,9 @@ pub fn select(catalog: &Value) -> Vec<Network> {
         if dataset["type"] != "public-transit" || !lower.contains("interurbain") || is_excluded(title) {
             continue;
         }
+        let padded = format!("{lower} ");
         let rejected = ["scolaire interurbain", "train", " ter ", "maritime", "bacs", "île-de-france", "ile-de-france", "bateau", "tad ", "à la demande", "finist"];
-        if rejected.iter().any(|word| lower.contains(word)) {
+        if rejected.iter().any(|word| padded.contains(word)) {
             continue;
         }
         let resources: Vec<(String, String)> = dataset["resources"]

@@ -13,7 +13,7 @@
 //!
 //! Réglages (variables d'environnement) :
 //! - `ISO_CARS_TER`, `ISO_IDF`, `ISO_CARS_REGIONAUX` : `non` pour désactiver une source (toutes actives par défaut) ;
-//! - `ISO_CACHE_MO` : taille maximale du dossier des GTFS régionaux (400 Mo par défaut) ;
+//! - `ISO_CACHE_MO` : taille maximale du dossier des GTFS régionaux (800 Mo par défaut ; les ~55 réseaux en pèsent environ 600) ;
 //! - `ISO_MEMOIRE_MO` : budget de mémoire des cars régionaux (80 Mo par défaut) : au-delà, les réseaux suivants sont laissés de côté.
 
 use std::path::{Path, PathBuf};
@@ -58,7 +58,7 @@ impl Config {
             cars_ter: !off("ISO_CARS_TER"),
             idf: !off("ISO_IDF"),
             regional: !off("ISO_CARS_REGIONAUX"),
-            cache_limit: number("ISO_CACHE_MO", 400) << 20,
+            cache_limit: number("ISO_CACHE_MO", 800) << 20,
             memory_limit: (number("ISO_MEMOIRE_MO", 80) << 20) as usize,
         }
     }

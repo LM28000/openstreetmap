@@ -37,7 +37,10 @@ ENV HOST=0.0.0.0 \
     DATA_DIR=/data \
     ARCHIVE_DIR=/archive \
     WEB_DIR=/web \
-    RUST_LOG=info,tower_http=warn
+    RUST_LOG=info,tower_http=warn \
+    # glibc garde une réserve de mémoire par fil d'exécution : avec tokio et les gros fichiers
+    # lus au démarrage (GTFS, bornes), elle gonflait l'empreinte sans la rendre. Deux suffisent.
+    MALLOC_ARENA_MAX=2
 EXPOSE 8787
 # Jamais en administrateur : l'utilisateur est choisi par compose.yaml (celui qui possède les dossiers).
 USER 65534:65534

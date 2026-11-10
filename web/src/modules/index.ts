@@ -5,6 +5,7 @@
  */
 import type { LayerModule } from '../core/module';
 import { bikes } from './bikes';
+import { buildingShadows } from './buildingShadows';
 import { dayNight } from './dayNight';
 import { earthquakes } from './earthquakes';
 import { fires } from './fires';
@@ -20,4 +21,4 @@ import { trains } from './trains';
 import { transit } from './transit';
 import { wind } from './wind';
 
-export const MODULES: LayerModule[] = [trains, railways, planes, ships, transit, bikes, floods, fires, earthquakes, power, fuel, dayNight, satellites, rain, wind];
+export const MODULES: LayerModule[] = [trains, railways, planes, ships, transit, bikes, floods, fires, earthquakes, power, fuel, dayNight, buildingShadows, satellites, rain, wind];

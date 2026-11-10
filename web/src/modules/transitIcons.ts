@@ -6,10 +6,12 @@
  * - `metro` : losange ;
  * - `other` : triangle (train, bateau, câble : rares).
  *
- * Chaque forme existe en deux versions blanches, teintées à l'affichage (`mask: true`) :
+ * Chaque forme existe en trois versions blanches, teintées à l'affichage (`mask: true`) :
  * `<forme>-fill` (le corps, de la couleur de la ligne) et `<forme>-halo` (la même forme grossie,
  * en blanc ou en sombre selon la couleur du corps) : le contour garde lisible une couleur
- * officielle claire sur fond clair, ou sombre sur fond sombre.
+ * officielle claire sur fond clair, ou sombre sur fond sombre. `<forme>-halo-est` est ce même
+ * contour en **pointillé**, pour les véhicules dont la position est estimée d'après les horaires
+ * et non mesurée : même couleur, même forme, seul le contour change.
  */
 import type { IconLayerProps } from '@deck.gl/layers';
 
@@ -22,6 +24,9 @@ const SIZE = 64;
 const GAP = 4;
 /** Épaisseur ajoutée de chaque côté par le contour, dans l'atlas (sur 64). */
 const HALO = 6;
+/** Contour pointillé : plus épais (il perd la moitié de sa surface en tirets) ; tirets et vides en unités de l'atlas (sur 64). */
+const HALO_DASHED = 7;
+const DASH: [number, number] = [11, 8];
 const OUTLINE_DARK = '#161a26';
 
 function path(ctx: CanvasRenderingContext2D, kind: Kind): void {
@@ -65,6 +70,18 @@ function drawHalo(ctx: CanvasRenderingContext2D, kind: Kind, color: string): voi
   ctx.fill();
 }
 
+/** Contour pointillé : seul l'anneau extérieur du corps est dessiné, en tirets ; le corps le recouvre en dedans. */
+function drawDashedHalo(ctx: CanvasRenderingContext2D, kind: Kind, color: string): void {
+  ctx.lineJoin = 'round';
+  ctx.lineCap = 'butt';
+  ctx.lineWidth = HALO_DASHED * 2;
+  ctx.setLineDash(DASH);
+  ctx.strokeStyle = color;
+  path(ctx, kind);
+  ctx.stroke();
+  ctx.setLineDash([]);
+}
+
 export interface TransitAtlas {
   /** Image de l'atlas (data URL), telle que deck.gl l'attend. */
   atlas: string;
@@ -72,7 +89,7 @@ export interface TransitAtlas {
 }
 
 export function buildTransitAtlas(): TransitAtlas {
-  const names = KINDS.flatMap((kind) => [`${kind}-halo`, `${kind}-fill`] as const);
+  const names = KINDS.flatMap((kind) => [`${kind}-halo`, `${kind}-halo-est`, `${kind}-fill`] as const);
   const canvas = document.createElement('canvas');
   canvas.width = names.length * (SIZE + GAP);
   canvas.height = SIZE;
@@ -84,7 +101,8 @@ export function buildTransitAtlas(): TransitAtlas {
       ctx.save();
       ctx.translate(x, 0);
       const kind = name.split('-')[0] as Kind;
-      if (name.endsWith('halo')) drawHalo(ctx, kind, '#ffffff');
+      if (name.endsWith('halo-est')) drawDashedHalo(ctx, kind, '#ffffff');
+      else if (name.endsWith('halo')) drawHalo(ctx, kind, '#ffffff');
       else drawBody(ctx, kind, '#ffffff');
       ctx.restore();
     }
@@ -101,6 +119,18 @@ export function legendIcon(kind: Kind, color: string): string {
   const ctx = canvas.getContext('2d');
   if (!ctx) return '';
   drawHalo(ctx, kind, OUTLINE_DARK);
+  drawBody(ctx, kind, color);
+  return canvas.toDataURL();
+}
+
+/** Pictogramme pour la légende d'une position estimée : le même, avec le contour pointillé. */
+export function estimatedLegendIcon(kind: Kind, color: string): string {
+  const canvas = document.createElement('canvas');
+  canvas.width = SIZE;
+  canvas.height = SIZE;
+  const ctx = canvas.getContext('2d');
+  if (!ctx) return '';
+  drawDashedHalo(ctx, kind, OUTLINE_DARK);
   drawBody(ctx, kind, color);
   return canvas.toDataURL();
 }

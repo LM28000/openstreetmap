@@ -103,7 +103,7 @@ struct Feed {
     received_at: i64,
 }
 
-fn url_has_key(url: &str) -> bool {
+pub(crate) fn url_has_key(url: &str) -> bool {
     let Ok(parsed) = reqwest::Url::parse(url) else { return true };
     parsed.query_pairs().any(|(name, _)| {
         let name = name.to_ascii_lowercase();
@@ -112,7 +112,7 @@ fn url_has_key(url: &str) -> bool {
 }
 
 /// « Réseau urbain Astuce » → « Astuce » : le type de réseau n'apporte rien dans une fiche.
-fn network_name(title: &str) -> String {
+pub(crate) fn network_name(title: &str) -> String {
     const PREFIXES: [&str; 9] = [
         "Réseau urbain et périurbain ",
         "Réseau urbain et scolaire ",
@@ -133,7 +133,7 @@ fn network_name(title: &str) -> String {
     title.to_string()
 }
 
-fn is_excluded(title: &str) -> bool {
+pub(crate) fn is_excluded(title: &str) -> bool {
     let t = title.to_lowercase();
     ["sncf", "renfe", "agrégat", "agregat", "européen"].iter().any(|word| t.contains(word))
 }
@@ -296,11 +296,11 @@ fn auth_required(error: &anyhow::Error) -> bool {
 // ───────────────────────── Lignes (GTFS statique) ─────────────────────────
 
 #[derive(Clone, Debug, PartialEq)]
-struct RouteInfo {
-    short: Option<String>,
-    long: Option<String>,
-    color: Option<String>,
-    mode: Option<&'static str>,
+pub(crate) struct RouteInfo {
+    pub short: Option<String>,
+    pub long: Option<String>,
+    pub color: Option<String>,
+    pub mode: Option<&'static str>,
 }
 
 /// Mode d'après le `route_type` du GTFS, y compris les types étendus (centaines) de Google.
@@ -338,7 +338,7 @@ fn csv_fields(line: &str) -> Vec<String> {
 }
 
 /// Lit un `routes.txt` : seules les colonnes utiles sont gardées.
-fn parse_routes(text: &str) -> HashMap<String, RouteInfo> {
+pub(crate) fn parse_routes(text: &str) -> HashMap<String, RouteInfo> {
     let mut lines = text.trim_start_matches('\u{feff}').lines();
     let Some(header) = lines.next() else { return HashMap::new() };
     let columns: Vec<String> = csv_fields(header).into_iter().map(|c| c.trim().to_string()).collect();
@@ -584,66 +584,163 @@ async fn load_routes(http: &reqwest::Client, data_dir: &Path, net: &Net) -> Hash
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct NetworkOut<'a> {
-    name: &'a str,
-    licence: &'a str,
-    vehicles: usize,
+pub(crate) struct NetworkOut {
+    pub name: String,
+    pub licence: String,
+    pub vehicles: usize,
 }
 
 /// Une ligne (ou « ligne inconnue » d'un réseau) : les véhicules y renvoient par son indice.
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct LineOut {
-    network: usize,
+pub(crate) struct LineOut {
+    pub network: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
-    id: Option<String>,
+    pub id: Option<String>,
     /// Nom court (« A », « 12 »).
     #[serde(skip_serializing_if = "Option::is_none")]
-    name: Option<String>,
+    pub name: Option<String>,
     /// Intitulé complet (« Gares - CHU La Cavale »).
     #[serde(skip_serializing_if = "Option::is_none")]
-    long_name: Option<String>,
+    pub long_name: Option<String>,
     /// Couleur officielle, six chiffres hexadécimaux sans dièse.
     #[serde(skip_serializing_if = "Option::is_none")]
-    color: Option<String>,
+    pub color: Option<String>,
     /// `bus`, `tram`, `metro`, `train`, `ferry` ou `cable` ; absent si inconnu.
     #[serde(skip_serializing_if = "Option::is_none")]
-    mode: Option<&'static str>,
+    pub mode: Option<&'static str>,
+}
+
+fn is_false(value: &bool) -> bool {
+    !*value
+}
+
+/// Ce que l'on ne sait que d'un véhicule dont la position est estimée d'après les horaires (voir `estimates.rs`).
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+pub(crate) struct EstimateOut {
+    /// Vrai quand on n'a que l'horaire théorique ; faux quand le flux temps réel du réseau donne des heures pour cette circulation.
+    #[serde(skip_serializing_if = "is_false")]
+    pub theoretical: bool,
+    /// Terminus (`trip_headsign`).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub to: Option<String>,
+    /// Prochain arrêt et heure à laquelle on l'y attend (secondes UTC).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub next_at: Option<i64>,
+    /// Retard à ce prochain arrêt, en secondes (négatif : en avance), quand le temps réel le donne.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub delay: Option<i32>,
+    /// Où sera le véhicule aux instants `ts`, `ts + estStep`, `ts + 2 estStep`… Le premier point est (`lon`, `lat`) ;
+    /// ceux qui suivent sont donnés en écarts avec le précédent, `[dlon, dlat, …]`, en cent-millièmes de degré. Le navigateur
+    /// interpole entre ces points avec son horloge : le mouvement reste juste même si la réponse a 30 secondes.
+    pub path: Vec<i32>,
 }
 
 #[derive(Serialize)]
-struct VehicleOut {
-    id: String,
-    line: usize,
-    lon: f64,
-    lat: f64,
+pub(crate) struct VehicleOut {
+    pub id: String,
+    pub line: usize,
+    pub lon: f64,
+    pub lat: f64,
     /// Cap en degrés depuis le nord.
     #[serde(skip_serializing_if = "Option::is_none")]
-    heading: Option<u16>,
+    pub heading: Option<u16>,
     /// Vitesse en km/h.
     #[serde(skip_serializing_if = "Option::is_none")]
-    speed: Option<u16>,
+    pub speed: Option<u16>,
     /// Instant de la position (secondes UTC).
-    ts: i64,
+    pub ts: i64,
+    /// Présent seulement quand la position est estimée d'après les horaires : ce n'est alors pas une mesure.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est: Option<EstimateOut>,
 }
 
 #[derive(Serialize)]
 #[serde(rename_all = "camelCase")]
-struct TransitOut<'a> {
-    updated_at: i64,
-    networks: Vec<NetworkOut<'a>>,
-    lines: Vec<LineOut>,
-    vehicles: Vec<VehicleOut>,
+pub(crate) struct TransitOut {
+    pub updated_at: i64,
+    /// Secondes entre deux points du `path` des positions estimées.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub est_step: Option<i64>,
+    pub networks: Vec<NetworkOut>,
+    pub lines: Vec<LineOut>,
+    pub vehicles: Vec<VehicleOut>,
+}
+
+/// La réponse est faite de deux morceaux produits à des rythmes différents : les positions publiées (relues toutes les
+/// 30 secondes) et les positions estimées d'après les horaires (recalculées toutes les 10 secondes). Chacun garde son
+/// dernier état, et la réponse est refaite à chaque mise à jour de l'un des deux.
+#[derive(Default)]
+pub(crate) struct TransitParts {
+    live: Option<Arc<TransitOut>>,
+    estimated: Option<Arc<TransitOut>>,
+}
+
+pub(crate) enum TransitPart {
+    Live(TransitOut),
+    Estimated(TransitOut),
+}
+
+impl TransitParts {
+    pub fn set(&mut self, part: TransitPart) {
+        match part {
+            TransitPart::Live(out) => self.live = Some(Arc::new(out)),
+            TransitPart::Estimated(out) => self.estimated = Some(Arc::new(out)),
+        }
+    }
+
+    /// La réponse complète. `None` tant qu'aucun morceau n'est prêt.
+    pub fn to_json(&self) -> Option<Result<Vec<u8>>> {
+        Some(match (&self.live, &self.estimated) {
+            (None, None) => return None,
+            (Some(only), None) | (None, Some(only)) => serde_json::to_vec(only.as_ref()).map_err(Into::into),
+            (Some(live), Some(estimated)) => merge(live, estimated),
+        })
+    }
+}
+
+/// Réseaux, lignes et véhicules des positions publiées, puis ceux des estimations, dont les indices de réseau et de ligne
+/// sont décalés d'autant. Par valeurs JSON intermédiaires : simple, et cela ne se fait que toutes les quelques secondes.
+fn merge(live: &TransitOut, estimated: &TransitOut) -> Result<Vec<u8>> {
+    let mut lines = Vec::with_capacity(live.lines.len() + estimated.lines.len());
+    for line in &live.lines {
+        lines.push(serde_json::to_value(line)?);
+    }
+    for line in &estimated.lines {
+        let mut value = serde_json::to_value(line)?;
+        value["network"] = (line.network + live.networks.len()).into();
+        lines.push(value);
+    }
+    let mut vehicles = Vec::with_capacity(live.vehicles.len() + estimated.vehicles.len());
+    for vehicle in &live.vehicles {
+        vehicles.push(serde_json::to_value(vehicle)?);
+    }
+    for vehicle in &estimated.vehicles {
+        let mut value = serde_json::to_value(vehicle)?;
+        value["line"] = (vehicle.line + live.lines.len()).into();
+        vehicles.push(value);
+    }
+    let networks: Vec<&NetworkOut> = live.networks.iter().chain(&estimated.networks).collect();
+    Ok(serde_json::to_vec(&serde_json::json!({
+        "updatedAt": live.updated_at.max(estimated.updated_at),
+        "estStep": estimated.est_step,
+        "networks": networks,
+        "lines": lines,
+        "vehicles": vehicles,
+    }))?)
 }
 
 type RouteTables = HashMap<String, Arc<HashMap<String, RouteInfo>>>;
 
-fn round5(x: f64) -> f64 {
+pub(crate) fn round5(x: f64) -> f64 {
     (x * 1e5).round() / 1e5
 }
 
 /// Assemble la réponse : positions récentes de tous les flux, dédoublonnées par réseau et véhicule.
-fn assemble(nets: &[Net], feeds: &[Feed], tables: &RouteTables, now: i64) -> Result<(Vec<u8>, usize, usize)> {
+fn assemble(nets: &[Net], feeds: &[Feed], tables: &RouteTables, now: i64) -> Result<TransitOut> {
     // (réseau, identifiant de véhicule) → (position, âge) : en cas de doublon entre deux flux d'un même réseau, le plus frais gagne.
     let mut best: HashMap<(usize, &str), (&RawVehicle, i64)> = HashMap::new();
     for feed in feeds {
@@ -691,6 +788,7 @@ fn assemble(nets: &[Net], feeds: &[Feed], tables: &RouteTables, now: i64) -> Res
             heading: vehicle.bearing.map(|b| (b.round() as u16) % 360),
             speed: vehicle.speed.map(|s| (s * 3.6).round() as u16),
             ts,
+            est: None,
         });
     }
     let used: Vec<usize> = (0..nets.len()).filter(|n| counts[*n] > 0).collect();
@@ -699,10 +797,8 @@ fn assemble(nets: &[Net], feeds: &[Feed], tables: &RouteTables, now: i64) -> Res
     for line in &mut lines {
         line.network = renumber[&line.network];
     }
-    let networks = used.iter().map(|n| NetworkOut { name: &nets[*n].name, licence: &nets[*n].licence, vehicles: counts[*n] }).collect();
-    let (count, network_count) = (vehicles.len(), used.len());
-    let body = serde_json::to_vec(&TransitOut { updated_at: now, networks, lines, vehicles })?;
-    Ok((body, count, network_count))
+    let networks = used.iter().map(|n| NetworkOut { name: nets[*n].name.clone(), licence: nets[*n].licence.clone(), vehicles: counts[*n] }).collect();
+    Ok(TransitOut { updated_at: now, est_step: None, networks, lines, vehicles })
 }
 
 // ───────────────────────── Boucle de collecte ─────────────────────────
@@ -768,9 +864,9 @@ pub async fn poll_forever(http: reqwest::Client, data_dir: PathBuf, state: AppSt
         let now = Timestamp::now().as_second();
         let snapshot = tables.lock().expect("verrou des lignes").clone();
         match assemble(&nets, &feeds, &snapshot, now) {
-            Ok((body, vehicles, networks)) => {
-                info!(vehicules = vehicles, reseaux = networks, flux_ok = ok, flux = feeds.len(), "transports : positions mises à jour");
-                state.set_transit(body);
+            Ok(out) => {
+                info!(vehicules = out.vehicles.len(), reseaux = out.networks.len(), flux_ok = ok, flux = feeds.len(), "transports : positions mises à jour");
+                state.set_transit_part(TransitPart::Live(out));
             }
             Err(error) => warn!("transports : réponse non préparée : {error:#}"),
         }
@@ -1047,9 +1143,9 @@ mod tests {
         ];
         let mut tables = RouteTables::new();
         tables.insert("brest".into(), Arc::new(parse_routes(ROUTES)));
-        let (body, count, networks) = assemble(&[net], &feeds, &tables, 1000).unwrap();
-        assert_eq!((count, networks), (2, 1), "le véhicule 2 a plus de 5 minutes, le 1 est en double");
-        let json: Value = serde_json::from_slice(&body).unwrap();
+        let out = assemble(&[net], &feeds, &tables, 1000).unwrap();
+        assert_eq!((out.vehicles.len(), out.networks.len()), (2, 1), "le véhicule 2 a plus de 5 minutes, le 1 est en double");
+        let json: Value = serde_json::to_value(&out).unwrap();
         let first = &json["vehicles"][0];
         assert_eq!((first["id"].as_str(), first["ts"].as_i64(), first["speed"].as_i64(), first["heading"].as_i64()), (Some("1"), Some(995), Some(36), Some(246)));
         assert_eq!(first["lon"].as_f64(), Some(-4.57123));
@@ -1057,6 +1153,37 @@ mod tests {
         assert_eq!((line["mode"].as_str(), line["color"].as_str(), line["name"].as_str()), (Some("tram"), Some("de007e"), Some("A")));
         let unknown = &json["lines"][json["vehicles"][1]["line"].as_u64().unwrap() as usize];
         assert!(unknown.get("mode").is_none() && unknown.get("id").is_none(), "ligne inconnue : ni mode ni identifiant");
+    }
+
+    #[test]
+    fn les_deux_morceaux_de_la_reponse_sont_assembles_avec_des_indices_decales() {
+        let vehicle = |id: &str, line: usize, est: Option<EstimateOut>| VehicleOut { id: id.into(), line, lon: 1.0, lat: 43.0, heading: None, speed: None, ts: 1000, est };
+        let line = |network: usize, name: &str| LineOut { network, id: None, name: Some(name.into()), long_name: None, color: None, mode: None };
+        let part = |name: &str, est: bool, step: Option<i64>| TransitOut {
+            updated_at: if est { 1010 } else { 1000 },
+            est_step: step,
+            networks: vec![NetworkOut { name: name.into(), licence: "lov2".into(), vehicles: 1 }],
+            lines: vec![line(0, name)],
+            vehicles: vec![vehicle(name, 0, est.then(|| EstimateOut { theoretical: true, to: None, next: None, next_at: None, delay: None, path: vec![1, -1] }))],
+        };
+        let mut parts = TransitParts::default();
+        assert!(parts.to_json().is_none(), "rien à servir tant qu'aucun morceau n'est prêt");
+        parts.set(TransitPart::Estimated(part("Tisséo", true, Some(8))));
+        let alone: Value = serde_json::from_slice(&parts.to_json().unwrap().unwrap()).unwrap();
+        assert_eq!(alone["vehicles"][0]["id"], "Tisséo", "les estimations seules sont servies telles quelles");
+        parts.set(TransitPart::Live(part("Bibus", false, None)));
+        let json: Value = serde_json::from_slice(&parts.to_json().unwrap().unwrap()).unwrap();
+        assert_eq!(json["updatedAt"], 1010);
+        assert_eq!(json["estStep"], 8);
+        assert_eq!(json["networks"].as_array().unwrap().len(), 2);
+        assert_eq!(json["networks"][0]["name"], "Bibus");
+        // La ligne et le véhicule estimés renvoient au second réseau et à la seconde ligne.
+        assert_eq!(json["lines"][1]["network"], 1);
+        assert_eq!(json["vehicles"][1]["line"], 1);
+        assert_eq!(json["vehicles"][0]["line"], 0);
+        assert!(json["vehicles"][0].get("est").is_none(), "une position publiée n'est pas marquée estimée");
+        assert_eq!(json["vehicles"][1]["est"]["theoretical"], true);
+        assert_eq!(json["vehicles"][1]["est"]["path"], serde_json::json!([1, -1]));
     }
 
     #[test]

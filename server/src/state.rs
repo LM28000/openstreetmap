@@ -4,7 +4,7 @@
 //! modifiés sur place) : une requête qui a pris sa copie (`Arc`) la garde cohérente
 //! jusqu'au bout, même si une mise à jour arrive pendant ce temps.
 
-use std::sync::{Arc, RwLock};
+use std::sync::{Arc, Mutex, RwLock};
 
 use axum::body::Bytes;
 use tokio::sync::Notify;
@@ -12,6 +12,7 @@ use tokio::sync::Notify;
 use crate::network::Network;
 use crate::realtime::Realtime;
 use crate::timetable::Timetable;
+use crate::transit::{TransitPart, TransitParts};
 use crate::tracks::Tracks;
 
 #[derive(Clone)]
@@ -36,6 +37,8 @@ struct Inner {
     traffic: RwLock<Option<Bytes>>,
     traffic_state: RwLock<Option<Bytes>>,
     vigilance: RwLock<Option<Bytes>>,
+    /// Les deux morceaux de la réponse des transports (positions publiées, positions estimées), assemblés en `transit`.
+    transit_parts: Mutex<TransitParts>,
 }
 
 impl AppState {
@@ -56,6 +59,7 @@ impl AppState {
             traffic: RwLock::new(None),
             traffic_state: RwLock::new(None),
             vigilance: RwLock::new(None),
+            transit_parts: Mutex::default(),
         }))
     }
 
@@ -152,8 +156,15 @@ impl AppState {
         self.0.transit.read().expect("verrou des transports").clone()
     }
 
-    pub fn set_transit(&self, body: Vec<u8>) {
-        *self.0.transit.write().expect("verrou des transports") = Some(Bytes::from(body));
+    /// Met à jour un des deux morceaux de la réponse et refait la réponse entière.
+    pub fn set_transit_part(&self, part: TransitPart) {
+        let mut parts = self.0.transit_parts.lock().expect("verrou des morceaux des transports");
+        parts.set(part);
+        match parts.to_json() {
+            Some(Ok(body)) => *self.0.transit.write().expect("verrou des transports") = Some(Bytes::from(body)),
+            Some(Err(error)) => tracing::warn!("transports : réponse non préparée : {error:#}"),
+            None => {}
+        }
     }
 
     pub fn wind(&self) -> Option<Bytes> {

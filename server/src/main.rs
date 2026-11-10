@@ -7,6 +7,7 @@
 //! - relève les éléments orbitaux des satellites (CelesTrak), que le navigateur propage lui-même ;
 //! - rassemble les bus, trams et métros en direct des réseaux qui publient leurs positions ;
 //! - relève le champ de vent (Open-Meteo, modèle ARPEGE) toutes les 6 heures ;
+//! - estime la position des bus, trams et métros des réseaux qui ne publient que leurs horaires en temps réel ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -18,7 +19,9 @@
 mod api;
 mod bikes;
 mod dem;
+mod estimates;
 mod fires;
+mod gtfs_compact;
 mod gtfs_rt;
 mod irve;
 mod network;
@@ -99,6 +102,7 @@ async fn main() -> Result<()> {
     tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
     tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
     match &config.web_dir {
         Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),

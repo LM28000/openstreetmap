@@ -1,0 +1,2 @@
+route_id,agency_id,route_short_name,route_long_name,route_color,route_text_color,route_type
+line:68,network:1,T1,Palais de Justice / MEETT,004687,ffffff,0

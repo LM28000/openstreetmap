@@ -193,3 +193,46 @@ export function bubbleIcon(): string {
   ctx.stroke();
   return canvas.toDataURL();
 }
+
+/**
+ * Empreinte au sol des maquettes 3D (voir models/transit.ts) : un rectangle arrondi pointillé, aux
+ * cotes réelles du véhicule (un peu agrandies), posé sous la maquette d'une position estimée. Même
+ * échelle pour toutes les cellules (10 px par mètre), donc une seule taille d'icône pour tous les modes.
+ */
+const FOOT_PX_PER_M = 10;
+const FOOT_CELL_W = 60;
+const FOOT_CELL_H = 460;
+/** Hauteur d'une cellule d'empreinte sur le terrain (mètres) : la taille d'icône de base. */
+export const FOOT_CELL_METERS = FOOT_CELL_H / FOOT_PX_PER_M;
+const FOOT_WIDTH_M: Record<Kind, number> = { bus: 2.55, other: 2.55, tram: 2.4, metro: 2.45 };
+
+export function buildFootprintAtlas(lengths: Record<Kind, number>): TransitAtlas {
+  const canvas = document.createElement('canvas');
+  canvas.width = KINDS.length * (FOOT_CELL_W + CELL_GAP);
+  canvas.height = FOOT_CELL_H;
+  const ctx = canvas.getContext('2d');
+  const mapping: IconMapping = {};
+  KINDS.forEach((kind, i) => {
+    const x = i * (FOOT_CELL_W + CELL_GAP);
+    if (ctx) {
+      const w = (FOOT_WIDTH_M[kind] + 0.9) * FOOT_PX_PER_M;
+      const l = (lengths[kind] + 0.9) * FOOT_PX_PER_M;
+      ctx.save();
+      ctx.translate(x + FOOT_CELL_W / 2, FOOT_CELL_H / 2);
+      ctx.beginPath();
+      ctx.roundRect(-w / 2, -l / 2, w, l, w * 0.45);
+      // Un voile léger sous le trait : la tache se lit même quand la maquette la recouvre presque.
+      ctx.fillStyle = 'rgba(255,255,255,0.22)';
+      ctx.fill();
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'butt';
+      ctx.lineWidth = 5;
+      ctx.setLineDash([22, 14]);
+      ctx.strokeStyle = '#ffffff';
+      ctx.stroke();
+      ctx.restore();
+    }
+    mapping[kind] = { x, y: 0, width: FOOT_CELL_W, height: FOOT_CELL_H, anchorX: FOOT_CELL_W / 2, anchorY: FOOT_CELL_H / 2, mask: true };
+  });
+  return { atlas: canvas.toDataURL(), mapping };
+}

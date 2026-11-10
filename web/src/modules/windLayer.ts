@@ -37,7 +37,7 @@ const HALO_WIDTH = 5;
 /** Un pas plus grand qu'une demi-seconde (onglet en arrière-plan…) est ramené à celui-ci. */
 const MAX_STEP_S = 0.05;
 /** Couleur du contour : un bleu nuit, assez sombre pour le fond clair, translucide pour ne pas salir la nuit. */
-const HALO_COLOR: [number, number, number, number] = [0.04, 0.08, 0.2, 0.5];
+const HALO_COLOR: [number, number, number, number] = [0.04, 0.08, 0.2, 0.62]; // un peu plus dense : le fond calme est plus clair que Liberty
 const CORE_COLOR: [number, number, number, number] = [1, 1, 1, 1];
 
 const VERTEX_SOURCE = (prelude: string, define: string) => `#version 300 es

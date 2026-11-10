@@ -67,3 +67,13 @@ export function sunElevation(lat: number, lon: number, timeMs: number): number {
 function normalizeLongitude(lon: number): number {
   return ((((lon + 180) % 360) + 360) % 360) - 180;
 }
+
+/**
+ * Degré de nuit (0 = plein jour, 1 = nuit complète) pour une hauteur du soleil : le fond de carte
+ * glisse de sa palette de jour à celle de nuit entre +4° et -12° (la fin du crépuscule nautique),
+ * avec une courbe douce aux deux bouts.
+ */
+export function nightAmount(elevation: number): number {
+  const t = Math.min(1, Math.max(0, (4 - elevation) / 16));
+  return t * t * (3 - 2 * t);
+}

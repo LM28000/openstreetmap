@@ -1,19 +1,22 @@
 /**
- * Module « Jour et nuit » : l'ombre de la nuit et des crépuscules, calculée
- * à partir de la position du soleil à l'instant t.
+ * Module « Jour et nuit » : la nuit et les crépuscules, d'après la position du soleil à l'instant t.
  *
- * On calcule une image en projection Web Mercator : chaque pixel reçoit une
- * opacité selon la hauteur du soleil à cet endroit. L'image est dessinée dans un
- * canvas, affiché par MapLibre (couche native) qui le drape sur le relief et le globe.
+ * Deux choses, qui se relaient selon le zoom :
+ *  - de près (à partir du zoom 5 environ), le fond de carte lui-même passe à une palette sombre
+ *    selon la hauteur du soleil au centre de la vue (voir `setNight` dans baseMap.ts) ;
+ *  - de loin (continent, globe), où la nuit n'est pas la même d'un bord à l'autre de la vue, un
+ *    voile drape l'ombre de la Terre : chaque pixel d'une image Web Mercator reçoit une opacité
+ *    selon la hauteur du soleil à cet endroit, ce qui dessine la ligne du crépuscule en dégradé.
+ *    L'image couvre le monde entier et s'efface en fondu quand on zoome (le fond prend le relais).
  *
- * Vue de loin, l'image couvre le monde entier. Vue de près, elle ne couvre qu'une
- * zone autour de la vue : MapLibre ne sait pas afficher une image grande comme le
- * monde à fort zoom (elle s'efface à partir du zoom 13 environ).
+ * Les bâtiments 3D sont éclairés comme le vrai soleil, et le ciel suit.
  */
 import type { CanvasSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule } from '../core/module';
-import { DAY_SKY, firstSymbolLayerId } from '../map/baseMap';
-import { subsolarPoint, sunPosition } from './solar';
+import { DAY_SKY, firstSymbolLayerId, setNight } from '../map/baseMap';
+import { NIGHT_FADE_FROM_ZOOM, NIGHT_FADE_TO_ZOOM } from '../map/calmStyle';
+import { clock } from '../core/clock';
+import { nightAmount, subsolarPoint, sunPosition } from './solar';
 
 const SIZE = 512;
 const SOURCE_ID = 'jour-nuit';
@@ -21,11 +24,9 @@ const LAYER_ID = 'jour-nuit';
 const DEG = Math.PI / 180;
 /** Limite de latitude de la projection Web Mercator. */
 const MAX_LAT = 85.051129;
-/** En dessous de ce zoom, on calcule le monde entier ; au-dessus, la zone autour de la vue. */
-const WORLD_MAX_ZOOM = 6;
 const NIGHT_COLOR = [12, 20, 56] as const;
-/** Assez sombre pour sentir la nuit, assez léger pour garder le relief et les bâtiments lisibles. */
-const MAX_OPACITY = 0.42;
+/** Le voile n'est que la ligne du crépuscule vue de loin : assez sombre pour sentir la nuit. */
+const MAX_OPACITY = 0.5;
 
 interface Box {
   west: number;
@@ -85,20 +86,6 @@ export function renderNightImage(time: number, box: Box = WORLD_BOX): ImageData 
   return new ImageData(pixels, SIZE, SIZE);
 }
 
-/** Zone à calculer : le monde vu de loin, sinon la vue élargie d'une largeur de chaque côté. */
-function boxForView(map: MapLibreMap): Box {
-  if (map.getZoom() < WORLD_MAX_ZOOM) return WORLD_BOX;
-  const bounds = map.getBounds();
-  const width = bounds.getEast() - bounds.getWest();
-  const height = bounds.getNorth() - bounds.getSouth();
-  return {
-    west: Math.max(-180, bounds.getWest() - width),
-    east: Math.min(180, bounds.getEast() + width),
-    south: Math.max(-MAX_LAT, bounds.getSouth() - height),
-    north: Math.min(MAX_LAT, bounds.getNorth() + height),
-  };
-}
-
 function toCoordinates(box: Box): [[number, number], [number, number], [number, number], [number, number]] {
   return [
     [box.west, box.north],
@@ -130,7 +117,7 @@ function mix(a: number[], b: number[], t: number): string {
 
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
 
-/** Éclairage des bâtiments et couleur du ciel selon le soleil au centre de la vue. */
+/** Éclairage des bâtiments, palette du fond et couleur du ciel selon le soleil au centre de la vue. */
 function applySunLight(map: MapLibreMap, time: number): void {
   const center = map.getCenter();
   const { elevation, azimuth } = sunPosition(center.lat, center.lng, time);
@@ -146,7 +133,8 @@ function applySunLight(map: MapLibreMap, time: number): void {
     position: elevation > 0 ? [1.15, azimuth, Math.min(85, 90 - elevation)] : [1.15, 210, 40],
   });
 
-  // Le ciel bascule pendant les crépuscules, entre +4° et -12° de hauteur du soleil.
+  // Le fond de carte et le ciel basculent pendant les crépuscules, entre +4° et -12° de hauteur du soleil.
+  setNight(map, nightAmount(elevation));
   const night = clamp01((4 - elevation) / 16);
   map.setSky({
     ...DAY_SKY,
@@ -157,7 +145,9 @@ function applySunLight(map: MapLibreMap, time: number): void {
 }
 
 let canvas: HTMLCanvasElement | undefined;
-let currentBox: Box = WORLD_BOX;
+/** Pas de temps (minute) de la dernière image du voile, et vrai si le voile est resté en retard (caché de près). */
+let drawnStep = Number.NaN;
+let veilStale = false;
 
 function nightCanvas(): HTMLCanvasElement {
   if (!canvas) {
@@ -183,24 +173,53 @@ function pushCanvas(map: MapLibreMap, source: CanvasSource): void {
   });
 }
 
+/** Le voile n'est visible que sous ce zoom : au-dessus, inutile de le recalculer. */
+const VEIL_MAX_ZOOM = NIGHT_FADE_TO_ZOOM;
+const VEIL_STEP_MS = 60_000;
+
+/**
+ * Redessine le voile et le fait recopier par MapLibre.
+ *
+ * Pourquoi `setCoordinates` avec les mêmes coordonnées : avec le relief, MapLibre dessine les
+ * couches raster dans une texture par tuile du relief, qu'il garde en cache (`RenderToTexture`).
+ * Il ne la vide que sur un événement de chargement de tuile de la source, et pour une source
+ * « canvas » il ne vide que les tuiles du relief descendantes de la tuile qui porte l'image
+ * (`freeRtt(tileID)` : sa condition « c'est une image » ne reconnaît pas le type `canvas`, alors
+ * qu'elle vide tout pour le type `image`). Une image qui déborde de sa tuile laissait donc les
+ * tuiles voisines sur l'image précédente : une coupure nette au méridien 0° quand le voile
+ * ne couvrait que la zone autour de la vue. Le voile couvre maintenant toujours le monde, donc
+ * la tuile 0/0/0 : toutes les tuiles du relief en descendent et sont vidées. Redonner les
+ * coordonnées recharge la tuile et déclenche cet événement, même sans changement.
+ */
+function redrawVeil(map: MapLibreMap, source: CanvasSource, time: number): void {
+  nightCanvas().getContext('2d')?.putImageData(renderNightImage(time), 0, 0);
+  pushCanvas(map, source);
+  source.setCoordinates(toCoordinates(WORLD_BOX));
+  drawnStep = Math.floor(time / VEIL_STEP_MS);
+  veilStale = false;
+}
+
+let onZoomEnd: (() => void) | undefined;
+
 export const dayNight = defineModule<undefined>({
   id: 'jour-nuit',
   name: 'Jour et nuit',
   category: 'ciel',
-  description: 'L’ombre de la nuit et des crépuscules, d’après la position du soleil.',
+  description: 'La nuit et les crépuscules : fond sombre la nuit, ligne du crépuscule vue de loin.',
   attribution: 'calcul astronomique',
   visibleByDefault: true,
-  timeStepMs: 60_000, // l'ombre bouge d'environ 0,25° par minute : inutile d'aller plus vite
-  followsView: true,
+  timeStepMs: 60_000, // le soleil bouge d'environ 0,25° par minute : inutile d'aller plus vite
+  followsView: true, // la palette suit le soleil au centre de la vue
 
   native: {
     add(map: MapLibreMap) {
-      currentBox = WORLD_BOX;
-      // animate: false → MapLibre ne relit le canvas que quand on le lui demande (voir update).
+      drawnStep = Number.NaN;
+      veilStale = true;
+      // animate: false → MapLibre ne relit le canvas que quand on le lui demande (voir redrawVeil).
       map.addSource(SOURCE_ID, {
         type: 'canvas',
         canvas: nightCanvas(),
-        coordinates: toCoordinates(currentBox),
+        coordinates: toCoordinates(WORLD_BOX),
         animate: false,
       });
       map.addLayer(
@@ -208,29 +227,43 @@ export const dayNight = defineModule<undefined>({
           id: LAYER_ID,
           type: 'raster',
           source: SOURCE_ID,
-          paint: { 'raster-fade-duration': 0, 'raster-resampling': 'linear' },
+          maxzoom: VEIL_MAX_ZOOM,
+          paint: {
+            'raster-fade-duration': 0,
+            'raster-resampling': 'linear',
+            // Plein vue de loin, absent de près : le fond de carte prend le relais.
+            'raster-opacity': ['interpolate', ['linear'], ['zoom'], NIGHT_FADE_FROM_ZOOM, 1, NIGHT_FADE_TO_ZOOM, 0],
+          },
         },
         firstSymbolLayerId(map),
       );
+      // En revenant de près à loin, le voile n'a pas suivi l'heure : on le remet à jour.
+      onZoomEnd = () => {
+        const source = map.getSource(SOURCE_ID) as CanvasSource | undefined;
+        if (source && veilStale && map.getZoom() < VEIL_MAX_ZOOM) redrawVeil(map, source, clock.now());
+      };
+      map.on('zoomend', onZoomEnd);
     },
     update(map, { time }) {
       const source = map.getSource(SOURCE_ID) as CanvasSource | undefined;
       if (!source) return;
-      const box = boxForView(map);
-      nightCanvas().getContext('2d')?.putImageData(renderNightImage(time, box), 0, 0);
-      pushCanvas(map, source);
-      // Avec le relief, MapLibre garde les couches raster en textures par tuile et ne les
-      // redessine que si la source change de « révision » : redonner les coordonnées, même
-      // inchangées, la fait changer (sinon, vue de loin, l'ombre restait celle du chargement).
-      source.setCoordinates(toCoordinates(box));
-      currentBox = box;
+      // L'image ne dépend que de l'heure (pas de la vue) : une fois par minute simulée, et seulement
+      // quand le voile se voit.
+      if (map.getZoom() < VEIL_MAX_ZOOM) {
+        if (veilStale || Math.floor(time / VEIL_STEP_MS) !== drawnStep) redrawVeil(map, source, time);
+      } else {
+        veilStale = true;
+      }
       applySunLight(map, time);
     },
     remove(map) {
+      if (onZoomEnd) map.off('zoomend', onZoomEnd);
+      onZoomEnd = undefined;
       if (map.getLayer(LAYER_ID)) map.removeLayer(LAYER_ID);
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
       map.setLight({ ...DEFAULT_LIGHT, position: [...DEFAULT_LIGHT.position] });
       map.setSky(DAY_SKY);
+      setNight(map, 0);
     },
   },
 });

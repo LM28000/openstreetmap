@@ -23,6 +23,7 @@ struct Inner {
     /// Réponses JSON prêtes à servir, préparées par les collecteurs.
     bikes: RwLock<Option<Arc<Vec<u8>>>>,
     fires: RwLock<Option<Arc<Vec<u8>>>>,
+    planes: RwLock<Option<Arc<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -34,6 +35,7 @@ impl AppState {
             timetable_changed: Notify::new(),
             bikes: RwLock::new(None),
             fires: RwLock::new(None),
+            planes: RwLock::new(None),
         }))
     }
 
@@ -83,5 +85,13 @@ impl AppState {
 
     pub fn set_fires(&self, body: Vec<u8>) {
         *self.0.fires.write().expect("verrou des feux") = Some(Arc::new(body));
+    }
+
+    pub fn planes(&self) -> Option<Arc<Vec<u8>>> {
+        self.0.planes.read().expect("verrou des avions").clone()
+    }
+
+    pub fn set_planes(&self, body: Vec<u8>) {
+        *self.0.planes.write().expect("verrou des avions") = Some(Arc::new(body));
     }
 }

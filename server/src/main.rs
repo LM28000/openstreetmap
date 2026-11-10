@@ -17,6 +17,7 @@ mod bikes;
 mod dem;
 mod fires;
 mod gtfs_rt;
+mod planes;
 mod rails;
 mod realtime;
 mod state;
@@ -73,6 +74,7 @@ async fn main() -> Result<()> {
     tokio::spawn(tracks::build_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(bikes::poll_forever(http.clone(), state.clone()));
     tokio::spawn(fires::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(planes::poll_forever(http.clone(), state.clone()));
 
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;

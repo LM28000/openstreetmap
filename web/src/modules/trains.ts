@@ -1157,7 +1157,7 @@ function buildRames(heads: readonly Head[], zoom: number, colorOf: (head: Head) 
 /** Largeur minimale d'une voiture 3D à l'écran (pixels) : de loin, la maquette est élargie jusque-là. */
 const CAR_3D_MIN_PX = 5;
 /** Au-delà de ce zoom, la trace à plat sous les maquettes disparaît (elles se lisent d'elles-mêmes). */
-const FOOTPRINT_MAX_ZOOM = 15.5;
+const FOOTPRINT_MAX_ZOOM = 17.5;
 /** Rail plus bas que le relief de plus que cela (mètres) : voiture en tunnel, cachée par le relief. */
 const UNDERGROUND_M = 10;
 /** Garde au-dessus du relief : le relief lu côté processeur n'est pas exactement le maillage dessiné (m, puis m par pixel). */
@@ -1336,7 +1336,7 @@ function carLayers3d(cars: Cars3d, parameters: object, zoom: number) {
     parameters,
   };
   const chosen = cars.chosen ? [cars.chosen] : [];
-  const fade = zoomRamp(zoom, 14, FOOTPRINT_MAX_ZOOM, 1, 0);
+  const fade = zoomRamp(zoom, 16, FOOTPRINT_MAX_ZOOM, 1, 0);
   return [
     // Sélection : un anneau blanc cerné de sombre, jamais bleu, sous la rame.
     chosen.length > 0 &&
@@ -1364,7 +1364,7 @@ function carLayers3d(cars: Cars3d, parameters: object, zoom: number) {
         id: 'trains/rames/trace',
         data: cars.shadows,
         getPath: (d) => d.path,
-        getColor: [20, 26, 38, Math.round(95 * fade)],
+        getColor: [255, 255, 255, Math.round(120 * fade)],
         getWidth: (d) => d.widthM + 1.5 * d.mpp,
         capRounded: false,
         updateTriggers: { getColor: fade.toFixed(2) },

@@ -45,6 +45,8 @@ struct Inner {
     air_disabled: RwLock<Option<&'static str>>,
     /// Les deux morceaux de la réponse des transports (positions publiées, positions estimées), assemblés en `transit`.
     transit_parts: Mutex<TransitParts>,
+    /// Tuiles vectorielles (population…) et la grille de population des isochrones (voir `tiles/`).
+    tiles: crate::tiles::Registry,
 }
 
 impl AppState {
@@ -69,7 +71,12 @@ impl AppState {
             air: RwLock::new(None),
             air_disabled: RwLock::new(None),
             transit_parts: Mutex::default(),
+            tiles: crate::tiles::Registry::new(),
         }))
+    }
+
+    pub fn tiles(&self) -> &crate::tiles::Registry {
+        &self.0.tiles
     }
 
     pub fn network(&self) -> Arc<Network> {

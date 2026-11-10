@@ -23,6 +23,8 @@
 //!   `&modes=train,car,idf` (défaut : tout ce qui est chargé), les cars et les transports d'Île-de-France comptent aussi
 //!   et la réponse porte en plus les arrêts supplémentaires atteints (voir `multimodal.rs`) ;
 //!   `GET /api/isochrone/trajet?…&vers=<code UIC>` : l'itinéraire jusqu'à l'une d'elles.
+//! - `GET /api/tuiles/{jeu}` et `GET /api/tuiles/{jeu}/{version}/{z}/{x}/{y}` : tuiles vectorielles préparées par le serveur
+//!   (population INSEE…), voir `tiles/serve.rs`.
 //! - `GET /api/arrets/{version}` : les arrêts supplémentaires (cars, métro, RER…) auxquels renvoient les isochrones.
 //!   Ne change jamais pour une version donnée. `GET /api/arrets` : la version actuelle (ou `null` si rien n'est chargé).
 
@@ -90,6 +92,7 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
             .nest_service("/assets", get_service(ServeDir::new(dir.join("assets"))).layer(immutable))
             .fallback_service(get_service(pages).layer(revalidate));
     }
+    router = router.merge(crate::tiles::serve::router(state.tiles().clone()));
     router.layer(CompressionLayer::new()).layer(TraceLayer::new_for_http()).with_state(state)
 }
 

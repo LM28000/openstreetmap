@@ -18,6 +18,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { formatDateTime } from '../ui/format';
+import { STATUS_COLORS, addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 import departements from '../data/departements.json';
 
 interface ApiSlot extends Array<number> {
@@ -48,20 +49,20 @@ const SELECTED_ID = 'vigilance-meteo-choisi';
 
 /** Mêmes couleurs de statut que `floods.ts`. */
 const LEVELS: Record<number, { name: string; color: string; text: string }> = {
-  1: { name: 'verte', color: '#0ca30c', text: 'Pas de vigilance particulière.' },
+  1: { name: 'verte', color: STATUS_COLORS.vert, text: 'Pas de vigilance particulière.' },
   2: {
     name: 'jaune',
-    color: '#fab219',
+    color: STATUS_COLORS.jaune,
     text: 'Soyez attentif. Si vous pratiquez des activités sensibles au risque météorologique ou exposées aux conditions météorologiques, des phénomènes habituels dans la région mais occasionnellement dangereux sont prévus.',
   },
   3: {
     name: 'orange',
-    color: '#ec835a',
+    color: STATUS_COLORS.orange,
     text: 'Soyez très vigilant. Des phénomènes dangereux sont prévus. Tenez-vous au courant de l’évolution de la situation et suivez les conseils de sécurité émis par les pouvoirs publics.',
   },
   4: {
     name: 'rouge',
-    color: '#d03b3b',
+    color: STATUS_COLORS.rouge,
     text: 'Une vigilance absolue s’impose. Des phénomènes dangereux d’intensité exceptionnelle sont prévus. Tenez-vous régulièrement au courant de l’évolution de la situation et respectez impérativement les consignes de sécurité émises par les pouvoirs publics.',
   },
 };
@@ -288,14 +289,10 @@ export const weatherAlerts = defineModule<AlertsData>({
         },
         before,
       );
-      map.addLayer(
-        {
-          id: SELECTED_ID,
-          type: 'line',
-          source: SOURCE_ID,
-          filter: ['==', ['get', 'code'], ''],
-          paint: { 'line-color': '#4f8cff', 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 3, 9, 6] },
-        },
+      // Le département choisi : contour blanc cerné de sombre, sans teinte (la couleur dit la vigilance).
+      addSelectionRing(
+        map,
+        selectionRingLayers(SELECTED_ID, SOURCE_ID, ['==', ['get', 'code'], ''], [[4, 2], [9, 4]], undefined, { 'line-join': 'round' }),
         before,
       );
     },
@@ -308,10 +305,10 @@ export const weatherAlerts = defineModule<AlertsData>({
         }
       }
       const code = (selection as { code: string } | null)?.code ?? '';
-      if (map.getLayer(SELECTED_ID)) map.setFilter(SELECTED_ID, ['==', ['get', 'code'], code]);
+      setSelectionRingFilter(map, SELECTED_ID, ['==', ['get', 'code'], code]);
     },
     remove(map) {
-      for (const id of [SELECTED_ID, LINE_ID, PATTERN_ID, FILL_ID]) if (map.getLayer(id)) map.removeLayer(id);
+      for (const id of [...selectionRingIds(SELECTED_ID), LINE_ID, PATTERN_ID, FILL_ID]) if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
       for (const level of [2, 3, 4]) if (map.hasImage(`${PATTERN_ID}-${level}`)) map.removeImage(`${PATTERN_ID}-${level}`);
       shown = undefined;

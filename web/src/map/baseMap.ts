@@ -3,8 +3,14 @@
  * ombrage des reliefs et atmosphère.
  */
 import type { Map as MapLibreMap, RasterDEMSourceSpecification, SkySpecification } from 'maplibre-gl';
+import { clock } from '../core/clock';
+import { nightAmount, sunElevation } from '../modules/solar';
+import { NIGHT_STATE, applyCalmStyle, hillshadePaint } from './calmStyle';
 
-/** Style OSM gratuit, sans clé, avec bâtiments 3D. © OpenMapTiles © OpenStreetMap. */
+/**
+ * Style OSM gratuit, sans clé, avec bâtiments 3D. © OpenMapTiles © OpenStreetMap.
+ * C'est le style « Liberty » d'OpenFreeMap ; `setupBaseMap` le repeint en fond calme (calmStyle.ts).
+ */
 export const BASE_STYLE_URL = 'https://tiles.openfreemap.org/styles/liberty';
 
 export const INITIAL_VIEW = {
@@ -48,6 +54,22 @@ export const DAY_SKY: SkySpecification = {
  * le relief ; le globe est proposé par un bouton (voir `keepGlobeAndTerrainApart`).
  */
 export function setupBaseMap(map: MapLibreMap): void {
+  // L'état « nuit » doit exister avant les couleurs qui le lisent. On part de l'état du soleil
+  // au centre de la vue pour ne pas montrer un fond de jour une seconde avant la bascule.
+  const center = map.getCenter();
+  nightValue = quantize(nightAmount(sunElevation(center.lat, center.lng, clock.now())));
+  map.setGlobalStateProperty(NIGHT_STATE, nightValue);
+  sunDrivesNight = false;
+  // Si le module « Jour et nuit » est masqué, personne ne pilotera la nuit : retour au jour.
+  map.once('load', () => {
+    setTimeout(() => {
+      if (!sunDrivesNight) setNight(map, 0);
+    }, 3000);
+  });
+  const started = performance.now();
+  applyCalmStyle(map);
+  performance.measure('fond-calme', { start: started });
+
   // Deux sources distinctes : MapLibre rend mieux l'ombrage quand il ne partage
   // pas sa source avec le relief 3D.
   if (!map.getSource(TERRAIN_SOURCE)) map.addSource(TERRAIN_SOURCE, DEM_SOURCE);
@@ -59,12 +81,8 @@ export function setupBaseMap(map: MapLibreMap): void {
         id: 'ombrage-relief',
         type: 'hillshade',
         source: HILLSHADE_SOURCE,
-        paint: {
-          // Assez marqué pour lire le relief même sous l'ombre de la nuit.
-          'hillshade-exaggeration': 0.5,
-          'hillshade-shadow-color': 'rgba(45, 36, 28, 0.65)',
-          'hillshade-highlight-color': 'rgba(255, 255, 255, 0.25)',
-        },
+        // Assez marqué pour lire le relief même de nuit ; ombres et lumières suivent la palette.
+        paint: hillshadePaint() as never,
       },
       // Au-dessus de la végétation, sous l'eau et les routes.
       existingLayerOr(map, 'waterway_tunnel'),
@@ -74,6 +92,25 @@ export function setupBaseMap(map: MapLibreMap): void {
   map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
 
   map.setSky(DAY_SKY);
+}
+
+/** Quantification de la nuit : 48 paliers suffisent à l'œil et évitent de repeindre à chaque image. */
+const NIGHT_STEPS = 48;
+const quantize = (amount: number) => Math.round(Math.min(1, Math.max(0, amount)) * NIGHT_STEPS) / NIGHT_STEPS;
+
+let nightValue = 0;
+let sunDrivesNight = false;
+
+/**
+ * Fait passer tout le fond de sa palette de jour (0) à sa palette de nuit (1). Un seul réglage
+ * d'état global : les couleurs du style le lisent (voir calmStyle.ts).
+ */
+export function setNight(map: MapLibreMap, amount: number): void {
+  const next = quantize(amount);
+  sunDrivesNight = true;
+  if (next === nightValue) return;
+  nightValue = next;
+  map.setGlobalStateProperty(NIGHT_STATE, next);
 }
 
 /**

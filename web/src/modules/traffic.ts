@@ -24,6 +24,7 @@ import { firstSymbolLayerId } from '../map/baseMap';
 import { OVER_MAP } from '../map/parameters';
 import { formatDateTime, formatRelative } from '../ui/format';
 import { type Shape, ShapeExtension } from './shapeExtension';
+import { STATUS_COLORS, addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
 type Kind = 'bouchon' | 'accident' | 'fermeture' | 'travaux' | 'danger';
 
@@ -78,10 +79,10 @@ interface TrafficData {
 
 /** États de la circulation : couleurs de statut (celles des crues), jamais seules (épaisseur aussi). */
 const STATES = [
-  { name: 'Fluide', color: '#0ca30c' },
-  { name: 'Ralenti', color: '#fab219' },
-  { name: 'Saturé', color: '#ec835a' },
-  { name: 'Coupé', color: '#d03b3b' },
+  { name: 'Fluide', color: STATUS_COLORS.vert },
+  { name: 'Ralenti', color: STATUS_COLORS.jaune },
+  { name: 'Saturé', color: STATUS_COLORS.orange },
+  { name: 'Coupé', color: STATUS_COLORS.rouge },
 ] as const;
 
 /** Bouchons : une seule teinte brune, du clair (ralentissement) au foncé (très long). Validée. */
@@ -214,8 +215,8 @@ const CLOSURE_LINE = 'trafic-fermetures';
 const WORKS_CASING = 'trafic-travaux-contour';
 const WORKS_LINE = 'trafic-travaux';
 const EVENT_SELECTED = 'trafic-evenement-choisi';
-const STATE_LAYERS = [STATE_SELECTED, STATE_LINE, STATE_CASING];
-const EVENT_LAYERS = [EVENT_SELECTED, WORKS_LINE, WORKS_CASING, CLOSURE_LINE, CLOSURE_CASING, JAM_LINE, JAM_CASING];
+const STATE_LAYERS = [...selectionRingIds(STATE_SELECTED), STATE_LINE, STATE_CASING];
+const EVENT_LAYERS = [...selectionRingIds(EVENT_SELECTED), WORKS_LINE, WORKS_CASING, CLOSURE_LINE, CLOSURE_CASING, JAM_LINE, JAM_CASING];
 
 const byState = (values: [number, number, number, number]) => ['match', ['get', 'state'], 1, values[1], 2, values[2], 3, values[3], values[0]] as never;
 const bySeverity = (values: [number, number, number, number]) => ['match', ['get', 'severity'], 2, values[1], 3, values[2], 4, values[3], values[0]] as never;
@@ -361,17 +362,7 @@ export const traffic = defineModule<TrafficData>({
         },
         before,
       );
-      map.addLayer(
-        {
-          id: STATE_SELECTED,
-          type: 'line',
-          source: STATE_SOURCE,
-          filter: ['==', ['get', 'id'], ''],
-          layout: round,
-          paint: { 'line-color': '#4f8cff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3, 12, 8], 'line-gap-width': 3 },
-        },
-        before,
-      );
+      addSelectionRing(map, selectionRingLayers(STATE_SELECTED, STATE_SOURCE, ['==', ['get', 'id'], ''], [[5, 2], [12, 5]], 3), before);
 
       // Événements : bouchons (brun, épaisseur selon la gravité), fermetures et travaux (pointillés).
       map.addLayer(
@@ -428,17 +419,7 @@ export const traffic = defineModule<TrafficData>({
           before,
         );
       }
-      map.addLayer(
-        {
-          id: EVENT_SELECTED,
-          type: 'line',
-          source: EVENT_SOURCE,
-          filter: ['==', ['get', 'id'], ''],
-          layout: round,
-          paint: { 'line-color': '#4f8cff', 'line-width': 5, 'line-gap-width': 4 },
-        },
-        before,
-      );
+      addSelectionRing(map, selectionRingLayers(EVENT_SELECTED, EVENT_SOURCE, ['==', ['get', 'id'], ''], 3, 4), before);
     },
 
     update(map, { data, time, settings, selection }) {
@@ -456,8 +437,8 @@ export const traffic = defineModule<TrafficData>({
       setVisibility(map, STATE_LAYERS, showsState(settings));
       setVisibility(map, EVENT_LAYERS, showsEvents(settings));
       const chosen = selection as { type: string; id: string } | null;
-      if (map.getLayer(STATE_SELECTED)) map.setFilter(STATE_SELECTED, ['==', ['get', 'id'], chosen?.type === 'section' ? chosen.id : '']);
-      if (map.getLayer(EVENT_SELECTED)) map.setFilter(EVENT_SELECTED, ['==', ['get', 'id'], chosen?.type === 'event' ? chosen.id : '']);
+      setSelectionRingFilter(map, STATE_SELECTED, ['==', ['get', 'id'], chosen?.type === 'section' ? chosen.id : '']);
+      setSelectionRingFilter(map, EVENT_SELECTED, ['==', ['get', 'id'], chosen?.type === 'event' ? chosen.id : '']);
     },
 
     remove(map) {
@@ -542,7 +523,22 @@ export const traffic = defineModule<TrafficData>({
     }
 
     if (chosen) {
+      // Anneau blanc cerné de sombre (comme sur les tronçons) : la sélection ne prend aucune teinte.
       layers.push(
+        new ScatterplotLayer<TrafficEvent>({
+          id: 'trafic/choisi-contour',
+          data: [chosen],
+          getPosition: (e) => [e.lon, e.lat],
+          radiusUnits: 'pixels',
+          getRadius: 16,
+          filled: false,
+          stroked: true,
+          getLineColor: [22, 26, 38, 235],
+          lineWidthUnits: 'pixels',
+          getLineWidth: 6,
+          billboard: true,
+          parameters: OVER_MAP,
+        }),
         new ScatterplotLayer<TrafficEvent>({
           id: 'trafic/choisi',
           data: [chosen],
@@ -551,7 +547,7 @@ export const traffic = defineModule<TrafficData>({
           getRadius: 16,
           filled: false,
           stroked: true,
-          getLineColor: [79, 140, 255],
+          getLineColor: [255, 255, 255],
           lineWidthUnits: 'pixels',
           getLineWidth: 3,
           billboard: true,

@@ -189,17 +189,39 @@ fn protection(kinds: &str, dated: &str) -> (u8, String) {
     let mut date = String::new();
     for entry in dated.split(';') {
         let entry = entry.replace('\u{a0}', " ");
-        let Some((day, kind)) = entry.split_once(':') else { continue };
-        let (day, kind) = (day.trim(), kind.trim().to_lowercase());
-        let is_date = day.len() == 10 && day.as_bytes()[4] == b'/' && day.as_bytes()[7] == b'/';
-        if is_date && kind.contains(level) {
-            let iso = day.replace('/', "-");
-            if date.is_empty() || iso < date {
-                date = iso;
-            }
+        // « 1930/11/30 : classé MH » ; la base écrit aussi « 1862 : classé MH » (année seule) et des variantes sans « : ».
+        if !entry.to_lowercase().contains(level) {
+            continue;
+        }
+        if let Some(iso) = parse_date(&entry)
+            && (date.is_empty() || iso < date)
+        {
+            date = iso;
         }
     }
     (code, date)
+}
+
+/// Début d'une entrée : « 1930/11/30 », « 1862 », « 2006//09/15 »… → « 1930-11-30 », « 1862 » (année, mois ou jour, selon ce qui est connu).
+fn parse_date(entry: &str) -> Option<String> {
+    let entry = entry.trim_start();
+    let year: String = entry.chars().take_while(char::is_ascii_digit).collect();
+    if year.len() != 4 {
+        return None;
+    }
+    let mut iso = year.clone();
+    let mut rest = &entry[4..];
+    for _ in 0..2 {
+        let trimmed = rest.trim_start_matches([' ', '/']);
+        let digits: String = trimmed.chars().take_while(char::is_ascii_digit).collect();
+        // Une date mal écrite (« 2019/09/019 ») s'arrête là : on garde ce qui est sûr.
+        if digits.is_empty() || digits.len() > 2 || rest.len() == trimmed.len() {
+            break;
+        }
+        iso = format!("{iso}-{digits:0>2}");
+        rest = &trimmed[digits.len()..];
+    }
+    Some(iso)
 }
 
 fn truncate(text: &str, max: usize) -> String {
@@ -320,6 +342,9 @@ mod tests {
         assert_eq!((code, date.as_str()), (1, "1980-01-25"));
         // Dates mal formées (espace insécable, date coupée) : ignorées sans erreur.
         assert_eq!(protection("inscrit MH", "inscrit MH ; 2020/05/27 : inscrit MH").1, "2020-05-27");
+        // Année seule, ou date sans « : ».
+        assert_eq!(protection("classé MH", "1862 : classé MH"), (1, "1862".into()));
+        assert_eq!(protection("inscrit MH", "2024/11/14 inscrit MH").1, "2024-11-14");
         assert_eq!(protection("inscrit MH", "   2020/01/03\u{a0}: inscrit MH").1, "2020-01-03");
     }
 

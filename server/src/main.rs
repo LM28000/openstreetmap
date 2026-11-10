@@ -29,6 +29,7 @@ mod gtfs_compact;
 mod gtfs_rt;
 mod idf;
 mod irve;
+mod monuments;
 mod multimodal;
 mod network;
 mod planes;
@@ -106,6 +107,7 @@ async fn main() -> Result<()> {
     tokio::spawn(transit::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(wind::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(irve::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
+    tokio::spawn(monuments::poll_forever(http.clone(), config.data_dir.clone()));
     tokio::spawn(traffic::poll_forever(http.clone(), state.clone()));
     tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));

@@ -253,6 +253,7 @@ Variables d'environnement : `ISO_CARS_TER`, `ISO_IDF`, `ISO_CARS_REGIONAUX` (`no
 | Jour et nuit | Le fond de carte passe à sa palette sombre la nuit (soleil au centre de la vue), l'ombre de la nuit et des crépuscules se voit de loin. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 | Radar de pluie | Les précipitations mesurées par radar, des deux dernières heures, drapées sur le relief. | [RainViewer](https://www.rainviewer.com) |
 | Photos aériennes anciennes | Les orthophotographies de l'IGN, des années 1950 (couche principale, 1950–1965) à aujourd'hui (1965–1980, 1980–1995, 2000–2005, 2006–2010, 2011–2015, actuelle), avec un **rideau avant / après** : une poignée verticale que l'on glisse (souris, doigt ou clavier) ; à gauche la photo, à droite la carte d'aujourd'hui. Réglage « Transparence » (curseur d'opacité) à la place du rideau. Drapée sur le relief 3D, étiquettes et couches par-dessus. Fiche : époque, ce que l'on voit, lien « Remonter le temps ». Indisponible sur le globe. | IGN, Géoplateforme (WMTS, sans clé), Licence Etalab 2.0 |
+| Monuments historiques | Les 44 500 immeubles protégés de la base Mérimée. Le **pictogramme** dit le genre (religieux, château et demeure, militaire, civil et urbain, archéologique, industriel et ouvrage d'art, funéraire et commémoratif), la **forme du badge** dit la protection : carré sombre pour un monument classé, rond clair pour un inscrit (aucune couleur : le noir et blanc ressort de jour comme de nuit). Points de loin, pictogrammes dès le zoom 11, noms dès le 14 (désencombrés, les classés d'abord). Réglages : protection, genre. Fiche : nom, commune, protection et date, époque, description quand la base en a une, lien vers la notice POP. | Base Mérimée, ministère de la Culture, via [data.gouv.fr](https://www.data.gouv.fr/datasets/immeubles-proteges-au-titre-des-monuments-historiques-2) (Licence Ouverte 2.0) |
 | Vent | Le vent à 10 m, animé en traînées, d'après la prévision ARPEGE (suit l'horloge). | Météo-France ARPEGE via [Open-Meteo](https://open-meteo.com) |
 | Ombres des bâtiments | L'ombre portée de chaque bâtiment selon la position du soleil, à partir du zoom 14. | calcul astronomique, bâtiments OpenStreetMap |
 
@@ -270,6 +271,7 @@ MapLibre ne sait pas découper une couche à l'écran, et avec le relief 3D ses 
 | Voies ferrées | OpenStreetMap, via l'API [Overpass](https://overpass-api.de) | ODbL |
 | Horaires et temps réel | SNCF, via [transport.data.gouv.fr](https://transport.data.gouv.fr) | ODbL |
 | Photos aériennes anciennes | IGN, Géoplateforme : `data.geopf.fr/wmts` (couches `ORTHOIMAGERY.ORTHOPHOTOS.1950-1965`, etc.) | Licence Etalab 2.0, mention « IGN » |
+| Monuments historiques | Base Mérimée (CSV hebdomadaire, ~100 Mo, lu en continu par le serveur puis effacé) | Licence Ouverte 2.0, mention « Ministère de la Culture » |
 | Relief | [Mapterhorn](https://mapterhorn.com/attribution) | attribution |
 | Séismes | EMSC | attribution |
 | Vigilance crues | Vigicrues (SCHAPI) | licence ouverte |

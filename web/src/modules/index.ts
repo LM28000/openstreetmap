@@ -13,6 +13,7 @@ import { fuel } from './fuel';
 import { planes } from './planes';
 import { power } from './power';
 import { railways } from './railways';
+import { ships } from './ships';
 import { trains } from './trains';
 
-export const MODULES: LayerModule[] = [trains, railways, planes, bikes, floods, fires, earthquakes, power, fuel, dayNight];
+export const MODULES: LayerModule[] = [trains, railways, planes, ships, bikes, floods, fires, earthquakes, power, fuel, dayNight];

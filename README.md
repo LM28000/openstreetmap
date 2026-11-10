@@ -54,6 +54,8 @@ BIND_ADDRESS=192.168.0.75          # adresse d'écoute (127.0.0.1 par défaut : 
 RUN_AS=1000:1000                   # utilisateur:groupe propriétaire de data/ et archive/
 ARCHIVE_PATH=./archive             # où garder les archives (environ 50 Mo par jour)
 EOF
+# Facultatif, couche « Bateaux » : clé gratuite d'aisstream.io, saisie sans l'afficher.
+read -rsp "Clé aisstream : " k && printf 'AISSTREAM_API_KEY=%s\n' "$k" >> .env && chmod 600 .env && unset k
 docker compose up -d --build       # installer, ou mettre à jour après un git pull
 docker compose logs -f             # suivre les journaux
 ```
@@ -146,6 +148,8 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 |---|---|---|
 | Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
 | Voies ferrées | Les lignes empruntées par les trains de voyageurs, telles que le serveur les a calculées sur les voies OSM. Trait discret, ou nuances de gris selon la vitesse maximale de la ligne (épaisseur comprise). Fiche au clic : gares du tronçon, longueur, répartition des vitesses, lien vers OpenRailwayMap. | OpenStreetMap |
+| Avions | Les avions au-dessus de la France et autour, en direct, à leur altitude réelle (couleur selon l'altitude), avec leur indicatif ; anneau rouge pour une urgence déclarée (squawk 7500, 7600, 7700). Fiche au clic, caméra qui suit. En direct seulement. | [adsb.lol](https://adsb.lol) |
+| Bateaux | Les navires autour de la France et sur les fleuves, d'après leurs émissions AIS : couleur par famille (marchandises, passagers, pêche et plaisance), proue pointue en route, coque arrondie à l'arrêt, taille réelle de près. Fiche au clic (destination, dimensions…), caméra qui suit. En direct seulement ; demande une clé aisstream.io sur le serveur. | [aisstream.io](https://aisstream.io) |
 | Vélos en libre-service | Les 5 800 stations des 84 réseaux de France (Vélib', Vélo'v, VélôToulouse…), relues chaque minute. Mode « Vélos » pour en trouver un, « Places » pour le rendre ; vu de près, le nombre disponible sur chaque station. Une station hors service est un simple anneau gris. | réseaux GBFS via [transport.data.gouv.fr](https://transport.data.gouv.fr) |
 | Vigilance crues | Niveau de vigilance des 337 tronçons de rivières surveillés, de vert à rouge (épaisseur du trait selon le niveau). Couche MapLibre drapée sur le relief. | [Vigicrues](https://www.vigicrues.gouv.fr) |
 | Feux | Points chauds détectés par satellite sur 7 jours (incendies, brûlages agricoles, sites industriels). La couleur dit l'âge à l'instant affiché, la taille la puissance du feu : on les voit apparaître en rejouant la semaine. | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) (VIIRS) |
@@ -170,6 +174,8 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Carburants | prix-carburants.gouv.fr (ministère de l'Économie) | licence ouverte |
 | Vélos en libre-service | chaque réseau, via transport.data.gouv.fr | licence ouverte ou ODbL selon le réseau |
 | Feux | NASA FIRMS (capteurs VIIRS) | libre, citer la NASA |
+| Avions | adsb.lol (récepteurs ADS-B de la communauté) | ODbL |
+| Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.
 

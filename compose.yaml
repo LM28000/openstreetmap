@@ -7,6 +7,7 @@
 #   BIND_ADDRESS=192.168.0.75          adresse d'écoute sur la machine (127.0.0.1 par défaut : la machine seule)
 #   ARCHIVE_PATH=/mnt/pool/carte-vivante   où garder les archives du temps réel
 #   RUN_AS=1000:1000                   utilisateur:groupe propriétaire des dossiers data et archive
+#   AISSTREAM_API_KEY=…                clé aisstream.io de la couche « Bateaux » (secrète : chmod 600 .env)
 
 name: carte-vivante
 
@@ -18,6 +19,9 @@ services:
     user: "${RUN_AS:-1000:1000}"
     ports:
       - "${BIND_ADDRESS:-127.0.0.1}:${PORT:-8787}:8787"
+    environment:
+      # Vide = couche « Bateaux » désactivée. La clé ne sort jamais du serveur.
+      AISSTREAM_API_KEY: "${AISSTREAM_API_KEY:-}"
     volumes:
       - "${DATA_PATH:-./data}:/data"
       - "${ARCHIVE_PATH:-./archive}:/archive"

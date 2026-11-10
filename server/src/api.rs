@@ -3,6 +3,7 @@
 //! - `GET /api/health` : état du serveur (horaires chargés, fraîcheur du temps réel).
 //! - `GET /api/velos` : stations de vélos en libre-service de France, avec vélos et places disponibles.
 //! - `GET /api/feux` : feux détectés par satellite sur 7 jours.
+//! - `GET /api/bateaux` : navires autour de la France (AIS, aisstream.io), toutes les 10 s.
 //! - `GET /api/avions` : avions en vol au-dessus de la France (adsb.lol), mis à jour toutes les 10 s.
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
@@ -42,6 +43,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .route("/api/avions", get(|State(state): State<AppState>| async move { prepared(state.planes(), "avions") }))
+        .route("/api/bateaux", get(|State(state): State<AppState>| async move { prepared(state.ships(), "bateaux") }))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

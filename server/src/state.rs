@@ -26,6 +26,7 @@ struct Inner {
     bikes: RwLock<Option<Bytes>>,
     fires: RwLock<Option<Bytes>>,
     planes: RwLock<Option<Bytes>>,
+    ships: RwLock<Option<Bytes>>,
 }
 
 impl AppState {
@@ -37,6 +38,7 @@ impl AppState {
             bikes: RwLock::new(None),
             fires: RwLock::new(None),
             planes: RwLock::new(None),
+            ships: RwLock::new(None),
         }))
     }
 
@@ -103,5 +105,13 @@ impl AppState {
 
     pub fn set_planes(&self, body: Vec<u8>) {
         *self.0.planes.write().expect("verrou des avions") = Some(Bytes::from(body));
+    }
+
+    pub fn ships(&self) -> Option<Bytes> {
+        self.0.ships.read().expect("verrou des bateaux").clone()
+    }
+
+    pub fn set_ships(&self, body: Vec<u8>) {
+        *self.0.ships.write().expect("verrou des bateaux") = Some(Bytes::from(body));
     }
 }

@@ -17,7 +17,9 @@
  *
  * Couleurs : la couleur officielle de la ligne quand le réseau la donne, sinon une couleur par mode
  * (rose, bleu-vert, or : voir MODE_COLORS). La couleur ne distingue jamais les modes à elle seule :
- * c'est la forme (rond, carré, losange, triangle) ; un contour clair ou sombre garde chaque couleur lisible.
+ * c'est la silhouette vue de dessus (bus, rame de tram, voitures de métro), orientée selon le cap, à sa
+ * longueur réelle de près et à une taille minimale de loin ; un contour clair ou sombre, selon la
+ * luminance de la couleur, garde chaque couleur lisible.
  *
  * **Positions estimées.** Plusieurs grandes villes (Lille, Toulouse, Nantes, Reims, Nancy…) ne publient pas la position
  * de leurs véhicules, mais leurs horaires en temps réel. Le serveur (server/src/estimates.rs) en déduit où ils sont :
@@ -33,7 +35,7 @@ import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
 import { declutter, halfZoomBreaks } from '../map/declutter';
-import { bubbleIcon, buildTransitAtlas, estimatedLegendIcon, legendIcon, type Kind, type TransitAtlas } from './transitIcons';
+import { CELL_HEIGHT, CELL_METERS, bubbleIcon, buildTransitAtlas, estimatedLegendIcon, legendIcon, lengthShare, lengthUnits, type Kind, type TransitAtlas } from './transitIcons';
 import { OVER_MAP } from '../map/parameters';
 
 interface ApiLine {
@@ -130,6 +132,8 @@ interface Vehicle {
   arrivedAt: number;
   spanMs: number;
   headingDeg?: number;
+  /** Direction dessinée (degrés depuis le nord) : le cap annoncé, sinon celle du mouvement. */
+  bearing: number;
   speedKmh?: number;
   /** Instant de la mesure (ms). */
   ts: number;
@@ -194,7 +198,9 @@ const MODE_COLORS: Record<Kind, string> = {
 const UNKNOWN_MODE_COLOR = '#8b92a1';
 const OUTLINE_DARK: [number, number, number] = [22, 26, 38];
 const OUTLINE_LIGHT: [number, number, number] = [255, 255, 255];
-const SELECTION_COLOR: Color = [79, 140, 255];
+/** Sélection : un anneau blanc sous un anneau sombre, jamais une couleur de plus. */
+const RING_HALO: Color = [255, 255, 255, 240];
+const RING_KEY: Color = [20, 26, 38, 255];
 const BUBBLE_FILL: Color = [232, 236, 244, 235];
 
 const MODE_LABELS: Record<NonNullable<ApiLine['mode']>, string> = {
@@ -297,6 +303,18 @@ function atTime(e: Estimate, time: number, out: [number, number, number]): boole
   return u >= last;
 }
 
+/** Direction d'un véhicule sans cap annoncé : celle de sa trajectoire estimée ; 0 si on ne sait pas. */
+function pathBearing(v: Vehicle): number {
+  const xy = v.estimate?.xy;
+  if (!xy) return 0;
+  for (let i = 2; i + 1 < xy.length; i += 2) {
+    const dx = (xy[i]! - xy[0]!) * Math.cos((xy[1]! * Math.PI) / 180);
+    const dy = xy[i + 1]! - xy[1]!;
+    if (Math.abs(dx) + Math.abs(dy) > 1e-6) return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+  }
+  return 0;
+}
+
 async function loadTransit(signal: AbortSignal): Promise<TransitData> {
   const response = await fetch('/api/transports', { signal });
   if (response.status === 503) throw new Error('le serveur n’a pas encore reçu les positions, nouvel essai dans quelques secondes');
@@ -337,6 +355,7 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
       arrivedAt: receivedAt,
       spanMs: MIN_SPAN_MS,
       headingDeg: v.heading,
+      bearing: v.heading ?? 0,
       speedKmh: v.speed,
       ts: v.ts * 1000,
       fill,
@@ -347,6 +366,7 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
       settled: !v.est,
       groundVersion: -1,
     };
+    if (v.heading === undefined) vehicle.bearing = previous?.byKey.get(key)?.bearing ?? pathBearing(vehicle);
     // Continuité : le véhicule part de là où on le voyait, et non de sa position précédente.
     const old = vehicle.estimate ? undefined : previous?.byKey.get(key);
     if (old && !old.estimate) {
@@ -361,6 +381,7 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
         if (Math.abs(shownLon - v.lon) < MAX_GLIDE_DEG && Math.abs(shownLat - v.lat) < MAX_GLIDE_DEG && (shownLon !== v.lon || shownLat !== v.lat)) {
           vehicle.fromLon = shownLon;
           vehicle.fromLat = shownLat;
+          if (v.heading === undefined) vehicle.bearing = ((Math.atan2((v.lon - shownLon) * Math.cos((v.lat * Math.PI) / 180), v.lat - shownLat) * 180) / Math.PI + 360) % 360;
           vehicle.spanMs = Math.min(Math.max((vehicle.ts - old.ts) || MIN_SPAN_MS, MIN_SPAN_MS), MAX_SPAN_MS);
           vehicle.settled = false;
           vehicle.position = [shownLon, shownLat, old.position[2]];
@@ -508,11 +529,15 @@ function labelledNetworks(data: TransitData, zoom: number): Network[] {
   return networkLabelCache.networks;
 }
 
-function vehicleSize(zoom: number): number {
-  if (zoom < 11) return 9;
-  if (zoom < 13) return 12;
-  return 16;
+/** Longueur minimale à l'écran d'un bus (pixels) : les autres modes en gardent la proportion réelle. */
+function busMinPx(zoom: number): number {
+  if (zoom < 11) return 10;
+  if (zoom < 13) return 14;
+  return 18;
 }
+
+/** Longueur minimale à l'écran d'un véhicule de ce mode (pixels). */
+const minLengthPx = (kind: Kind, zoom: number) => (busMinPx(zoom) * lengthUnits(kind)) / lengthUnits('bus');
 
 export const transit = defineModule<TransitData>({
   id: 'transports',
@@ -524,21 +549,22 @@ export const transit = defineModule<TransitData>({
     'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche). Positions estimées par la carte d’après ces horaires',
   refreshIntervalMs: 30_000,
   timeStepMs: (view) => glideStepMs(view.zoom),
-  zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), ...halfZoomBreaks(LABELS_FROM_ZOOM)],
+  zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), 11, ...halfZoomBreaks(LABELS_FROM_ZOOM)],
   followsTerrain: true,
 
   legend(): LegendItem[] {
     return [
-      { color: MODE_COLORS.bus, icon: legendIcon('bus', MODE_COLORS.bus), label: 'Bus (rond)' },
-      { color: MODE_COLORS.tram, icon: legendIcon('tram', MODE_COLORS.tram), label: 'Tramway (carré)' },
-      { color: MODE_COLORS.metro, icon: legendIcon('metro', MODE_COLORS.metro), label: 'Métro (losange)' },
-      { color: MODE_COLORS.other, icon: legendIcon('other', MODE_COLORS.other), label: 'Train, bateau, câble (triangle)' },
-      { color: UNKNOWN_MODE_COLOR, icon: legendIcon('bus', UNKNOWN_MODE_COLOR), label: 'Mode inconnu (rond gris)' },
+      { color: MODE_COLORS.bus, icon: legendIcon('bus', MODE_COLORS.bus), label: 'Bus (une caisse)' },
+      { color: MODE_COLORS.tram, icon: legendIcon('tram', MODE_COLORS.tram), label: 'Tramway (rame articulée de trois éléments)' },
+      { color: MODE_COLORS.metro, icon: legendIcon('metro', MODE_COLORS.metro), label: 'Métro (voitures accouplées)' },
+      { color: MODE_COLORS.other, icon: legendIcon('other', MODE_COLORS.other), label: 'Train, bateau, câble (deux éléments, gris)' },
+      { color: UNKNOWN_MODE_COLOR, icon: legendIcon('bus', UNKNOWN_MODE_COLOR), label: 'Mode inconnu (bus gris)' },
       {
         color: 'transparent',
         icon: estimatedLegendIcon('bus', MODE_COLORS.bus),
-        label: 'Contour pointillé : position estimée d’après les horaires du réseau, qui ne publie pas ses positions (même formes et mêmes couleurs)',
+        label: 'Contour pointillé : position estimée d’après les horaires du réseau, qui ne publie pas ses positions (mêmes silhouettes et mêmes couleurs)',
       },
+      { color: 'transparent', label: 'Le véhicule pointe dans le sens de sa marche ; de près, il a sa longueur réelle. Le numéro de la ligne s’affiche à côté, dès le zoom 13.' },
       { color: 'transparent', icon: bubbleIcon(), label: 'Vue d’ensemble : un rond par réseau, plus gros avec le nombre de véhicules' },
       { color: 'transparent', label: 'La couleur est celle de la ligne quand le réseau la donne ; sinon celle du mode (ci-dessus).' },
     ];
@@ -566,7 +592,7 @@ export const transit = defineModule<TransitData>({
 
     // Vue d'ensemble : un rond par réseau.
     if (view.zoom < VEHICLES_FROM_ZOOM) {
-      const selectedName = chosen?.type === 'network' ? chosen.name : undefined;
+      const selectedNet = chosen?.type === 'network' ? data.networks.find((n) => n.name === chosen.name) : undefined;
       return [
         new ScatterplotLayer<Network>({
           id: 'transports/reseaux',
@@ -576,14 +602,32 @@ export const transit = defineModule<TransitData>({
           getRadius: (n) => n.radius,
           getFillColor: BUBBLE_FILL,
           stroked: true,
-          getLineColor: (n) => (n.name === selectedName ? SELECTION_COLOR : [22, 26, 38, 235]),
-          getLineWidth: (n) => (n.name === selectedName ? 3 : 1.5),
+          getLineColor: [22, 26, 38, 235],
+          getLineWidth: 1.5,
           lineWidthUnits: 'pixels',
-          updateTriggers: { getLineColor: selectedName, getLineWidth: selectedName },
           pickable: true,
           billboard: true,
           parameters,
         }),
+        ...(selectedNet
+          ? [RING_HALO, RING_KEY].map(
+              (color, i) =>
+                new ScatterplotLayer<Network>({
+                  id: `transports/reseau-choisi-${i}`,
+                  data: [selectedNet],
+                  getPosition: (n) => [n.lon, n.lat, 0],
+                  radiusUnits: 'pixels',
+                  getRadius: (n) => n.radius + 4,
+                  filled: false,
+                  stroked: true,
+                  getLineColor: color,
+                  lineWidthUnits: 'pixels',
+                  getLineWidth: i === 0 ? 7 : 2.5,
+                  billboard: true,
+                  parameters,
+                }),
+            )
+          : []),
         new TextLayer<Network>({
           id: 'transports/reseaux-nombres',
           data: data.networks,
@@ -626,18 +670,27 @@ export const transit = defineModule<TransitData>({
     // De près : chaque véhicule, posé sur le relief et glissant vers sa nouvelle position.
     if (place(data, time, terrain)) data.motion++;
     const icons = atlas();
-    const size = vehicleSize(view.zoom);
     const picked = chosen?.type === 'vehicle' ? data.byKey.get(chosen.key) : undefined;
     const common = {
       data: data.vehicles,
       iconAtlas: icons.atlas,
       iconMapping: icons.mapping,
       getPosition: (v: Vehicle) => v.position,
-      sizeUnits: 'pixels' as const,
-      getSize: size,
-      billboard: true,
+      // À plat sur la chaussée, orienté selon le cap (deck.gl tourne dans le sens trigonométrique).
+      getAngle: (v: Vehicle) => -v.bearing,
+      billboard: false,
+      // La taille d'une icône est celle de sa cellule : la même pour tous les modes (même échelle d'atlas),
+      // à la longueur réelle de près ; de loin, une longueur minimale (celle d'un bus, les autres en proportion).
+      sizeUnits: 'meters' as const,
+      getSize: CELL_METERS,
+      sizeMinPixels: (busMinPx(view.zoom) * CELL_HEIGHT) / (lengthUnits('bus') * 5),
+      sizeMaxPixels: 20_000,
       parameters,
     };
+    const moving = { getPosition: [data.motion, terrain.version], getAngle: data.motion };
+    // Distance de l'étiquette au véhicule : au-delà de sa demi-longueur (à ce niveau de zoom).
+    const meters = (156_543 * Math.cos((46.5 * Math.PI) / 180)) / 2 ** (Math.floor(view.zoom * 2) / 2) / 2;
+    const badgeOffset = Math.max(minLengthPx('bus', view.zoom) * 0.5, (CELL_METERS * lengthShare('bus') * 0.5) / meters) + 6;
     return [
       new IconLayer<Vehicle>({
         ...common,
@@ -645,7 +698,7 @@ export const transit = defineModule<TransitData>({
         // Contour pointillé pour une position estimée d'après les horaires ; plein pour une position mesurée.
         getIcon: (v) => `${v.line.kind}-${v.estimate ? 'halo-est' : 'halo'}`,
         getColor: (v) => v.halo,
-        updateTriggers: { getPosition: [data.motion, terrain.version] },
+        updateTriggers: moving,
       }),
       new IconLayer<Vehicle>({
         ...common,
@@ -653,24 +706,29 @@ export const transit = defineModule<TransitData>({
         getIcon: (v) => `${v.line.kind}-fill`,
         getColor: (v) => v.fill,
         pickable: true,
-        updateTriggers: { getPosition: [data.motion, terrain.version] },
+        updateTriggers: moving,
       }),
-      picked &&
-        new ScatterplotLayer<Vehicle>({
-          id: 'transports/choisi',
-          data: [picked],
-          getPosition: (v) => v.position,
-          radiusUnits: 'pixels',
-          getRadius: size * 0.95 + 5,
-          filled: false,
-          stroked: true,
-          getLineColor: SELECTION_COLOR,
-          lineWidthUnits: 'pixels',
-          getLineWidth: 2.5,
-          billboard: true,
-          updateTriggers: { getPosition: data.motion },
-          parameters,
-        }),
+      ...(picked
+        ? [RING_HALO, RING_KEY].map(
+            (color, i) =>
+              new ScatterplotLayer<Vehicle>({
+                id: `transports/choisi-${i}`,
+                data: [picked],
+                getPosition: (v) => v.position,
+                radiusUnits: 'meters',
+                getRadius: CELL_METERS * lengthShare(picked.line.kind) * 0.6,
+                radiusMinPixels: minLengthPx(picked.line.kind, view.zoom) * 0.6 + 4,
+                filled: false,
+                stroked: true,
+                getLineColor: color,
+                lineWidthUnits: 'pixels',
+                getLineWidth: i === 0 ? 7 : 2.5,
+                billboard: true,
+                updateTriggers: { getPosition: data.motion },
+                parameters,
+              }),
+          )
+        : []),
       view.zoom >= LABELS_FROM_ZOOM &&
         new TextLayer<Vehicle>({
           id: 'transports/lignes',
@@ -684,13 +742,15 @@ export const transit = defineModule<TransitData>({
           getColor: (v) => textColorOn(v.fill),
           getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
-          getPixelOffset: [size * 0.9 + 4, 0],
+          // Le badge est accroché au véhicule, en haut à droite.
+          getPixelOffset: [badgeOffset, -badgeOffset * 0.8],
           background: true,
           getBackgroundColor: (v) => [v.fill[0]!, v.fill[1]!, v.fill[2]!, 235],
-          backgroundPadding: [5, 2],
-          backgroundBorderRadius: 4,
+          backgroundPadding: [6, 3],
+          backgroundBorderRadius: 6,
+          // Liseré qui s'adapte à la couleur de la ligne (clair sur une ligne sombre, sombre sur une ligne claire).
           getBorderColor: (v) => v.halo,
-          getBorderWidth: 1,
+          getBorderWidth: 2,
           billboard: true,
           updateTriggers: { getPosition: [data.motion, terrain.version] },
           parameters,

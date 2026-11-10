@@ -3,20 +3,42 @@
  * émissions AIS, relayées par le serveur (server/src/ships.rs ; la clé d'aisstream.io
  * reste sur le serveur).
  *
- * Chaque navire est une coque vue de dessus, orientée selon son cap et à la taille de
- * sa longueur réelle vue de près. La couleur dit sa famille (marchandises, passagers,
- * pêche et plaisance) ; la forme dit s'il fait route (proue pointue) ou s'il est à
- * l'arrêt (coque arrondie). Entre deux collectes, les navires en route avancent selon
- * leur vitesse et leur route.
+ * Chaque navire est une coque vue de dessus, choisie selon son type AIS parmi huit (voir
+ * shipIcons.ts), orientée selon son cap et dessinée à sa longueur réelle quand l'AIS la
+ * donne (la largeur aussi : coque étroite, normale ou large), sinon à la longueur courante
+ * de son type. De loin, une taille minimale par taille de navire garde la forme lisible.
+ * La couleur dit sa famille (marchandises, passagers, pêche et plaisance) ; un navire en
+ * route traîne un sillage d'autant plus long qu'il va vite, un navire à l'arrêt n'en a pas.
+ * Entre deux collectes, les navires en route avancent selon leur vitesse et leur route.
+ *
+ * Les noms sont des étiquettes de carte (texte sombre, halo clair), désencombrées : les plus
+ * grands navires d'abord, sans chevauchement entre elles.
  *
  * Il n'y a pas d'historique : la couche n'existe qu'en direct.
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
-import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
+import {
+  CELL,
+  HULL_LENGTH,
+  NOMINAL_LENGTH,
+  SHIP_COLORS,
+  SHIP_INFO,
+  SHIP_TYPES,
+  TYPE_FAMILY,
+  beamClassOf,
+  hullKey,
+  legendHull,
+  shipAtlas,
+  shipType,
+  wakeBandOf,
+  wakeKey,
+  wakeWidthOf,
+  type ShipType,
+} from './shipIcons';
 
 interface ApiShip {
   mmsi: number;
@@ -41,35 +63,54 @@ interface ApiShip {
   at: number;
 }
 
-type Family = 'marchandises' | 'passagers' | 'petits' | 'autres';
+
+/** Taille d'affichage : les grands navires ont une taille minimale plus grande, et passent dessus. */
+type SizeClass = 'petit' | 'moyen' | 'grand';
+const SIZE_CLASSES: readonly SizeClass[] = ['petit', 'moyen', 'grand'];
+const SIZE_CLASS: Record<ShipType, SizeClass> = {
+  cargo: 'grand',
+  tanker: 'grand',
+  ferry: 'grand',
+  peche: 'moyen',
+  voilier: 'moyen',
+  service: 'moyen',
+  plaisance: 'petit',
+  remorqueur: 'petit',
+};
+/** Longueur minimale à l'écran (pixels) d'une coque quand la longueur réelle serait plus petite. */
+const MIN_PX: Record<SizeClass, number> = { petit: 12, moyen: 15, grand: 30 };
 
 interface Ship extends ApiShip {
-  family: Family;
+  type: ShipType;
+  sizeClass: SizeClass;
   moving: boolean;
   /** Direction affichée (degrés depuis le nord, sens horaire). */
   bearing: number;
-  /** Position extrapolée, mise à jour à chaque image. */
+  /** Longueur dessinée (mètres) : celle de l'AIS, sinon la longueur courante du type. */
+  sizeM: number;
+  hullIcon: string;
+  /** Sillage selon la vitesse ; absent à l'arrêt. */
+  wakeIcon?: string;
+  /** Position extrapolée, mise à jour à chaque pas pour les navires en route. */
   position: [number, number, number];
 }
 
 interface ShipsData {
   ships: Ship[];
   byMmsi: Map<number, Ship>;
+  /** Les navires en route (les seuls dont la position change). */
+  moving: Ship[];
+  /** Par taille, les plus petits d'abord (les grands se dessinent par-dessus). */
+  bySize: Record<SizeClass, Ship[]>;
+  wakesBySize: Record<SizeClass, Ship[]>;
+  /** Les navires qui ont un nom, les plus grands d'abord (ordre de priorité des étiquettes). */
+  named: Ship[];
   disabled: string | null;
   updatedAt: number;
 }
 
-/** Palette validée (sur la mer et sur la terre du fond de carte), et un gris pour le reste. */
-const FAMILIES: Record<Family, { color: string; label: string }> = {
-  marchandises: { color: '#a3262a', label: 'Marchandises : cargos, porte-conteneurs, citernes' },
-  passagers: { color: '#a66b00', label: 'Passagers : ferries, croisières, navettes rapides' },
-  petits: { color: '#00897a', label: 'Pêche et plaisance' },
-  autres: { color: '#6b7280', label: 'Autres ou type inconnu (remorqueurs, pilotes, services…)' },
-};
-const FAMILY_ORDER: Family[] = ['marchandises', 'passagers', 'petits', 'autres'];
-const OUTLINE = '#161a26';
-const ICON = 64;
-const ACCENT: Color = [79, 140, 255];
+const OUTLINE_KEY: Color = [20, 26, 38, 255];
+const RING_HALO: Color = [255, 255, 255, 240];
 /**
  * Au-delà, une position n'est plus extrapolée (le navire peut avoir changé de route).
  * Le flux ne transmet qu'une partie des émissions : la position d'un navire en route a
@@ -78,9 +119,33 @@ const ACCENT: Color = [79, 140, 255];
 const MAX_EXTRAPOLATION_S = 300;
 const LIVE_TOLERANCE_MS = 60_000;
 const LABEL_MIN_ZOOM = 11;
-/** En dessous, vue de France : icônes plus petites, sinon les ports deviennent des pâtés. */
+/** Un nom s'affiche dès que la coque fait cette longueur à l'écran (pixels), ou à partir du zoom ci-dessous quel que soit le navire. */
+const LABEL_MIN_PX = 24;
+const LABEL_ALL_ZOOM = 15;
+const LABEL_FONT = '600 12px system-ui, -apple-system, "Segoe UI", sans-serif';
+/** En dessous, vue de France : tailles minimales réduites, sinon les ports deviennent des pâtés. */
 const FAR_ZOOM = 7;
+const MID_ZOOM = 10;
 const KNOT_MS = 1852 / 3600;
+/** Un navire rapide file 20 m/s (40 nœuds). */
+const FASTEST_MS = 20;
+
+/** Mètres par pixel d'écran au zoom donné (MapLibre : tuiles de 512 px) et à la latitude donnée. */
+const metersPerPixel = (zoom: number, lat = 46.5) => (78_271.52 * Math.cos((lat * Math.PI) / 180)) / 2 ** zoom;
+
+/** Part de la longueur minimale gardée selon le zoom : plus petite de loin, où les navires sont nombreux. */
+const minFactor = (zoom: number) => (zoom < FAR_ZOOM ? 0.5 : zoom < MID_ZOOM ? 0.75 : 1);
+
+/** Longueur d'une coque à l'écran (pixels) à un zoom donné. */
+const lengthPx = (ship: Ship, zoom: number) => Math.max(ship.sizeM / metersPerPixel(zoom, ship.lat), MIN_PX[ship.sizeClass] * minFactor(zoom));
+
+/**
+ * Intervalle entre deux mises à jour de l'affichage. Les navires avancent d'au plus 20 m/s : redessiner
+ * plus souvent que tous les pixels et demi est inutile (au zoom 11, 2 s ; de près, 4 images par seconde au plus).
+ */
+function stepMs(zoom: number): number {
+  return Math.min(Math.max((1.5 * metersPerPixel(zoom) * 1000) / FASTEST_MS, 250), 2000);
+}
 
 const NAV_STATUS: Record<number, string> = {
   0: 'en route au moteur',
@@ -94,14 +159,6 @@ const NAV_STATUS: Record<number, string> = {
   8: 'en route à la voile',
   14: 'balise de détresse',
 };
-
-function familyOf(kind: number | undefined): Family {
-  if (kind === undefined) return 'autres';
-  if (kind >= 70 && kind <= 89) return 'marchandises';
-  if ((kind >= 60 && kind <= 69) || (kind >= 40 && kind <= 49)) return 'passagers';
-  if (kind === 30 || kind === 36 || kind === 37) return 'petits';
-  return 'autres';
-}
 
 function typeLabel(kind: number | undefined): string {
   if (kind === undefined) return 'type inconnu';
@@ -131,81 +188,6 @@ function typeLabel(kind: number | undefined): string {
   return 'autre type';
 }
 
-// --- Icônes : coques vues de dessus, proue vers le haut ---
-
-function hullPath(ctx: CanvasRenderingContext2D, moving: boolean): void {
-  const cx = ICON / 2;
-  const half = 13;
-  ctx.beginPath();
-  if (moving) {
-    // Proue pointue en haut, poupe carrée en bas.
-    ctx.moveTo(cx, 4);
-    ctx.quadraticCurveTo(cx + half, 18, cx + half, 30);
-    ctx.lineTo(cx + half, 58);
-    ctx.lineTo(cx - half, 58);
-    ctx.lineTo(cx - half, 30);
-    ctx.quadraticCurveTo(cx - half, 18, cx, 4);
-  } else {
-    // À l'arrêt : coque arrondie aux deux bouts.
-    ctx.moveTo(cx - half, 16);
-    ctx.arc(cx, 16, half, Math.PI, 0);
-    ctx.lineTo(cx + half, 48);
-    ctx.arc(cx, 48, half, 0, Math.PI);
-    ctx.closePath();
-  }
-}
-
-interface ShipAtlas {
-  atlas: string;
-  mapping: Record<string, { x: number; y: number; width: number; height: number; anchorX: number; anchorY: number; mask: boolean }>;
-  urls: Map<string, string>;
-}
-
-let atlasCache: ShipAtlas | undefined;
-
-function iconKey(family: Family, moving: boolean): string {
-  return `${family}-${moving ? 'route' : 'arret'}`;
-}
-
-function shipAtlas(): ShipAtlas {
-  if (atlasCache) return atlasCache;
-  const keys = FAMILY_ORDER.flatMap((family) => [true, false].map((moving) => ({ family, moving })));
-  const canvas = document.createElement('canvas');
-  canvas.width = keys.length * ICON;
-  canvas.height = ICON;
-  const ctx = canvas.getContext('2d');
-  const mapping: ShipAtlas['mapping'] = {};
-  const urls = new Map<string, string>();
-  keys.forEach(({ family, moving }, i) => {
-    const draw = (c: CanvasRenderingContext2D) => {
-      hullPath(c, moving);
-      c.fillStyle = FAMILIES[family].color;
-      c.fill();
-      c.lineWidth = 3;
-      c.strokeStyle = OUTLINE;
-      c.stroke();
-    };
-    if (ctx) {
-      ctx.save();
-      ctx.translate(i * ICON, 0);
-      draw(ctx);
-      ctx.restore();
-    }
-    const key = iconKey(family, moving);
-    mapping[key] = { x: i * ICON, y: 0, width: ICON, height: ICON, anchorX: ICON / 2, anchorY: ICON / 2, mask: false };
-    const single = document.createElement('canvas');
-    single.width = ICON;
-    single.height = ICON;
-    const singleCtx = single.getContext('2d');
-    if (singleCtx) {
-      draw(singleCtx);
-      urls.set(key, single.toDataURL());
-    }
-  });
-  atlasCache = { atlas: canvas.toDataURL(), mapping, urls };
-  return atlasCache;
-}
-
 // --- Données ---
 
 async function loadShips(signal: AbortSignal): Promise<ShipsData> {
@@ -215,18 +197,43 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
   const json = (await response.json()) as { updatedAt: number; disabled?: string; ships: ApiShip[] };
   const ships: Ship[] = json.ships.map((s) => {
     const moving = (s.sog ?? 0) >= 0.5 && s.status !== 1 && s.status !== 5;
+    const type = shipType(s.kind);
+    const declared = s.length && s.length > 0 ? s.length : undefined;
+    // Sans longueur : la longueur courante du type ; un petit émetteur (classe B) est un petit bateau.
+    const sizeM = Math.min(Math.max(declared ?? (s.classB ? Math.min(NOMINAL_LENGTH[type], 12) : NOMINAL_LENGTH[type]), 3), 400);
+    const beam = beamClassOf(type, declared, s.width);
+    const band = moving ? wakeBandOf(s.sog ?? 0) : -1;
     return {
       ...s,
       name: s.name?.trim() || undefined,
-      family: familyOf(s.kind),
+      type,
+      sizeClass: SIZE_CLASS[type],
       moving,
       bearing: s.heading ?? s.cog ?? 0,
+      sizeM,
+      hullIcon: hullKey(type, beam),
+      wakeIcon: band >= 0 ? wakeKey(wakeWidthOf(type, beam), band) : undefined,
       position: [s.lon, s.lat, 0],
     };
   });
   // Les petits d'abord, les grands par-dessus.
-  ships.sort((a, b) => (a.length ?? 0) - (b.length ?? 0));
-  return { ships, byMmsi: new Map(ships.map((s) => [s.mmsi, s])), disabled: json.disabled ?? null, updatedAt: json.updatedAt };
+  ships.sort((a, b) => a.sizeM - b.sizeM);
+  const bySize: ShipsData['bySize'] = { petit: [], moyen: [], grand: [] };
+  const wakesBySize: ShipsData['wakesBySize'] = { petit: [], moyen: [], grand: [] };
+  for (const ship of ships) {
+    bySize[ship.sizeClass].push(ship);
+    if (ship.wakeIcon) wakesBySize[ship.sizeClass].push(ship);
+  }
+  return {
+    ships,
+    byMmsi: new Map(ships.map((s) => [s.mmsi, s])),
+    moving: ships.filter((s) => s.moving),
+    bySize,
+    wakesBySize,
+    named: ships.filter((s) => s.name).reverse(),
+    disabled: json.disabled ?? null,
+    updatedAt: json.updatedAt,
+  };
 }
 
 const isLive = (time: number) => Math.abs(time - Date.now()) <= LIVE_TOLERANCE_MS;
@@ -240,21 +247,83 @@ function extrapolate(ship: Ship, now: number): void {
   ship.position[1] = ship.lat + (distance * Math.cos(rad)) / 110_540;
 }
 
-let labelCache: { data: ShipsData; band: number; ships: Ship[] } | undefined;
+// --- Étiquettes ---
 
-/** Vu de près, un nom par case : le plus grand navire l'emporte. */
-function labelled(data: ShipsData, zoom: number): Ship[] {
-  const band = zoomBand(zoom);
-  if (labelCache?.data !== data || labelCache.band !== band) {
-    const named = data.ships.filter((s) => s.name);
-    const ships = declutter(named, zoom, { lon: (s) => s.lon, lat: (s) => s.lat, rank: (s) => -(s.length ?? 0), box: { width: 120, height: 26 } });
-    labelCache = { data, band, ships };
+interface Label {
+  ship: Ship;
+  /** Décalage vers la droite (pixels) : au-delà de la coque. */
+  dx: number;
+}
+
+let measureContext: CanvasRenderingContext2D | null | undefined;
+function textWidth(text: string): number {
+  if (measureContext === undefined) {
+    measureContext = document.createElement('canvas').getContext('2d');
+    if (measureContext) measureContext.font = LABEL_FONT;
   }
-  return labelCache.ships;
+  return measureContext ? measureContext.measureText(text).width : text.length * 7;
+}
+
+let labelCache: { data: ShipsData; band: number; labels: Label[] } | undefined;
+
+/**
+ * Les noms qui tiennent, un quart de niveau de zoom à la fois. Du plus grand navire au plus petit, un nom
+ * est posé à droite de sa coque s'il ne recouvre aucun nom déjà posé : calcul exact en pixels (la grille de
+ * cases de map/declutter.ts laisse se chevaucher deux noms voisins de part et d'autre d'une limite de case).
+ */
+function placeLabels(data: ShipsData, zoom: number): Label[] {
+  const band = Math.floor(zoom * 4) / 4;
+  if (labelCache?.data === data && labelCache.band === band) return labelCache.labels;
+  const world = 512 * 2 ** band;
+  const CELL_PX = 64;
+  const grid = new Map<number, Array<[number, number, number, number]>>();
+  const labels: Label[] = [];
+  for (const ship of data.named) {
+    const px = lengthPx(ship, band);
+    if (px < LABEL_MIN_PX && band < LABEL_ALL_ZOOM) continue;
+    const sin = Math.sin((ship.lat * Math.PI) / 180);
+    const x = ((ship.lon + 180) / 360) * world;
+    const y = (0.5 - Math.log((1 + sin) / (1 - sin)) / (4 * Math.PI)) * world;
+    const dx = px / 2 + 5;
+    const box = [x + dx - 3, y - 8, x + dx + textWidth(ship.name ?? '') + 3, y + 8] as [number, number, number, number];
+    const x0 = Math.floor(box[0] / CELL_PX);
+    const x1 = Math.floor(box[2] / CELL_PX);
+    const y0 = Math.floor(box[1] / CELL_PX);
+    const y1 = Math.floor(box[3] / CELL_PX);
+    let free = true;
+    for (let gx = x0; gx <= x1 && free; gx++) {
+      for (let gy = y0; gy <= y1 && free; gy++) {
+        for (const other of grid.get(gx * 100_003 + gy) ?? []) {
+          if (box[0] < other[2] && box[2] > other[0] && box[1] < other[3] && box[3] > other[1]) {
+            free = false;
+            break;
+          }
+        }
+      }
+    }
+    if (!free) continue;
+    for (let gx = x0; gx <= x1; gx++) {
+      for (let gy = y0; gy <= y1; gy++) {
+        const key = gx * 100_003 + gy;
+        const cell = grid.get(key);
+        if (cell) cell.push(box);
+        else grid.set(key, [box]);
+      }
+    }
+    labels.push({ ship, dx });
+  }
+  labelCache = { data, band, labels };
+  return labels;
 }
 
 const knots = (sog: number) =>
   `${sog.toLocaleString('fr-FR', { maximumFractionDigits: 1 })} nœuds (${Math.round(sog * 1.852).toLocaleString('fr-FR')} km/h)`;
+
+/** Les cellules de l'atlas ont la coque sur 208 px de leurs 256 : la taille d'une icône est celle de sa cellule. */
+const CELL_SCALE = CELL / HULL_LENGTH;
+
+/** Zooms où l'affichage change : tailles minimales, puis étiquettes au quart de niveau. */
+const ZOOM_BREAKS = [FAR_ZOOM, MID_ZOOM, ...Array.from({ length: (17 - LABEL_MIN_ZOOM) * 4 + 1 }, (_, i) => LABEL_MIN_ZOOM + i / 4)];
 
 export const ships = defineModule<ShipsData>({
   id: 'bateaux',
@@ -263,14 +332,18 @@ export const ships = defineModule<ShipsData>({
   description: 'Les navires autour de la France en temps réel, d’après leurs émissions AIS.',
   attribution: 'aisstream.io (AIS)',
   refreshIntervalMs: 15_000,
-  timeStepMs: 0, // les navires en route avancent à chaque image
-  zoomBreaks: [FAR_ZOOM, ...halfZoomBreaks(LABEL_MIN_ZOOM)],
+  timeStepMs: (view) => stepMs(view.zoom),
+  zoomBreaks: ZOOM_BREAKS,
 
   legend() {
-    const icons = shipAtlas();
     return [
-      ...FAMILY_ORDER.map((f) => ({ color: FAMILIES[f].color, label: FAMILIES[f].label, icon: icons.urls.get(iconKey(f, true)) })),
-      { color: FAMILIES.autres.color, label: 'Coque arrondie : à l’arrêt (amarré, au mouillage)', icon: icons.urls.get(iconKey('autres', false)) },
+      ...SHIP_TYPES.map((type) => ({ color: SHIP_COLORS[TYPE_FAMILY[type]], label: SHIP_INFO[type], icon: legendHull(type) })),
+      {
+        color: SHIP_COLORS.marchandises,
+        label: 'Sillage : le navire est en route, d’autant plus long qu’il va vite (à l’arrêt ou amarré : pas de sillage)',
+        icon: legendHull('cargo', 2),
+      },
+      { color: 'transparent', label: 'De près, la coque a la longueur et la largeur que le navire déclare (AIS).' },
     ];
   },
 
@@ -280,72 +353,97 @@ export const ships = defineModule<ShipsData>({
     if (!data) return null;
     if (data.disabled) return `Indisponible : ${data.disabled}.`;
     if (!isLive(time)) return 'Hors direct : les bateaux ne sont affichés qu’en temps réel (pas d’historique). Revenez au direct.';
-    const moving = data.ships.filter((s) => s.moving).length;
-    return `${data.ships.length.toLocaleString('fr-FR')} navires, dont ${moving.toLocaleString('fr-FR')} en route`;
+    return `${data.ships.length.toLocaleString('fr-FR')} navires, dont ${data.moving.length.toLocaleString('fr-FR')} en route`;
   },
 
   deckLayers({ data, time, selection, view }) {
     if (!data || data.disabled || !isLive(time)) return [];
     const now = Date.now();
-    for (const ship of data.ships) extrapolate(ship, now);
-    const icons = shipAtlas();
+    for (const ship of data.moving) extrapolate(ship, now);
+    const atlas = shipAtlas();
     const chosen = selection ? data.byMmsi.get((selection as { mmsi: number }).mmsi) : undefined;
-    const parameters = OVER_MAP;
+    const factor = minFactor(view.zoom);
+    const common = {
+      iconAtlas: atlas.atlas,
+      iconMapping: atlas.mapping,
+      getPosition: (s: Ship) => s.position,
+      // À plat sur la mer, orienté selon le cap (deck.gl tourne dans le sens trigonométrique).
+      getAngle: (s: Ship) => -s.bearing,
+      billboard: false,
+      sizeUnits: 'meters' as const,
+      getSize: (s: Ship) => s.sizeM,
+      sizeScale: CELL_SCALE,
+      sizeMaxPixels: 20_000,
+      updateTriggers: { getPosition: now },
+      parameters: OVER_MAP,
+    };
+    const minPixels = (cls: SizeClass) => MIN_PX[cls] * factor * CELL_SCALE;
     return [
-      new IconLayer<Ship>({
-        id: 'bateaux/navires',
-        data: data.ships,
-        iconAtlas: icons.atlas,
-        iconMapping: icons.mapping,
-        getIcon: (s) => iconKey(s.family, s.moving),
-        getPosition: (s) => s.position,
-        // À plat sur la mer, orienté selon le cap (deck.gl tourne dans le sens trigonométrique).
-        getAngle: (s) => -s.bearing,
-        billboard: false,
-        sizeUnits: 'meters',
-        // La coque occupe 54 des 64 pixels de l'icône.
-        getSize: (s) => Math.max(s.length ?? (s.classB ? 12 : 40), 10) * (ICON / 54),
-        // Assez grand de loin pour voir la forme et la couleur, à l'échelle de près.
-        sizeMinPixels: view.zoom < FAR_ZOOM ? 10 : 16,
-        sizeMaxPixels: 90,
-        pickable: true,
-        updateTriggers: { getPosition: now },
-        parameters,
-      }),
+      // Tous les sillages sous toutes les coques.
+      ...SIZE_CLASSES.map(
+        (cls) =>
+          new IconLayer<Ship>({
+            ...common,
+            id: `bateaux/sillages-${cls}`,
+            data: data.wakesBySize[cls],
+            getIcon: (s) => s.wakeIcon!,
+            sizeMinPixels: minPixels(cls),
+          }),
+      ),
+      ...SIZE_CLASSES.map(
+        (cls) =>
+          new IconLayer<Ship>({
+            ...common,
+            id: `bateaux/navires-${cls}`,
+            data: data.bySize[cls],
+            getIcon: (s) => s.hullIcon,
+            sizeMinPixels: minPixels(cls),
+            pickable: true,
+          }),
+      ),
+      // Sélection : un anneau blanc sous un anneau sombre (jamais une couleur de plus).
+      ...(chosen
+        ? [RING_HALO, OUTLINE_KEY].map(
+            (color, i) =>
+              new ScatterplotLayer<Ship>({
+                id: `bateaux/choisi-${i}`,
+                data: [chosen],
+                getPosition: (s) => s.position,
+                radiusUnits: 'meters',
+                getRadius: (s) => s.sizeM * 0.7,
+                radiusMinPixels: MIN_PX[chosen.sizeClass] * factor * 0.7 + 4,
+                filled: false,
+                stroked: true,
+                getLineColor: color,
+                lineWidthUnits: 'pixels',
+                getLineWidth: i === 0 ? 7 : 2.5,
+                billboard: true,
+                updateTriggers: { getPosition: now },
+                parameters: OVER_MAP,
+              }),
+          )
+        : []),
       view.zoom >= LABEL_MIN_ZOOM &&
-        new TextLayer<Ship>({
+        new TextLayer<Label>({
           id: 'bateaux/noms',
-          data: labelled(data, view.zoom),
-          getPosition: (s) => s.position,
-          getText: (s) => s.name ?? '',
+          data: placeLabels(data, view.zoom),
+          getPosition: (l) => l.ship.position,
+          getText: (l) => l.ship.name ?? '',
           characterSet: 'auto',
           fontFamily: 'system-ui, -apple-system, "Segoe UI", sans-serif',
           fontWeight: 600,
-          getSize: 11.5,
-          getColor: [255, 255, 255],
-          getPixelOffset: [0, -16],
-          background: true,
-          getBackgroundColor: [15, 18, 26, 215],
-          backgroundPadding: [5, 2],
+          // Étiquette de carte : texte sombre, halo clair, pas de pavé.
+          fontSettings: { sdf: true },
+          outlineWidth: 2.4,
+          outlineColor: [255, 255, 255, 235],
+          getSize: 12,
+          getColor: [31, 38, 51],
+          getTextAnchor: 'start',
+          getAlignmentBaseline: 'center',
+          getPixelOffset: (l) => [l.dx, 0],
           billboard: true,
           updateTriggers: { getPosition: now },
-          parameters,
-        }),
-      chosen &&
-        new ScatterplotLayer<Ship>({
-          id: 'bateaux/choisi',
-          data: [chosen],
-          getPosition: (s) => s.position,
-          radiusUnits: 'pixels',
-          getRadius: 16,
-          filled: false,
-          stroked: true,
-          getLineColor: ACCENT,
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
-          billboard: true,
-          updateTriggers: { getPosition: now },
-          parameters,
+          parameters: OVER_MAP,
         }),
     ];
   },

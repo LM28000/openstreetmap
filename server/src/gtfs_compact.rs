@@ -265,28 +265,28 @@ impl Schedule {
 
 // ───────────────────────── Lecture du zip ─────────────────────────
 
-struct Zip {
+pub(crate) struct Zip {
     archive: zip::ZipArchive<BufReader<File>>,
     /// Nom du fichier (sans dossier) → rang dans le zip.
     index: HashMap<String, usize>,
 }
 
 impl Zip {
-    fn open(path: &Path) -> Result<Self> {
+    pub(crate) fn open(path: &Path) -> Result<Self> {
         let archive = zip::ZipArchive::new(BufReader::with_capacity(1 << 20, File::open(path).with_context(|| format!("ouverture de {}", path.display()))?)).context("zip illisible")?;
         let index = archive.file_names().enumerate().map(|(i, name)| (name.rsplit('/').next().unwrap_or(name).to_string(), i)).collect();
         Ok(Self { archive, index })
     }
 
     /// Lit un fichier du zip en CSV ; `None` s'il n'y est pas.
-    fn csv<T>(&mut self, name: &str, read: impl FnOnce(csv::Reader<&mut dyn Read>) -> Result<T>) -> Result<Option<T>> {
+    pub(crate) fn csv<T>(&mut self, name: &str, read: impl FnOnce(csv::Reader<&mut dyn Read>) -> Result<T>) -> Result<Option<T>> {
         let Some(&i) = self.index.get(name) else { return Ok(None) };
         let mut file = self.archive.by_index(i).with_context(|| format!("{name} illisible"))?;
         let reader = csv::ReaderBuilder::new().flexible(true).from_reader(&mut file as &mut dyn Read);
         read(reader).with_context(|| format!("lecture de {name}")).map(Some)
     }
 
-    fn text(&mut self, name: &str) -> Result<Option<String>> {
+    pub(crate) fn text(&mut self, name: &str) -> Result<Option<String>> {
         let Some(&i) = self.index.get(name) else { return Ok(None) };
         let mut text = Vec::new();
         self.archive.by_index(i)?.take(8 << 20).read_to_end(&mut text)?;
@@ -294,23 +294,23 @@ impl Zip {
     }
 }
 
-fn column(headers: &csv::ByteRecord, name: &str) -> Option<usize> {
+pub(crate) fn column(headers: &csv::ByteRecord, name: &str) -> Option<usize> {
     headers.iter().position(|h| h.trim_ascii() == name.as_bytes())
 }
 
-fn required(headers: &csv::ByteRecord, file: &str, name: &str) -> Result<usize> {
+pub(crate) fn required(headers: &csv::ByteRecord, file: &str, name: &str) -> Result<usize> {
     column(headers, name).with_context(|| format!("colonne {name} absente de {file}"))
 }
 
-fn field(record: &csv::ByteRecord, column: Option<usize>) -> &[u8] {
+pub(crate) fn field(record: &csv::ByteRecord, column: Option<usize>) -> &[u8] {
     column.and_then(|c| record.get(c)).map_or(&[][..], <[u8]>::trim_ascii)
 }
 
-fn text(bytes: &[u8]) -> String {
+pub(crate) fn text(bytes: &[u8]) -> String {
     String::from_utf8_lossy(bytes).into_owned()
 }
 
-fn number(bytes: &[u8]) -> Option<i32> {
+pub(crate) fn number(bytes: &[u8]) -> Option<i32> {
     if bytes.is_empty() || bytes.len() > 9 {
         return None;
     }
@@ -326,7 +326,7 @@ pub fn parse_time(bytes: &[u8]) -> Option<i32> {
     (minutes < 60 && seconds < 60).then_some(hours * 3600 + minutes * 60 + seconds)
 }
 
-fn ymd(date: Date) -> i32 {
+pub(crate) fn ymd(date: Date) -> i32 {
     i32::from(date.year()) * 10_000 + i32::from(date.month()) * 100 + i32::from(date.day())
 }
 

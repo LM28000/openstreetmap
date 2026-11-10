@@ -66,7 +66,7 @@ impl Network {
 
 /// Empreinte FNV-1a sur 64 bits : stable d'une compilation et d'un démarrage à l'autre,
 /// pour que le cache des navigateurs survive aux redémarrages du serveur.
-fn fnv1a(bytes: &[u8]) -> u64 {
+pub(crate) fn fnv1a(bytes: &[u8]) -> u64 {
     bytes.iter().fold(0xcbf2_9ce4_8422_2325, |hash, &b| (hash ^ u64::from(b)).wrapping_mul(0x100_0000_01b3))
 }
 

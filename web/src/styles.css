@@ -944,6 +944,21 @@ p {
   white-space: nowrap;
 }
 
+/* Pastille d'une ligne de transport (RER B, Métro 14, Car BreizhGo 7) : aux couleurs officielles quand on les a. */
+.line-badge {
+  display: inline-block;
+  margin-right: 6px;
+  padding: 1px 6px;
+  border-radius: 5px;
+  background: var(--ui-control-hover);
+  color: var(--ui-ink);
+  font-weight: 700;
+  font-size: 11.5px;
+  line-height: 1.5;
+  white-space: nowrap;
+  vertical-align: 1px;
+}
+
 .row--muted td {
   color: var(--ui-faint);
 }

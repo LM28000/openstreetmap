@@ -170,6 +170,26 @@ async function copyText(text: string): Promise<boolean> {
 /** Heures, retards et mesures (« 08:40 », « +4 min », « 293 km/h ») : en police à chasse fixe, pour que les colonnes s'alignent. */
 const NUMERIC_CELL = /^[+−-]?\d[\d:.,   ]*(?:\s?(?:min|h|s|km\/h|km|m|%|°|m\/s))?$/;
 
+/** Noir ou blanc, selon ce qui se lit le mieux sur `hex` (luminance relative approchée). */
+function readableOn(hex: string): string {
+  const [r, g, b] = [0, 2, 4].map((i) => parseInt(hex.slice(i, i + 2), 16));
+  return (0.299 * (r ?? 0) + 0.587 * (g ?? 0) + 0.114 * (b ?? 0)) / 255 > 0.6 ? '#141a26' : '#ffffff';
+}
+
+/** Pastille d'une ligne aux couleurs du GTFS (hexadécimal sans dièse) ; sans couleur, une pastille neutre. */
+function LineBadge({ text, color, textColor }: { text: string; color?: string; textColor?: string }) {
+  const valid = (c?: string) => (c && /^[0-9a-fA-F]{6}$/.test(c) ? c : undefined);
+  const background = valid(color);
+  // La couleur du texte du GTFS quand il la donne, sinon noir ou blanc selon le fond.
+  const official = valid(textColor);
+  const ink = background ? (official ? `#${official}` : readableOn(background)) : undefined;
+  return (
+    <span className="line-badge" style={background ? { background: `#${background}`, color: ink } : undefined}>
+      {text}
+    </span>
+  );
+}
+
 function Table({ table, onSelect }: { table: InfoTable; onSelect: (value: unknown) => void }) {
   return (
     <section className="info__table">
@@ -204,6 +224,7 @@ function Table({ table, onSelect }: { table: InfoTable; onSelect: (value: unknow
               >
                 {row.cells.map((cell, j) => (
                   <td key={j} className={NUMERIC_CELL.test(cell) ? 'num' : undefined}>
+                    {j === 1 && row.badge && <LineBadge {...row.badge} />}
                     {cell}
                   </td>
                 ))}

@@ -9,6 +9,7 @@ import type { Layer, LayersList } from '@deck.gl/core';
 import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
 import { acceptsSetting, type FocusTarget, type InfoContent, type LayerModule, type LegendItem, type RenderContext, type TerrainSampler } from './module';
 import { currentNight } from '../map/baseMap';
+import { clock } from './clock';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -172,6 +173,8 @@ export class ModuleManager {
   /** Branche la carte (style chargé) et active les modules visibles. */
   attachMap(map: MapLibreMap): void {
     this.map = map;
+    // Un lien partagé peut ouvrir la carte dans le passé : les premiers chargements doivent viser cet instant.
+    this.currentTime = clock.now();
     for (const entry of this.entries.values()) {
       if (this.isVisible(entry)) this.activate(entry);
     }

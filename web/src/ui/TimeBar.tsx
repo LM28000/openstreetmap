@@ -1,5 +1,6 @@
-import { useEffect, useId, useLayoutEffect, useRef, useState } from 'react';
+import { useEffect, useId, useLayoutEffect, useMemo, useRef, useState, useSyncExternalStore } from 'react';
 import { clock } from '../core/clock';
+import { dayHourText, getAvailability, subscribeAvailability } from '../core/replay';
 import { sunElevation } from '../modules/solar';
 import {
   formatClock,
@@ -90,6 +91,28 @@ export function LivePill({ live, short = false }: { live: boolean; short?: boole
   );
 }
 
+/**
+ * Les plages (ms) où le serveur a enregistré au moins une des couches mobiles (avions, bateaux, transports),
+ * à l'intérieur de la piste. Les trains ont leur archive à part : ils se rejouent toujours (horaires), seuls leurs retards manquent.
+ */
+function useRecordings(from: number, realNow: number): Array<[number, number]> {
+  const availability = useSyncExternalStore(subscribeAvailability, getAvailability);
+  return useMemo(() => {
+    if (!availability?.active) return [];
+    const spans = (['avions', 'bateaux', 'transports'] as const)
+      .flatMap((layer) => availability.layers[layer] ?? [])
+      .map(([a, b]): [number, number] => [a * 1000, b * 1000])
+      .sort((x, y) => x[0] - y[0]);
+    const merged: Array<[number, number]> = [];
+    for (const [a, b] of spans) {
+      const last = merged[merged.length - 1];
+      if (last && a - last[1] <= 200_000) last[1] = Math.max(last[1], b);
+      else merged.push([a, b]);
+    }
+    return merged.filter(([, b]) => b >= from).map(([a, b]): [number, number] => [Math.max(a, from), Math.min(b, realNow)]);
+  }, [availability, from, realNow]);
+}
+
 function Track({ time, realNow, compact }: { time: number; realNow: number; compact: boolean }) {
   const ref = useRef<HTMLDivElement>(null);
   const canvasRef = useRef<HTMLCanvasElement>(null);
@@ -97,6 +120,7 @@ function Track({ time, realNow, compact }: { time: number; realNow: number; comp
   const from = Math.round(realNow / 60_000) * 60_000 - PAST_RANGE_MS;
   const to = from + PAST_RANGE_MS + FUTURE_RANGE_MS;
   const frac = (t: number) => Math.min(1, Math.max(0, (t - from) / (to - from)));
+  const recordings = useRecordings(from, realNow);
 
   useLayoutEffect(() => {
     const element = ref.current;
@@ -150,6 +174,15 @@ function Track({ time, realNow, compact }: { time: number; realNow: number; comp
     <div className="track" ref={ref}>
       <canvas ref={canvasRef} className="track__bands" style={{ width, height: 24 }} aria-hidden="true" />
       <div className="track__future" style={{ left: nowX }} aria-hidden="true" />
+      {/* Bande d'enregistrement : où le serveur a gardé avions, bateaux et transports. Hors de la bande, la couche se masque et le dit. */}
+      {recordings.map(([start, end]) => (
+        <i
+          key={start}
+          className="track__rec"
+          style={{ left: frac(start) * width, width: Math.max(2, (frac(end) - frac(start)) * width) }}
+          title={`Enregistré : ${dayHourText(start)} → ${dayHourText(end)}`}
+        />
+      ))}
       {midnights.map((m) => (
         <i key={m} className="track__tick" style={{ left: frac(m) * width }} aria-hidden="true" />
       ))}

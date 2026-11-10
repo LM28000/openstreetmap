@@ -14,12 +14,27 @@
  * Les noms sont des étiquettes de carte (texte sombre, halo clair), désencombrées : les plus
  * grands navires d'abord, sans chevauchement entre elles.
  *
- * Il n'y a pas d'historique : la couche n'existe qu'en direct.
+ * **Relecture.** Le serveur enregistre les positions qu'il sert (server/src/history/). Quand l'horloge est à plus de
+ * deux minutes dans le passé, la couche relit l'enregistrement (core/replay.ts) : chaque navire est placé par
+ * interpolation entre ses deux positions enregistrées voisines (un navire qui n'a rien émis depuis longtemps est
+ * retiré). Là où rien n'a été enregistré, la couche se masque et dit pourquoi.
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
-import { measuredStatus } from '../core/infoStatus';
+import { measuredStatus, replayStatus } from '../core/infoStatus';
+import {
+  isReplayTime,
+  loadReplay,
+  measure,
+  measureAngle,
+  newSample,
+  prefetchNear,
+  replayKey,
+  replayLabel,
+  sample,
+  type DecodedChunk,
+} from '../core/replay';
 import { OVER_MAP } from '../map/parameters';
 import { orientation } from '../models/mesh';
 import { meshLayer, RENDER_SETTING, wants3d } from '../models/meshLayer';
@@ -103,6 +118,22 @@ export interface Ship extends ApiShip {
   /** Altitude de l'eau à cet endroit (m, 0 au large ; fleuves et bassins) : calculée une fois par version du relief. */
   groundZ: number;
   groundVersion: number;
+  /** Classe de largeur de la coque (voir shipIcons.ts), nécessaire pour redire le sillage quand la vitesse change. */
+  beam: 0 | 1 | 2;
+  /** Relecture : indice du navire dans le tronçon, et s'il existe à l'instant affiché (absent : toujours là). */
+  ro?: number;
+  here?: boolean;
+}
+
+/** Ce qui s'ajoute aux données quand la couche relit l'enregistrement. */
+export interface ShipsReplay {
+  key: string;
+  chunk: DecodedChunk | null;
+  absence: string | null;
+  /** Tous les navires du tronçon, les plus petits d'abord. */
+  all: Ship[];
+  /** Pas de temps (secondes) de la dernière mise à jour, pour ne pas la refaire à chaque image. */
+  stamp: number;
 }
 
 export interface ShipsData {
@@ -119,6 +150,7 @@ export interface ShipsData {
   named: Ship[];
   disabled: string | null;
   updatedAt: number;
+  replay?: ShipsReplay;
 }
 
 const OUTLINE_KEY: Color = [20, 26, 38, 255];
@@ -129,7 +161,6 @@ const RING_HALO: Color = [255, 255, 255, 240];
  * souvent une à deux minutes, qu'un navire couvre sans changer de cap.
  */
 const MAX_EXTRAPOLATION_S = 300;
-const LIVE_TOLERANCE_MS = 60_000;
 const LABEL_MIN_ZOOM = 11;
 /** En dessous de ce zoom, les maquettes ne seraient qu'une tache : les silhouettes à plat restent. */
 const MESH_MIN_ZOOM = 10;
@@ -209,37 +240,60 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
   if (response.status === 503) throw new Error('le serveur se connecte au flux AIS, nouvel essai dans un instant');
   if (!response.ok) throw new Error(`le serveur des bateaux a répondu ${response.status}`);
   const json = (await response.json()) as { updatedAt: number; disabled?: string; ships: ApiShip[] };
-  const ships: Ship[] = json.ships.map((s) => {
-    const moving = (s.sog ?? 0) >= 0.5 && s.status !== 1 && s.status !== 5;
-    const type = shipType(s.kind);
-    const declared = s.length && s.length > 0 ? s.length : undefined;
-    // Sans longueur : la longueur courante du type ; un petit émetteur (classe B) est un petit bateau.
-    const sizeM = Math.min(Math.max(declared ?? (s.classB ? Math.min(NOMINAL_LENGTH[type], 12) : NOMINAL_LENGTH[type]), 3), 400);
-    const beam = beamClassOf(type, declared, s.width);
-    const model = modelOf(type, sizeM);
-    // Largeur dessinée : celle de l'AIS, sauf déclaration absurde (comme pour la classe de largeur des silhouettes).
-    const ratio = s.width && declared ? s.width / declared / BEAM_RATIO[type] : 0;
-    const beamM = ratio >= 0.3 && ratio <= 3 ? s.width! : sizeM * BEAM_RATIO[type];
-    const band = moving ? wakeBandOf(s.sog ?? 0) : -1;
-    return {
-      ...s,
-      name: s.name?.trim() || undefined,
-      type,
-      sizeClass: SIZE_CLASS[type],
-      moving,
-      bearing: s.heading ?? s.cog ?? 0,
-      sizeM,
-      hullIcon: hullKey(type, beam),
-      wakeIcon: band >= 0 ? wakeKey(wakeWidthOf(type, beam), band) : undefined,
-      position: [s.lon, s.lat, 0],
-      model,
-      scale: scaleOf(model, sizeM, beamM),
-      groundZ: 0,
-      groundVersion: -1,
-    };
-  });
+  const ships: Ship[] = json.ships.map(makeShip);
   // Les petits d'abord, les grands par-dessus.
   ships.sort((a, b) => a.sizeM - b.sizeM);
+  return {
+    ships,
+    byMmsi: new Map(ships.map((s) => [s.mmsi, s])),
+    ...derivedLists(ships),
+    disabled: json.disabled ?? null,
+    updatedAt: json.updatedAt,
+  };
+}
+
+/** Un navire à partir de sa fiche et de sa dernière position : ce qui se déduit de son identité, puis de sa marche. */
+function makeShip(s: ApiShip): Ship {
+  const type = shipType(s.kind);
+  const declared = s.length && s.length > 0 ? s.length : undefined;
+  // Sans longueur : la longueur courante du type ; un petit émetteur (classe B) est un petit bateau.
+  const sizeM = Math.min(Math.max(declared ?? (s.classB ? Math.min(NOMINAL_LENGTH[type], 12) : NOMINAL_LENGTH[type]), 3), 400);
+  const beam = beamClassOf(type, declared, s.width);
+  const model = modelOf(type, sizeM);
+  // Largeur dessinée : celle de l'AIS, sauf déclaration absurde (comme pour la classe de largeur des silhouettes).
+  const ratio = s.width && declared ? s.width / declared / BEAM_RATIO[type] : 0;
+  const beamM = ratio >= 0.3 && ratio <= 3 ? s.width! : sizeM * BEAM_RATIO[type];
+  const ship: Ship = {
+    ...s,
+    name: s.name?.trim() || undefined,
+    type,
+    sizeClass: SIZE_CLASS[type],
+    moving: false,
+    bearing: 0,
+    sizeM,
+    hullIcon: hullKey(type, beam),
+    wakeIcon: undefined,
+    position: [s.lon, s.lat, 0],
+    model,
+    scale: scaleOf(model, sizeM, beamM),
+    groundZ: 0,
+    groundVersion: -1,
+    beam,
+  };
+  applyMotion(ship);
+  return ship;
+}
+
+/** Ce qui se déduit de la vitesse, de la route et du statut : en route ou non, direction dessinée, sillage. */
+function applyMotion(ship: Ship): void {
+  ship.moving = (ship.sog ?? 0) >= 0.5 && ship.status !== 1 && ship.status !== 5;
+  ship.bearing = ship.heading ?? ship.cog ?? 0;
+  const band = ship.moving ? wakeBandOf(ship.sog ?? 0) : -1;
+  ship.wakeIcon = band >= 0 ? wakeKey(wakeWidthOf(ship.type, ship.beam), band) : undefined;
+}
+
+/** Les listes que le dessin parcourt, pour des navires déjà triés du plus petit au plus grand. */
+function derivedLists(ships: Ship[]): Pick<ShipsData, 'moving' | 'bySize' | 'wakesBySize' | 'byModel' | 'named'> {
   const bySize: ShipsData['bySize'] = { petit: [], moyen: [], grand: [] };
   const wakesBySize: ShipsData['wakesBySize'] = { petit: [], moyen: [], grand: [] };
   const byModel = Object.fromEntries(SHIP_MODELS.map((m) => [m, [] as Ship[]])) as ShipsData['byModel'];
@@ -248,20 +302,122 @@ async function loadShips(signal: AbortSignal): Promise<ShipsData> {
     bySize[ship.sizeClass].push(ship);
     if (ship.wakeIcon) wakesBySize[ship.sizeClass].push(ship);
   }
-  return {
-    ships,
-    byMmsi: new Map(ships.map((s) => [s.mmsi, s])),
-    moving: ships.filter((s) => s.moving),
-    bySize,
-    wakesBySize,
-    byModel,
-    named: ships.filter((s) => s.name).reverse(),
-    disabled: json.disabled ?? null,
-    updatedAt: json.updatedAt,
-  };
+  return { moving: ships.filter((s) => s.moving), bySize, wakesBySize, byModel, named: ships.filter((s) => s.name).reverse() };
 }
 
-const isLive = (time: number) => Math.abs(time - Date.now()) <= LIVE_TOLERANCE_MS;
+// --- Relecture ---
+
+let replayCache: { chunk: DecodedChunk; data: ShipsData } | undefined;
+const scratch = newSample();
+
+async function loadShipsReplay(time: number): Promise<ShipsData> {
+  const state = await loadReplay('bateaux', time);
+  const { chunk } = state;
+  const empty = (): ShipsData => ({
+    ships: [],
+    byMmsi: new Map(),
+    ...derivedLists([]),
+    disabled: null,
+    updatedAt: 0,
+    replay: { key: state.key, chunk: null, absence: state.absence, all: [], stamp: NaN },
+  });
+  if (!chunk) return empty();
+  if (replayCache?.chunk === chunk) {
+    replayCache.data.replay!.key = state.key; // mêmes navires : on garde les objets (et la sélection)
+    return replayCache.data;
+  }
+  const all: Ship[] = [];
+  for (let o = 0; o < chunk.count; o++) all.push(replayShip(chunk, o));
+  all.sort((a, b) => a.sizeM - b.sizeM);
+  const data: ShipsData = {
+    ships: [],
+    byMmsi: new Map(all.map((s) => [s.mmsi, s])),
+    ...derivedLists([]),
+    disabled: null,
+    updatedAt: chunk.start,
+    replay: { key: state.key, chunk, absence: null, all, stamp: NaN },
+  };
+  replayCache = { chunk, data };
+  return data;
+}
+
+/** Le navire `o` du tronçon : sa fiche (écrite une fois par tronçon), sans position ; `updateReplay` le place. */
+function replayShip(chunk: DecodedChunk, o: number): Ship {
+  const [name, destination, callSign] = chunk.strings[o]!;
+  const [kind, imo, length, width, draught, classB] = chunk.numbers[o]!;
+  const known = (n: number | undefined) => (n ? n - 1 : undefined);
+  const ship = makeShip({
+    mmsi: Number(chunk.ids[o]),
+    name: name || undefined,
+    lon: 0,
+    lat: 0,
+    kind: known(kind),
+    destination: destination || undefined,
+    callSign: callSign || undefined,
+    imo: known(imo),
+    length: known(length),
+    width: known(width),
+    draught: draught ? (draught - 1) / 10 : undefined,
+    classB: classB === 2,
+    at: 0,
+  });
+  ship.ro = o;
+  ship.here = false;
+  return ship;
+}
+
+/** Place le navire à l'instant `time` ; faux (et marqué absent) s'il n'existe pas à cet instant. */
+function placeReplayShip(chunk: DecodedChunk, ship: Ship, time: number): boolean {
+  if (!sample(chunk, ship.ro!, time, scratch)) {
+    ship.here = false;
+    return false;
+  }
+  // Mesures : vitesse et route en dixièmes, cap en degrés, statut de navigation (voir server/src/history/sources.rs).
+  const sog = measure(chunk, scratch, 0);
+  const cog = measureAngle(chunk, scratch, 1, 10);
+  const heading = measureAngle(chunk, scratch, 2);
+  const status = measure(chunk, scratch, 3, true);
+  ship.sog = sog === undefined ? undefined : sog / 10;
+  ship.cog = cog;
+  ship.heading = heading === undefined ? undefined : Math.round(heading);
+  ship.status = status;
+  ship.lon = scratch.lon;
+  ship.lat = scratch.lat;
+  ship.position[0] = scratch.lon;
+  ship.position[1] = scratch.lat;
+  ship.at = chunk.start + chunk.t[scratch.i]!;
+  ship.here = true;
+  applyMotion(ship);
+  return true;
+}
+
+/** Replace un seul navire (fiche, caméra qui le suit) : l'image n'a pas forcément passé par `deckLayers` avant. */
+function refreshReplayShip(data: ShipsData, ship: Ship, time: number): boolean {
+  return data.replay?.chunk ? placeReplayShip(data.replay.chunk, ship, time) : false;
+}
+
+/** Place tous les navires à l'instant `time` et refait les listes du dessin (au plus une fois par pas de temps). */
+function updateReplay(data: ShipsData, time: number): void {
+  const replay = data.replay!;
+  const chunk = replay.chunk;
+  if (!chunk) return;
+  const stamp = Math.floor(time / 250);
+  if (replay.stamp === stamp) return;
+  replay.stamp = stamp;
+  prefetchNear('bateaux', time);
+  const present: Ship[] = [];
+  for (const ship of replay.all) if (placeReplayShip(chunk, ship, time)) present.push(ship);
+  data.ships = present;
+  Object.assign(data, derivedLists(present));
+}
+
+/**
+ * Faut-il montrer ces données à cet instant ? En direct, l'horloge doit être dans la fenêtre du direct (les deux dernières
+ * minutes, ou un peu plus tard : on extrapole) ; en relecture, plus de deux minutes dans le passé.
+ */
+function shows(data: ShipsData, time: number): boolean {
+  return data.replay ? isReplayTime(time) && data.replay.chunk !== null : !isReplayTime(time) && time <= Date.now() + 60_000;
+}
 
 /** Position estimée maintenant : la dernière reçue, prolongée selon la vitesse et la route. */
 function extrapolate(ship: Ship, now: number): void {
@@ -289,16 +445,16 @@ function textWidth(text: string): number {
   return measureContext ? measureContext.measureText(text).width : text.length * 7;
 }
 
-let labelCache: { data: ShipsData; band: number; labels: Label[] } | undefined;
+let labelCache: { data: ShipsData; band: number; bucket: number; labels: Label[] } | undefined;
 
 /**
  * Les noms qui tiennent, un quart de niveau de zoom à la fois. Du plus grand navire au plus petit, un nom
  * est posé à droite de sa coque s'il ne recouvre aucun nom déjà posé : calcul exact en pixels (la grille de
  * cases de map/declutter.ts laisse se chevaucher deux noms voisins de part et d'autre d'une limite de case).
  */
-function placeLabels(data: ShipsData, zoom: number): Label[] {
+function placeLabels(data: ShipsData, zoom: number, bucket: number): Label[] {
   const band = Math.floor(zoom * 4) / 4;
-  if (labelCache?.data === data && labelCache.band === band) return labelCache.labels;
+  if (labelCache?.data === data && labelCache.band === band && labelCache.bucket === bucket) return labelCache.labels;
   const world = 512 * 2 ** band;
   const CELL_PX = 64;
   const grid = new Map<number, Array<[number, number, number, number]>>();
@@ -337,7 +493,7 @@ function placeLabels(data: ShipsData, zoom: number): Label[] {
     }
     labels.push({ ship, dx });
   }
-  labelCache = { data, band, labels };
+  labelCache = { data, band, bucket, labels };
   return labels;
 }
 
@@ -351,7 +507,7 @@ export const ships = defineModule<ShipsData>({
   id: 'bateaux',
   name: 'Bateaux',
   category: 'transport',
-  description: 'Les navires autour de la France en temps réel, d’après leurs émissions AIS.',
+  description: 'Les navires autour de la France, d’après leurs émissions AIS : en direct, ou relus depuis l’enregistrement du serveur quand on remonte la frise.',
   attribution: 'aisstream.io (AIS)',
   refreshIntervalMs: 15_000,
   timeStepMs: (view) => stepMs(view.zoom),
@@ -370,21 +526,33 @@ export const ships = defineModule<ShipsData>({
     ];
   },
 
-  load: ({ signal }) => loadShips(signal),
+  load: ({ signal, time }) => (isReplayTime(time) ? loadShipsReplay(time) : loadShips(signal)),
+
+  // Bascule entre le direct et la relecture, et d'un tronçon à l'autre.
+  needsReload: (data, time) => (isReplayTime(time) ? !data.replay || data.replay.key !== replayKey('bateaux', time) : !!data.replay),
 
   summary({ data, time }) {
     if (!data) return null;
     if (data.disabled) return `Indisponible : ${data.disabled}.`;
-    if (!isLive(time)) return 'Hors direct : les bateaux ne sont affichés qu’en temps réel (pas d’historique). Revenez au direct.';
-    return `${data.ships.length.toLocaleString('fr-FR')} navires, dont ${data.moving.length.toLocaleString('fr-FR')} en route`;
+    if (data.replay) {
+      if (!isReplayTime(time)) return null;
+      if (!data.replay.chunk) return data.replay.absence;
+      updateReplay(data, time);
+      return `${replayLabel(time)} · ${data.ships.length.toLocaleString('fr-FR')} navires, dont ${data.moving.length.toLocaleString('fr-FR')} en route`;
+    }
+    if (!shows(data, time)) return null;
+    return `En direct · ${data.ships.length.toLocaleString('fr-FR')} navires, dont ${data.moving.length.toLocaleString('fr-FR')} en route`;
   },
 
   deckLayers({ data, time, terrain, selection, view, settings }) {
-    if (!data || data.disabled || !isLive(time)) return [];
+    if (!data || data.disabled || !shows(data, time)) return [];
     const now = Date.now();
-    for (const ship of data.moving) extrapolate(ship, now);
+    // Direct : on prolonge la dernière position. Relecture : la position est déjà celle de l'instant (interpolée).
+    if (data.replay) updateReplay(data, time);
+    else for (const ship of data.moving) extrapolate(ship, now);
     const atlas = shipAtlas();
-    const chosen = selection ? data.byMmsi.get((selection as { mmsi: number }).mmsi) : undefined;
+    const picked = selection ? data.byMmsi.get((selection as { mmsi: number }).mmsi) : undefined;
+    const chosen = picked?.here === false ? undefined : picked; // en relecture, un navire absent n'a pas de position à cet instant
     const factor = minFactor(view.zoom);
     const common = {
       iconAtlas: atlas.atlas,
@@ -484,7 +652,7 @@ export const ships = defineModule<ShipsData>({
       view.zoom >= LABEL_MIN_ZOOM &&
         new TextLayer<Label>({
           id: 'bateaux/noms',
-          data: placeLabels(data, view.zoom),
+          data: placeLabels(data, view.zoom, data.replay ? Math.floor(time / 5000) : 0),
           getPosition: (l) => l.ship.position,
           getText: (l) => l.ship.name ?? '',
           characterSet: 'auto',
@@ -512,7 +680,7 @@ export const ships = defineModule<ShipsData>({
 
   describe(selection, { data, time }) {
     const ship = data?.byMmsi.get((selection as { mmsi: number }).mmsi);
-    if (!ship || !isLive(time)) return null;
+    if (!data || !ship || !shows(data, time) || (data.replay && !refreshReplayShip(data, ship, time))) return null;
     const fields: Array<[string, string]> = [
       ['État', ship.status !== undefined ? (NAV_STATUS[ship.status] ?? (ship.moving ? 'en route' : 'à l’arrêt')) : ship.moving ? 'en route' : 'à l’arrêt'],
     ];
@@ -529,7 +697,8 @@ export const ships = defineModule<ShipsData>({
       title: ship.name ?? `Navire ${ship.mmsi}`,
       subtitle: ship.classB ? 'petit émetteur AIS (classe B)' : undefined,
       // La position est celle que le navire a émise, donnée telle quelle (puis prolongée sur la carte).
-      status: measuredStatus(time, ship.at * 1000),
+      // Direct : fraîcheur de la dernière position reçue. Relecture : l'instant rejoué.
+      status: data.replay ? replayStatus(time) : measuredStatus(Date.now(), ship.at * 1000),
       // Nœuds : l'unité de la mer, celle que le navire annonce.
       figures: [
         {
@@ -549,8 +718,12 @@ export const ships = defineModule<ShipsData>({
 
   focus(selection, { data, time }) {
     const ship = data?.byMmsi.get((selection as { mmsi: number }).mmsi);
-    if (!ship || !isLive(time)) return null;
-    extrapolate(ship, Date.now());
+    if (!data || !ship || !shows(data, time)) return null;
+    if (data.replay) {
+      if (!refreshReplayShip(data, ship, time)) return null;
+    } else {
+      extrapolate(ship, Date.now());
+    }
     return { lon: ship.position[0], lat: ship.position[1] };
   },
 });

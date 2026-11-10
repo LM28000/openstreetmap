@@ -14,7 +14,8 @@
 //! Réglages par variables d'environnement :
 //! - `HOST` (127.0.0.1) et `PORT` (8787) : adresse d'écoute ;
 //! - `DATA_DIR` (../data) : où ranger les fichiers téléchargés ;
-//! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel ;
+//! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel et enregistre l'historique des avions, bateaux et transports ;
+//! - `HISTORIQUE_JOURS` (7) : durée de conservation de ces archives, en jours ;
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.
@@ -27,6 +28,7 @@ mod estimates;
 mod fires;
 mod gtfs_compact;
 mod gtfs_rt;
+mod history;
 mod idf;
 mod irve;
 mod multimodal;
@@ -113,6 +115,9 @@ async fn main() -> Result<()> {
     tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     tokio::spawn(multimodal::load::load_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
+    // Historique des couches mobiles (avions, bateaux, transports) et des retards des trains : demande `ARCHIVE_DIR`.
+    let history = history::Settings::from_env(config.archive_dir.as_deref()).map(|settings| history::start(settings, state.clone()));
+
     match &config.web_dir {
         Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),
         None => info!("pas de site construit (pnpm build dans web/) : API seule"),
@@ -120,7 +125,7 @@ async fn main() -> Result<()> {
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;
     info!("serveur prêt sur http://{address}");
-    axum::serve(listener, api::router(state, config.web_dir.as_deref())).with_graceful_shutdown(shutdown_signal()).await?;
+    axum::serve(listener, api::router(state, config.web_dir.as_deref()).merge(history::router(history))).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 

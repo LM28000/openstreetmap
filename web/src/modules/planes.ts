@@ -16,14 +16,29 @@
  * Taille : l'envergure réelle de l'appareil en mètres, avec un minimum en pixels pour rester
  * lisible de loin (un peu plus grand pour un A380 que pour un Cessna).
  *
- * Cette couche n'a de sens qu'en direct : quand on rejoue le passé sur la frise, elle
- * se masque et le résumé l'explique (le serveur ne garde pas d'historique des avions).
+ * **Relecture.** Le serveur enregistre ce qu'il sert (server/src/history/). Quand l'horloge est à plus de
+ * deux minutes dans le passé, la couche passe sur l'enregistrement (core/replay.ts) : chaque avion est placé
+ * par interpolation entre ses deux points enregistrés voisins, à l'altitude enregistrée (la caméra qui le suit
+ * garde donc son altitude). Pas d'extrapolation : le passé se lit entre deux mesures connues. Là où rien n'a
+ * été enregistré, la couche se masque et dit pourquoi.
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, LineLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
-import { measuredStatus } from '../core/infoStatus';
+import { measuredStatus, replayStatus } from '../core/infoStatus';
+import {
+  isReplayTime,
+  loadReplay,
+  measure,
+  measureAngle,
+  newSample,
+  prefetchNear,
+  replayKey,
+  replayLabel,
+  sample,
+  type DecodedChunk,
+} from '../core/replay';
 import {
   buildPlaneAtlas,
   planeClass,
@@ -100,13 +115,30 @@ export interface Plane {
   groundZ: number;
   groundAt: number;
   groundVersion: number;
+  /** Relecture : indice de l'avion dans le tronçon, et s'il existe à l'instant affiché (absent : toujours là). */
+  ro?: number;
+  here?: boolean;
+}
+
+/** Ce qui s'ajoute aux données quand la couche relit l'enregistrement au lieu de recevoir le direct. */
+export interface PlanesReplay {
+  /** Change quand il faut recharger (autre tronçon, ou on entre dans une plage enregistrée). */
+  key: string;
+  chunk: DecodedChunk | null;
+  /** Pourquoi il n'y a rien à montrer (« Pas d'enregistrement avant le 10 nov. à 21 h »). */
+  absence: string | null;
+  /** Tous les avions du tronçon (présents ou non), et ceux qui existent à l'instant affiché, remis à jour à chaque image. */
+  all: Plane[];
+  present: Plane[];
 }
 
 export interface PlanesData {
+  /** Direct : les avions de la dernière collecte. Relecture : un avion par objet du tronçon (tous, présents ou non). */
   planes: Plane[];
   byHex: Map<string, Plane>;
   /** Instant de la collecte du serveur (ms). */
   collectedAt: number;
+  replay?: PlanesReplay;
 }
 
 export interface PlanesSelection {
@@ -122,7 +154,6 @@ const SMOOTHING_MS = 5_000;
 /** Écart maximal, en degrés, qu'on lisse (au-delà, l'avion a manœuvré : on le laisse sauter). */
 const MAX_SMOOTHED_DEG = 0.15;
 /** Écart toléré entre l'instant affiché et le présent pour considérer qu'on est « en direct ». */
-const LIVE_TOLERANCE_MS = 60_000;
 const STALE_AFTER_S = 60;
 const LABEL_MIN_ZOOM = 7.5;
 const LABEL_BOX_PX = { width: 88, height: 30 };
@@ -239,10 +270,13 @@ function bankAngle(before: Plane, after: Plane): number {
   if (after.ground || after.speedKt < 60) return 0;
   const dt = (after.observedAt - before.observedAt) / 1000;
   if (dt < 3) return before.bank;
-  const dTrack = ((after.track - before.track + 540) % 360) - 180;
-  const rate = dTrack / dt;
+  return bankFromRate(after.speedKt, (((after.track - before.track + 540) % 360) - 180) / dt);
+}
+
+/** Inclinaison (degrés) d'un avion de vitesse `speedKt` qui tourne de `rate` degrés par seconde. */
+function bankFromRate(speedKt: number, rate: number): number {
   if (Math.abs(rate) > MAX_TURN_DEG_S) return 0;
-  const bank = (Math.atan((after.speedKt * KT * rate * Math.PI) / 180 / G) * 180) / Math.PI;
+  const bank = (Math.atan((speedKt * KT * rate * Math.PI) / 180 / G) * 180) / Math.PI;
   return Math.max(-30, Math.min(30, bank));
 }
 
@@ -381,20 +415,145 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
   return data;
 }
 
-/** Vrai quand l'instant affiché est le présent : les avions n'existent pas dans le passé. */
-function isLive(time: number): boolean {
-  return Math.abs(time - Date.now()) <= LIVE_TOLERANCE_MS;
+// --- Relecture ---
+
+let replayCache: { chunk: DecodedChunk; data: PlanesData } | undefined;
+const scratch = newSample();
+
+async function loadPlanesReplay(time: number): Promise<PlanesData> {
+  const state = await loadReplay('avions', time);
+  const { chunk } = state;
+  if (!chunk) {
+    return { planes: [], byHex: new Map(), collectedAt: 0, replay: { key: state.key, chunk: null, absence: state.absence, all: [], present: [] } };
+  }
+  if (replayCache?.chunk === chunk) {
+    replayCache.data.replay!.key = state.key; // mêmes avions : on garde les objets (et la sélection)
+    return replayCache.data;
+  }
+  const list: Plane[] = [];
+  for (let o = 0; o < chunk.count; o++) list.push(replayPlane(chunk, o));
+  const data: PlanesData = {
+    planes: list,
+    byHex: new Map(list.map((p) => [p.hex, p])),
+    collectedAt: chunk.fetchedAt,
+    replay: { key: state.key, chunk, absence: null, all: list, present: [] },
+  };
+  replayCache = { chunk, data };
+  return data;
 }
 
-let labelCache: { data: PlanesData; band: number; planes: Plane[] } | undefined;
+/** L'avion `o` du tronçon : son identité (écrite une fois par tronçon), sans position, que `placeReplayPlane` renseigne. */
+function replayPlane(chunk: DecodedChunk, o: number): Plane {
+  const [callsign, registration, type, category, squawk, emergency] = chunk.strings[o]!.map((text) => text || undefined);
+  const first = chunk.first[o]!;
+  const speed = chunk.mask[first]! & 4 ? chunk.cols[2]![first]! : 0;
+  const cls = planeClass(type, shapeOf(category, speed));
+  return {
+    hex: chunk.ids[o]!,
+    callsign,
+    registration,
+    type,
+    lon: 0,
+    lat: 0,
+    altM: null,
+    speedKt: 0,
+    track: 0,
+    climbFpm: 0,
+    squawk,
+    emergency,
+    ground: false,
+    cls,
+    band: 'ground',
+    icon: `${cls}-ground`,
+    alert: isAlert(squawk, emergency),
+    observedAt: 0,
+    offLon: 0,
+    offLat: 0,
+    offAt: 0,
+    position: [0, 0, 0],
+    shadow: [0, 0, 0],
+    angle: 0,
+    bank: 0,
+    groundZ: 0,
+    groundAt: 0,
+    groundVersion: -1,
+    ro: o,
+    here: false,
+  };
+}
 
-/** Vu de près, une étiquette par case : l'avion le plus haut (les mieux identifiés d'abord) l'emporte. */
-function labelled(data: PlanesData, zoom: number): Plane[] {
+/**
+ * Place l'avion à l'instant `time` par interpolation de l'enregistrement. Rend faux (et le marque absent) s'il n'existe pas
+ * à cet instant. `observedAt = time` : l'extrapolation du direct n'ajoute alors rien, la position est déjà celle de l'instant.
+ */
+function placeReplayPlane(chunk: DecodedChunk, plane: Plane, time: number): boolean {
+  if (!sample(chunk, plane.ro!, time, scratch)) {
+    plane.here = false;
+    return false;
+  }
+  // Mesures : altitudes en paliers de 25 ft, montée en paliers de 64 ft/min (voir server/src/history/sources.rs).
+  const baro = measure(chunk, scratch, 0);
+  const geom = measure(chunk, scratch, 1);
+  plane.ground = measure(chunk, scratch, 5, true) === 1;
+  plane.altBaroFt = baro === undefined ? undefined : baro * 25;
+  plane.altM = geom !== undefined ? geom * 25 * FT : baro !== undefined ? baro * 25 * FT : null;
+  plane.speedKt = measure(chunk, scratch, 2) ?? 0;
+  plane.track = measureAngle(chunk, scratch, 3) ?? 0;
+  plane.climbFpm = (measure(chunk, scratch, 4) ?? 0) * 64;
+  plane.lon = scratch.lon;
+  plane.lat = scratch.lat;
+  plane.observedAt = time;
+  plane.angle = 90 - plane.track;
+  const band = bandOf(plane.altM, plane.ground);
+  if (band !== plane.band) {
+    plane.band = band;
+    plane.icon = `${plane.cls}-${band}`;
+  }
+  // Inclinaison d'après le virage entre les deux points enregistrés qui encadrent l'instant.
+  plane.bank = 0;
+  if (scratch.j >= 0 && !plane.ground && plane.speedKt >= 60 && chunk.mask[scratch.i]! & 8 && chunk.mask[scratch.j]! & 8) {
+    const dt = chunk.t[scratch.j]! - chunk.t[scratch.i]!;
+    if (dt >= 3) plane.bank = bankFromRate(plane.speedKt, (((chunk.cols[3]![scratch.j]! - chunk.cols[3]![scratch.i]! + 540) % 360) - 180) / dt);
+  }
+  plane.here = true;
+  return true;
+}
+
+/** Replace un seul avion (fiche, caméra qui le suit) : l'image n'a pas forcément passé par `deckLayers` avant. */
+function refreshReplayPlane(data: PlanesData, plane: Plane, time: number): boolean {
+  return data.replay?.chunk ? placeReplayPlane(data.replay.chunk, plane, time) : false;
+}
+
+/** Remet à jour les avions existant à l'instant `time` et rend leur liste. */
+function updateReplay(replay: PlanesReplay, time: number): Plane[] {
+  const chunk = replay.chunk;
+  replay.present.length = 0;
+  if (!chunk) return replay.present;
+  prefetchNear('avions', time);
+  for (const plane of replay.all) if (placeReplayPlane(chunk, plane, time)) replay.present.push(plane);
+  return replay.present;
+}
+
+/**
+ * Faut-il montrer ces données à cet instant ? En direct, l'horloge doit être dans la fenêtre du direct (les deux dernières
+ * minutes, ou un peu plus tard : on extrapole) ; en relecture, plus de deux minutes dans le passé.
+ */
+function shows(data: PlanesData, time: number): boolean {
+  return data.replay ? isReplayTime(time) && data.replay.chunk !== null : !isReplayTime(time) && time <= Date.now() + 60_000;
+}
+
+let labelCache: { data: PlanesData; band: number; bucket: number; planes: Plane[] } | undefined;
+
+/**
+ * Vu de près, une étiquette par case : l'avion le plus haut (les mieux identifiés d'abord) l'emporte.
+ * En relecture, les avions bougent et apparaissent : on refait le choix toutes les 5 s (`bucket`).
+ */
+function labelled(data: PlanesData, zoom: number, source: Plane[], bucket: number): Plane[] {
   const band = zoomBand(zoom);
-  if (labelCache?.data !== data || labelCache.band !== band) {
-    const candidates = data.planes.filter((p) => p.callsign);
+  if (labelCache?.data !== data || labelCache.band !== band || labelCache.bucket !== bucket) {
+    const candidates = source.filter((p) => p.callsign);
     const kept = declutter(candidates, zoom, { lon: (p) => p.lon, lat: (p) => p.lat, rank: (p) => -(p.altM ?? 0), box: LABEL_BOX_PX });
-    labelCache = { data, band, planes: kept };
+    labelCache = { data, band, bucket, planes: kept };
   }
   return labelCache.planes;
 }
@@ -416,7 +575,7 @@ export const planes = defineModule<PlanesData>({
   id: 'avions',
   name: 'Avions',
   category: 'transport',
-  description: 'Trafic aérien en temps réel au-dessus de la France : position, altitude, cap, vitesse. En direct seulement.',
+  description: 'Trafic aérien au-dessus de la France : position, altitude, cap, vitesse. En direct, ou relu depuis l’enregistrement du serveur quand on remonte la frise.',
   attribution: 'adsb.lol (récepteurs ADS-B de la communauté, licence ODbL)',
   refreshIntervalMs: 10_000,
   timeStepMs: 0, // les avions avancent à chaque image
@@ -438,31 +597,47 @@ export const planes = defineModule<PlanesData>({
     return items;
   },
 
-  load: ({ signal }) => loadPlanes(signal),
+  load: ({ signal, time }) => (isReplayTime(time) ? loadPlanesReplay(time) : loadPlanes(signal)),
+
+  // Bascule entre le direct et la relecture, et d'un tronçon à l'autre.
+  needsReload: (data, time) => (isReplayTime(time) ? !data.replay || data.replay.key !== replayKey('avions', time) : !!data.replay),
 
   summary({ data, time }) {
-    if (!isLive(time)) return 'Hors direct : les avions ne sont affichés qu’en temps réel (pas d’historique). Revenez au direct.';
     if (!data) return null;
+    if (data.replay) {
+      if (!isReplayTime(time)) return null;
+      if (!data.replay.chunk) return data.replay.absence;
+      const here = updateReplay(data.replay, time);
+      const flying = here.filter((p) => !p.ground).length;
+      const onGround = here.length - flying;
+      const alerts = here.filter((p) => !p.ground && p.alert).length;
+      const parts = [`${nf(flying)} avion${flying > 1 ? 's' : ''} en vol`];
+      if (onGround > 0) parts.push(`${nf(onGround)} au sol`);
+      if (alerts > 0) parts.push(`${nf(alerts)} en urgence`);
+      return `${replayLabel(time)} · ${parts.join(', ')}`;
+    }
+    if (!shows(data, time)) return null;
     const flying = data.planes.filter((p) => !p.ground);
     const alerts = flying.filter((p) => p.alert).length;
     const onGround = data.planes.length - flying.length;
     const age = Math.round((Date.now() - data.collectedAt) / 1000);
     const parts = [`${nf(flying.length)} avion${flying.length > 1 ? 's' : ''} en vol`];
     if (onGround > 0) parts.push(`${nf(onGround)} au sol`);
-    if (alerts > 0) parts.push(`${alerts} en urgence`);
+    if (alerts > 0) parts.push(`${nf(alerts)} en urgence`);
     const stale = age > STALE_AFTER_S ? ` · positions vieilles de ${nf(age)} s : serveur sans nouvelles` : '';
-    return parts.join(', ') + stale;
+    return `En direct · ${parts.join(', ')}${stale}`;
   },
 
   deckLayers({ data, time, terrain, selection, view, settings }) {
-    if (!data || !isLive(time)) return [];
+    if (!data || !shows(data, time)) return [];
     const parameters = OVER_MAP;
     const icons = atlas();
     const now = Date.now();
 
     // Position de chaque avion à cet instant, à son altitude réelle (sans exagération du relief).
+    // En relecture, `observedAt` vaut l'instant affiché : `extrapolate` rend la position interpolée telle quelle.
     const shown: Plane[] = [];
-    for (const plane of data.planes) {
+    for (const plane of data.replay ? updateReplay(data.replay, time) : data.planes) {
       const at = extrapolate(plane, time);
       if (now - plane.groundAt > SHADOW_REFRESH_MS || plane.groundVersion !== terrain.version) {
         plane.groundZ = terrain.elevation(at.lon, at.lat);
@@ -615,7 +790,7 @@ export const planes = defineModule<PlanesData>({
       showLabels &&
         new TextLayer<Plane>({
           id: 'avions/indicatifs',
-          data: labelled(data, view.zoom).filter((p) => !p.ground),
+          data: labelled(data, view.zoom, data.replay ? shown : data.planes, data.replay ? Math.floor(time / 5000) : 0).filter((p) => !p.ground && p.here !== false),
           getPosition: (p) => p.position,
           getText: (p) => p.callsign ?? '',
           characterSet: 'auto',
@@ -644,7 +819,7 @@ export const planes = defineModule<PlanesData>({
 
   describe(selection, { data, time }): InfoContent | null {
     const plane = data?.byHex.get((selection as PlanesSelection).hex);
-    if (!plane || !isLive(time)) return null;
+    if (!data || !plane || !shows(data, time) || (data.replay && !refreshReplayPlane(data, plane, time))) return null;
     const at = extrapolate(plane, time);
     const fields: Array<[string, string]> = [];
     if (plane.registration) fields.push(['Immatriculation', plane.registration]);
@@ -664,7 +839,8 @@ export const planes = defineModule<PlanesData>({
       { value: nf(plane.speedKt * 1.852), unit: 'km/h', label: 'vitesse sol' },
       plane.ground ? { value: '—', label: 'cap' } : { value: `${nf(plane.track)}°`, label: 'cap' },
     ];
-    const measured = measuredStatus(time, plane.observedAt);
+    // Direct : fraîcheur de la dernière position reçue. Relecture : l'instant rejoué (la mesure est interpolée).
+    const measured = data.replay ? replayStatus(time) : measuredStatus(Date.now(), plane.observedAt);
     // Une urgence passe devant : c'est ce qu'on veut voir en premier, la fraîcheur de la position suit.
     const status = plane.alert ? { ...measured, text: `Urgence · ${measured.text}` } : measured;
 
@@ -687,9 +863,10 @@ export const planes = defineModule<PlanesData>({
 
   focus(selection, { data, time }) {
     const plane = data?.byHex.get((selection as PlanesSelection).hex);
-    if (!plane || !isLive(time)) return null;
+    if (!data || !plane || !shows(data, time) || (data.replay && !refreshReplayPlane(data, plane, time))) return null;
     const at = extrapolate(plane, time);
     // En vol, la caméra vise l'avion lui-même (là où il est dessiné) : de près, on tourne autour de la maquette.
-    return plane.ground || at.altM === null ? { lon: at.lon, lat: at.lat } : { lon: at.lon, lat: at.lat, alt: plane.position[2] };
+    // En relecture, l'altitude est celle de l'enregistrement.
+    return plane.ground || at.altM === null ? { lon: at.lon, lat: at.lat } : { lon: at.lon, lat: at.lat, alt: data.replay ? at.altM : plane.position[2] };
   },
 });

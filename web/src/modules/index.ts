@@ -4,6 +4,8 @@
  * le panneau (à l'intérieur de chaque catégorie).
  */
 import type { LayerModule } from '../core/module';
+import { aerialPhotos } from './aerialPhotos';
+import { accidents } from './accidents';
 import { air } from './air';
 import { bikes } from './bikes';
 import { buildingShadows } from './buildingShadows';
@@ -14,6 +16,7 @@ import { fires } from './fires';
 import { floods } from './floods';
 import { fuel } from './fuel';
 import { isochrones } from './isochrones';
+import { monuments } from './monuments';
 import { planes } from './planes';
 import { power } from './power';
 import { railways } from './railways';
@@ -31,4 +34,5 @@ export const MODULES: LayerModule[] = [
   floods, weatherAlerts, air, fires, earthquakes,
   power, chargers, fuel,
   dayNight, buildingShadows, satellites, rain, wind,
+  aerialPhotos, monuments, accidents,
 ];

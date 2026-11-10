@@ -1,0 +1,89 @@
+/* Rideau « avant / après » des photos aériennes (voir aerialPhotos.ts). */
+
+/* Calque posé sur la carte ; il laisse passer les gestes, seules la poignée et l'étiquette les prennent. */
+.rideau {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  pointer-events: none;
+  overflow: hidden;
+}
+.rideau[hidden],
+.rideau--globe {
+  display: none;
+}
+
+/* Zone de prise de 44 px de large (cible tactile), la ligne fait 3 px au centre. */
+.rideau__poignee {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 44px;
+  margin-left: -22px;
+  pointer-events: auto;
+  cursor: ew-resize;
+  touch-action: none;
+  outline: none;
+}
+.rideau__ligne {
+  position: absolute;
+  left: 50%;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  margin-left: -1.5px;
+  background: #fff;
+  /* Liseré sombre de chaque côté : lisible sur la photo claire comme sur la carte de nuit. */
+  box-shadow: 0 0 0 1px rgba(20, 26, 38, 0.65), 0 0 10px rgba(0, 0, 0, 0.35);
+}
+.rideau__bouton {
+  position: absolute;
+  left: 50%;
+  top: 50%;
+  width: 44px;
+  height: 44px;
+  margin: -22px 0 0 -22px;
+  display: grid;
+  place-items: center;
+  border-radius: 50%;
+  color: #141a26;
+  background: #fff;
+  box-shadow: 0 0 0 1.5px rgba(20, 26, 38, 0.7), 0 3px 12px rgba(0, 0, 0, 0.4);
+  transition: transform 0.12s ease;
+}
+.rideau__poignee:hover .rideau__bouton,
+.rideau__poignee--tire .rideau__bouton {
+  transform: scale(1.08);
+}
+.rideau__poignee:focus-visible .rideau__bouton {
+  box-shadow: 0 0 0 3px #141a26, 0 0 0 5px #fff;
+}
+
+/* Étiquettes de part et d'autre de la poignée, à la hauteur de son bouton (suivent le rideau). */
+.rideau__etiquette {
+  position: absolute;
+  top: calc(50% - 15px);
+  height: 30px;
+  padding: 0 11px;
+  display: inline-flex;
+  align-items: center;
+  font: 600 12.5px/1 var(--font-body, system-ui, sans-serif);
+  letter-spacing: 0.01em;
+  color: var(--ui-ink, #f1f4f9);
+  background: var(--ui-glass-strong, rgb(11, 14, 21));
+  border: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
+  border-radius: 15px;
+  box-shadow: var(--ui-shadow, 0 6px 18px rgba(0, 0, 0, 0.3));
+  white-space: nowrap;
+}
+button.rideau__etiquette {
+  pointer-events: auto;
+  cursor: pointer;
+}
+button.rideau__etiquette:hover {
+  background: var(--ui-glass, rgb(14, 18, 27));
+  border-color: rgba(255, 255, 255, 0.3);
+}
+.rideau__etiquette[hidden] {
+  display: none;
+}

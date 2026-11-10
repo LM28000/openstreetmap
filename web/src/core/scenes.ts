@@ -43,6 +43,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['electricite', 'bornes', 'carburants'],
   },
   {
+    // Les photos aériennes (monochromes) laissent la place aux pictogrammes des monuments.
+    id: 'patrimoine',
+    label: 'Patrimoine',
+    description: 'photos anciennes, monuments historiques',
+    modules: ['photos', 'monuments'],
+  },
+  {
     id: 'ville',
     label: 'Ma ville',
     description: 'bus, vélos, trafic, bornes',

@@ -21,6 +21,7 @@ const SYNONYMS: Record<string, string> = {
   velos: 'velo velib bicyclette libre service',
   vigicrues: 'crues inondation rivieres eau',
   'vigilance-meteo': 'meteo orages alerte tempete canicule',
+  air: 'air pollution qualite ozone particules pm10 no2 atmo indice episode smog',
   feux: 'feu incendie',
   seismes: 'seisme tremblement de terre',
   electricite: 'energie courant reseau electrique production',

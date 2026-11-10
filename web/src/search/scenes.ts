@@ -18,6 +18,7 @@ export interface SceneDefinition {
 const KEYWORDS: Record<string, string> = {
   mouvement: 'mouvement circulation trafic',
   meteo: 'temps orage',
+  air: 'pollution ozone particules smog atmo',
   energie: 'courant electrique',
   ville: 'quartier urbain',
 };

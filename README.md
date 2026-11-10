@@ -15,7 +15,7 @@ L'écran a quatre zones fixes. Au repos, elles couvrent moins de 15 % de la cart
   - un vol, un navire, une ligne de bus ;
   - une station de vélos, une borne, une couche, une scène ;
   - une date (« demain 8h », « il y a 2 h », « direct »).
-- **Sous la recherche, les pastilles des couches affichées.** Un clic ouvre leurs réglages, la croix les masque. Le bouton « Couches » ouvre le catalogue, avec un filtre et quatre scènes prêtes à l'emploi : Ce qui bouge, Météo, Énergie, Ma ville.
+- **Sous la recherche, les pastilles des couches affichées.** Un clic ouvre leurs réglages, la croix les masque. Le bouton « Couches » ouvre le catalogue, avec un filtre et cinq scènes prêtes à l'emploi : Ce qui bouge, Météo, Qualité de l'air, Énergie, Ma ville.
 - **À droite, la fiche de l'objet choisi.** Elle montre :
   - le type ;
   - un statut : en direct, rejoué, estimé ou prévu ;
@@ -96,6 +96,10 @@ ARCHIVE_PATH=./archive             # où garder les archives (environ 50 Mo par 
 EOF
 # Facultatif, couche « Bateaux » : clé gratuite d'aisstream.io, saisie sans l'afficher.
 read -rsp "Clé aisstream : " k && printf 'AISSTREAM_API_KEY=%s\n' "$k" >> .env && chmod 600 .env && unset k
+# Facultatif, couche « Qualité de l'air » : compte gratuit Atmo Data (admindata.atmo-france.org).
+# Le conteneur doit recevoir ATMO_USERNAME et ATMO_PASSWORD (comme AISSTREAM_API_KEY) ; entre apostrophes.
+read -rp "Identifiant Atmo Data : " u && printf "ATMO_USERNAME='%s'\n" "$u" >> .env
+read -rsp "Mot de passe Atmo Data : " p && printf "ATMO_PASSWORD='%s'\n" "$p" >> .env && chmod 600 .env && unset u p
 docker compose up -d --build       # installer, ou mettre à jour après un git pull
 docker compose logs -f             # suivre les journaux
 ```
@@ -213,6 +217,7 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Bornes de recharge | Les 45 000 stations de recharge pour véhicules électriques, colorées selon leur puissance maximale (quatre classes de turquoise) ; pictogramme de prise et puissance écrite de près. Réglages : puissance (toutes, rapides, ultra-rapides) et accès. Fiche : opérateur, prises, tarif, horaires. Pas de disponibilité en temps réel. | Base nationale des IRVE, [transport.data.gouv.fr](https://transport.data.gouv.fr) (Licence Ouverte 2.0) |
 | Trafic routier | Événements du réseau routier national non concédé (bouchons, accidents, fermetures, travaux, dangers ; un pictogramme par famille) et état de la circulation (fluide à coupé) autour des grandes villes. Réglage Événements / État / Les deux. Les autoroutes concédées ne sont pas couvertes. | Bison Futé via transport.data.gouv.fr (Licence Ouverte 2.0), Rennes Métropole (ODbL) |
 | Vigilance météo | Niveau de vigilance de chaque département, aujourd'hui et demain (suit l'horloge), doublé d'une trame et d'un contour. Fiche : phénomènes et créneaux. | Météo-France via data.gouv.fr (Licence Ouverte 2.0), contours IGN Admin Express |
+| Qualité de l'air | Indice ATMO de près de 29 000 communes ou intercommunalités de métropole (palette officielle, du bon à l'extrêmement mauvais), pour le jour de l'horloge : aujourd'hui, demain, parfois après-demain (l'indice n'a pas d'historique). De loin un champ de couleur continu, de près des pastilles. Fiche : niveau, polluant dominant, cinq sous-indices, association régionale, épisodes de pollution du département. Demande `ATMO_USERNAME` et `ATMO_PASSWORD` côté serveur ; sans eux, la couche est désactivée. | Atmo France / AASQA via [Atmo Data](https://admindata.atmo-france.org) (données ouvertes) |
 | Feux | Points chauds détectés par satellite sur 7 jours (incendies, brûlages agricoles, sites industriels). La couleur dit l'âge à l'instant affiché, la taille la puissance du feu : on les voit apparaître en rejouant la semaine. | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) (VIIRS) |
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Électricité | Sur chaque région, une colonne 3D empile la production par filière, et un anneau blanc marque la consommation. Au quart d'heure, et suit la frise temporelle. | RTE éCO2mix via [ODRÉ](https://odre.opendatasoft.com) |
@@ -239,6 +244,7 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Carburants | prix-carburants.gouv.fr (ministère de l'Économie) | licence ouverte |
 | Vélos en libre-service | chaque réseau, via transport.data.gouv.fr | licence ouverte ou ODbL selon le réseau |
 | Feux | NASA FIRMS (capteurs VIIRS) | libre, citer la NASA |
+| Qualité de l'air | Atmo France / AASQA, via Atmo Data (compte requis) | données ouvertes, citer « Atmo France / AASQA » |
 | Avions | adsb.lol (récepteurs ADS-B de la communauté) | ODbL |
 | Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
 | Satellites | CelesTrak (éléments orbitaux GP) | libre ; au plus un téléchargement par groupe toutes les 2 h |
@@ -261,7 +267,7 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
 | **1. Trains** (fait) | Horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit, voies ferrées par vitesse. Le réseau est mis en cache par le navigateur et le rafraîchissement ne fige plus l'animation. Le serveur maison archive aussi le temps réel brut. |
-| **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues et météo, électricité par région, vélos en libre-service, bornes de recharge, feux, trafic routier. Reste : qualité de l'air (l'API d'Atmo France demande un compte) |
+| **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues et météo, électricité par région, vélos en libre-service, bornes de recharge, feux, trafic routier, qualité de l'air (Atmo Data, avec un compte) |
 | **3. Tout ce qui bouge** (fait) | Avions, bateaux, satellites, bus, trams et métros (positions en direct, ou estimées d'après les horaires en temps réel) |
 | **Refonte** (fait) | Recherche universelle, interface neutre, scènes, frise, fiche unifiée, adresse partageable, téléphone, fond de carte calme et nuit sombre, nouveaux symboles (silhouettes d'avions, coques, rames voiture par voiture) |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |

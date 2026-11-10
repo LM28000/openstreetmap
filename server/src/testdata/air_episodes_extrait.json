@@ -1,0 +1,12 @@
+{
+"type": "FeatureCollection",
+"name": "national_data.national_alrt3j",
+"features": [
+{ "type": "Feature", "properties": { "lib_pol": "Ozone", "lib_zone": "ILE-DE-FRANCE", "etat": "ALERTE SUR PERSISTANCE", "date_ech": "2026-11-10", "date_dif": "2026-11-10" } },
+{ "type": "Feature", "properties": { "lib_pol": "O3", "lib_zone": "ILE-DE-FRANCE", "etat": "ALERTE", "date_ech": "2026-11-10", "date_dif": "2026-11-10" } },
+{ "type": "Feature", "properties": { "lib_pol": "Particules fines PM2.5", "lib_zone": "ILE-DE-FRANCE", "etat": "INFORMATION ET RECOMMANDATION", "date_ech": "2026-11-10", "date_dif": "2026-11-10" } },
+{ "type": "Feature", "properties": { "lib_pol": "Particules fines inférieur à 10 um", "lib_zone": "Bassin Grenoblois", "etat": "ALERTE", "date_ech": "2026-11-11", "date_dif": "2026-11-10" } },
+{ "type": "Feature", "properties": { "lib_pol": "PM10", "lib_zone": "CALVADOS", "etat": "PAS DE DEPASSEMENT", "date_ech": "2026-11-10", "date_dif": "2026-11-10" } },
+{ "type": "Feature", "properties": { "lib_pol": "NO2", "lib_zone": "EURE", "etat": null, "date_ech": "2026-11-10", "date_dif": "2026-11-10" } }
+]
+}

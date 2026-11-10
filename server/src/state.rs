@@ -37,6 +37,9 @@ struct Inner {
     traffic: RwLock<Option<Bytes>>,
     traffic_state: RwLock<Option<Bytes>>,
     vigilance: RwLock<Option<Bytes>>,
+    /// Qualité de l'air, et la raison de son absence quand la couche est désactivée (pas d'identifiants).
+    air: RwLock<Option<Bytes>>,
+    air_disabled: RwLock<Option<&'static str>>,
     /// Les deux morceaux de la réponse des transports (positions publiées, positions estimées), assemblés en `transit`.
     transit_parts: Mutex<TransitParts>,
 }
@@ -59,6 +62,8 @@ impl AppState {
             traffic: RwLock::new(None),
             traffic_state: RwLock::new(None),
             vigilance: RwLock::new(None),
+            air: RwLock::new(None),
+            air_disabled: RwLock::new(None),
             transit_parts: Mutex::default(),
         }))
     }
@@ -197,6 +202,22 @@ impl AppState {
 
     pub fn set_traffic_state(&self, body: Vec<u8>) {
         *self.0.traffic_state.write().expect("verrou de l'état du trafic") = Some(Bytes::from(body));
+    }
+
+    pub fn air(&self) -> Option<Bytes> {
+        self.0.air.read().expect("verrou de la qualité de l'air").clone()
+    }
+
+    pub fn set_air(&self, body: Vec<u8>) {
+        *self.0.air.write().expect("verrou de la qualité de l'air") = Some(Bytes::from(body));
+    }
+
+    pub fn air_disabled(&self) -> Option<&'static str> {
+        *self.0.air_disabled.read().expect("verrou de la qualité de l'air")
+    }
+
+    pub fn set_air_disabled(&self, reason: &'static str) {
+        *self.0.air_disabled.write().expect("verrou de la qualité de l'air") = Some(reason);
     }
 
     pub fn vigilance(&self) -> Option<Bytes> {

@@ -142,7 +142,9 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Couche | Ce qu'elle montre | Source |
 |---|---|---|
 | Trains | TGV, Intercités et TER à leur position, sur les vraies voies, avec leurs retards et une vitesse estimée. Couleur par type ou par retard. Trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. | SNCF, OpenStreetMap |
+| Vélos en libre-service | Les 5 800 stations des 84 réseaux de France (Vélib', Vélo'v, VélôToulouse…), relues chaque minute. Mode « Vélos » pour en trouver un, « Places » pour le rendre ; vu de près, le nombre disponible sur chaque station. Une station hors service est un simple anneau gris. | réseaux GBFS via [transport.data.gouv.fr](https://transport.data.gouv.fr) |
 | Vigilance crues | Niveau de vigilance des 337 tronçons de rivières surveillés, de vert à rouge (épaisseur du trait selon le niveau). Couche MapLibre drapée sur le relief. | [Vigicrues](https://www.vigicrues.gouv.fr) |
+| Feux | Points chauds détectés par satellite sur 7 jours (incendies, brûlages agricoles, sites industriels). La couleur dit l'âge à l'instant affiché, la taille la puissance du feu : on les voit apparaître en rejouant la semaine. | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) (VIIRS) |
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Électricité | Sur chaque région, une colonne 3D empile la production par filière, et un anneau blanc marque la consommation. Au quart d'heure, et suit la frise temporelle. | RTE éCO2mix via [ODRÉ](https://odre.opendatasoft.com) |
 | Carburants | Prix actuels dans les 9 800 stations-service, colorés par rapport au reste de la France (bleu moins cher, rouge plus cher), au choix du carburant. Vu de près, une étiquette de prix ; la moins chère l'emporte quand deux étiquettes se gêneraient. | [prix-carburants.gouv.fr](https://www.prix-carburants.gouv.fr) |
@@ -162,6 +164,8 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Vigilance crues | Vigicrues (SCHAPI) | licence ouverte |
 | Électricité | RTE éCO2mix, via ODRÉ | licence ouverte |
 | Carburants | prix-carburants.gouv.fr (ministère de l'Économie) | licence ouverte |
+| Vélos en libre-service | chaque réseau, via transport.data.gouv.fr | licence ouverte ou ODbL selon le réseau |
+| Feux | NASA FIRMS (capteurs VIIRS) | libre, citer la NASA |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.
 
@@ -177,8 +181,8 @@ Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fo
 | Phase | Contenu |
 |---|---|
 | **0. Socle** (fait) | Carte 3D, globe, relief, modules, horloge, fiche au clic, jour/nuit, séismes |
-| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. Reste : archivage sur le serveur maison, réponse plus légère (à chaque rafraîchissement du temps réel, une image de ~150 ms le temps que deck.gl renvoie les traînées à la carte graphique) |
-| **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues, électricité par région. Reste : qualité de l'air, incendies, vélos en libre-service |
+| **1. Trains** (en cours) | Fait : horaires et temps réel SNCF, serveur Rust, trains sur les vraies voies avec leur altitude et un profil de vitesse réaliste, couleur par type ou par retard, trajet et arrêts au clic, tableau d'affichage des gares, caméra qui suit. Le serveur maison archive aussi le temps réel brut. Reste : réponse plus légère (à chaque rafraîchissement du temps réel, une image de ~150 ms le temps que deck.gl renvoie les traînées à la carte graphique) |
+| **2. Couches rapides** (en cours) | Fait : carburants, vigilance crues, électricité par région, vélos en libre-service, feux. Reste : qualité de l'air (l'API d'Atmo France demande un compte) |
 | 3. Tout ce qui bouge | Bus, métros et trams, avions, bateaux, satellites |
 | 4. Gros volumes | Population en 3D, immobilier, élections, accidents, couverture mobile, monuments |
 | 5. Rendu avancé | Vent animé, radar de pluie, ombres, LiDAR, photos anciennes |

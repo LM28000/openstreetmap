@@ -7,7 +7,7 @@
  */
 import type { Layer, LayersList } from '@deck.gl/core';
 import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
-import type { InfoContent, LayerModule, LegendItem, RenderContext, TerrainSampler } from './module';
+import type { FocusTarget, InfoContent, LayerModule, LegendItem, RenderContext, TerrainSampler } from './module';
 import { currentNight } from '../map/baseMap';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
@@ -157,7 +157,7 @@ export class ModuleManager {
   }
 
   /** Position à suivre (si la caméra suit la sélection). */
-  followTarget(time: number): { lon: number; lat: number } | null {
+  followTarget(time: number): FocusTarget | null {
     const found = this.selectedEntry();
     if (!found?.selection.following) return null;
     return found.entry.module.focus?.(found.selection.value, this.context(found.entry, time)) ?? null;

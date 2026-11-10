@@ -250,8 +250,19 @@ export interface LayerModule<TData = unknown> {
   select?(object: unknown): unknown;
   /** Fiche de la sélection à l'instant t (recalculée en continu). `null` : elle n'existe plus. */
   describe?(selection: unknown, ctx: RenderContext<TData>): InfoContent | null;
-  /** Position de la sélection à l'instant t, pour que la caméra la suive (`null` : rien à suivre). */
-  focus?(selection: unknown, ctx: RenderContext<TData>): { lon: number; lat: number } | null;
+  /**
+   * Position de la sélection à l'instant t, pour que la caméra la suive (`null` : rien à suivre).
+   * `alt` (mètres au-dessus de la mer) : la caméra vise ce point en l'air plutôt que le sol dessous,
+   * pour un objet qui vole (sinon un avion à 11 000 m sortirait de l'image, vers le haut).
+   */
+  focus?(selection: unknown, ctx: RenderContext<TData>): FocusTarget | null;
+}
+
+/** Point que la caméra suit. */
+export interface FocusTarget {
+  lon: number;
+  lat: number;
+  alt?: number;
 }
 
 /** Aide au typage : `defineModule<MesDonnées>({ ... })`. */

@@ -689,6 +689,7 @@ export const planes = defineModule<PlanesData>({
     const plane = data?.byHex.get((selection as PlanesSelection).hex);
     if (!plane || !isLive(time)) return null;
     const at = extrapolate(plane, time);
-    return { lon: at.lon, lat: at.lat };
+    // En vol, la caméra vise l'avion lui-même (là où il est dessiné) : de près, on tourne autour de la maquette.
+    return plane.ground || at.altM === null ? { lon: at.lon, lat: at.lat } : { lon: at.lon, lat: at.lat, alt: plane.position[2] };
   },
 });

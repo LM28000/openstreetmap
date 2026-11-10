@@ -123,11 +123,28 @@ export function MapView({ manager }: { manager: ModuleManager }) {
 
     let frameRequest = 0;
     let frameCount = 0;
+    /** Vrai pendant qu'on suit un objet en vol (centre de la vue décollé du sol). */
+    let aloft = false;
     let effects: ReturnType<typeof sunEffects> | undefined;
     const tick = () => {
       const time = clock.now();
       const target = manager.followTarget(time);
-      if (target) map.jumpTo({ center: [target.lon, target.lat] });
+      if (target?.alt !== undefined) {
+        // Objet en vol : la caméra tourne autour de lui, à son altitude, et non autour du sol dessous.
+        if (!aloft) {
+          map.setCenterClampedToGround(false);
+          aloft = true;
+        }
+        map.jumpTo({ center: [target.lon, target.lat], elevation: target.alt });
+      } else {
+        if (aloft) {
+          // Fin du suivi d'un objet en vol : le centre de la vue redescend sur le relief.
+          map.setCenterClampedToGround(true);
+          map.jumpTo({ elevation: map.queryTerrainElevation(map.getCenter()) ?? 0 });
+          aloft = false;
+        }
+        if (target) map.jumpTo({ center: [target.lon, target.lat] });
+      }
       const layers = manager.frame(time);
       // Maquettes 3D éclairées par le soleil du centre de la vue (vérifié quelques fois par seconde).
       if (frameCount++ % 15 === 0) {

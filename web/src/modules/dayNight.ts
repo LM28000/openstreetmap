@@ -102,13 +102,20 @@ function toCoordinates(box: Box): [[number, number], [number, number], [number, 
  */
 const DAY_LIGHT = [255, 255, 255];
 const DUSK_LIGHT = [255, 190, 135];
-/** Clair de lune bleuté : assez lumineux pour que les faces des bâtiments restent distinctes. */
-const NIGHT_LIGHT = [118, 132, 186];
+/**
+ * Clair de lune à peine bleuté : assez lumineux pour que les faces des bâtiments restent
+ * distinctes, mais neutre, sinon les bâtiments (déjà sombres la nuit) virent au violet.
+ */
+const NIGHT_LIGHT = [150, 158, 178];
 const DEFAULT_LIGHT = { anchor: 'viewport', color: 'white', intensity: 0.5, position: [1.15, 210, 30] } as const;
 
 /** Couleurs du ciel : jour (celles du fond de carte) → nuit. */
 const SKY_DAY = { sky: [61, 111, 182], horizon: [207, 224, 243], fog: [230, 237, 245] };
-const SKY_NIGHT = { sky: [11, 18, 44], horizon: [44, 58, 98], fog: [52, 64, 104] };
+/**
+ * La nuit, le brouillard se mêle au sol sur 70 % de la vue inclinée (`fog-ground-blend`) :
+ * il doit rester proche du fond de nuit (#12161d), sinon toute la carte vire au violet.
+ */
+const SKY_NIGHT = { sky: [9, 13, 26], horizon: [30, 37, 52], fog: [24, 29, 38] };
 
 function mix(a: number[], b: number[], t: number): string {
   const c = a.map((value, i) => Math.round(value + ((b[i] ?? value) - value) * t));

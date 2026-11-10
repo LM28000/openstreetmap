@@ -1,3 +1,5 @@
+import type { ModuleManager } from './moduleManager';
+
 /**
  * Scènes : des ensembles de couches pensés pour aller ensemble (couleurs comprises :
  * aucune teinte n'y a deux sens). Appliquer une scène remplace les couches affichées.
@@ -40,7 +42,30 @@ export const SCENES: readonly Scene[] = [
   },
 ];
 
-/** La scène dont les couches sont exactement celles qui sont affichées, sinon `undefined`. */
+/**
+ * Couches d'ambiance : une scène ne les éteint pas. Couper « Jour et nuit » en pleine nuit
+ * repasserait d'un coup le fond de carte au jour, ce qui n'a rien à voir avec la scène choisie.
+ * Une scène peut en revanche les allumer (« Météo » affiche le jour et la nuit).
+ */
+const AMBIENT: readonly string[] = ['jour-nuit'];
+
+/** Couches à afficher pour une scène, compte tenu des couches d'ambiance déjà affichées. */
+export function sceneLayers(scene: Scene, visibleIds: ReadonlySet<string>): string[] {
+  return [...new Set([...scene.modules, ...AMBIENT.filter((id) => visibleIds.has(id))])];
+}
+
+/** Applique une scène : ses couches remplacent les couches affichées (sauf l'ambiance). */
+export function applyScene(manager: ModuleManager, scene: Scene): void {
+  const snapshot = manager.getSnapshot();
+  const visibleIds = new Set(manager.modules.filter((module) => snapshot[module.id]?.visible).map((module) => module.id));
+  manager.setVisibleOnly(sceneLayers(scene, visibleIds));
+}
+
+/** La scène dont les couches sont exactement celles qui sont affichées (ambiance mise à part), sinon `undefined`. */
 export function activeScene(visibleIds: ReadonlySet<string>): Scene | undefined {
-  return SCENES.find((scene) => scene.modules.length === visibleIds.size && scene.modules.every((id) => visibleIds.has(id)));
+  const shown = [...visibleIds].filter((id) => !AMBIENT.includes(id));
+  return SCENES.find((scene) => {
+    const wanted = scene.modules.filter((id) => !AMBIENT.includes(id));
+    return wanted.length === shown.length && wanted.every((id) => visibleIds.has(id));
+  });
 }

@@ -153,6 +153,9 @@ const MIN_ZOOM: Record<string, number> = {
   'highway-name-minor': 16,
   poi_r1: 16.5,
   poi_r7: 17,
+  // Les arrêts et gares du fond (pictogrammes bleus) se confondent avec les TER et doublent
+  // nos propres couches de transport : ils n'arrivent que tout près.
+  poi_transit: 15,
 };
 
 /**
@@ -231,6 +234,9 @@ export function applyCalmStyle(map: MapLibreMap): void {
     const layer = layers.find((l) => l.id === id);
     map.setLayerZoomRange(id, zoom, layer?.maxzoom ?? 24);
   }
+
+  // Pictogrammes des arrêts : bleu saturé de Liberty, atténués pour ne pas imiter une donnée.
+  if (ids.has('poi_transit')) paint(map, 'poi_transit', 'icon-opacity', ['interpolate', ['linear'], ['zoom'], 15, 0.4, 17, 0.7]);
 
   thinCities(map, ids);
 }

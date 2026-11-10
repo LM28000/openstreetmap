@@ -7,6 +7,7 @@ import type { ModuleManager } from '../core/moduleManager';
 import { isShown } from './access';
 import { matchScore, pad, rank, TopK, type Query } from './normalize';
 import { SCENES } from './scenes';
+import { SCENES as CORE_SCENES, applyScene } from '../core/scenes';
 import type { Provider, SearchResult } from './types';
 
 /** Mots que les gens tapent pour une couche, en plus de son nom. */
@@ -122,7 +123,8 @@ export const layersProvider: Provider = {
         // Le nom de la scène : « météo » ouvre d'abord la scène, avant ses couches prises une à une.
         score: rank(text, query, match) + sceneBonus(scene.name, query),
         run: () => {
-          manager.setVisibleOnly(scene.layers);
+          const core = CORE_SCENES.find((candidate) => candidate.id === scene.id);
+          if (core) applyScene(manager, core);
         },
       });
     }

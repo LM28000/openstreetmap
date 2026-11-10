@@ -1,7 +1,7 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
 import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule, type LegendItem } from '../core/module';
 import type { ModuleManager, ModuleRuntimeState } from '../core/moduleManager';
-import { SCENES, activeScene } from '../core/scenes';
+import { SCENES, activeScene, applyScene } from '../core/scenes';
 import { formatDateTime, formatRelative } from './format';
 import { useModuleStates, useNow } from './hooks';
 import { Icon } from './icons';
@@ -96,7 +96,7 @@ export function LayerCatalog({ manager, expandedId, onExpand, autoFocus }: Layer
                   className={`scene${current?.id === scene.id ? ' scene--on' : ''}`}
                   aria-pressed={current?.id === scene.id}
                   title="Remplace les couches affichées par cet ensemble"
-                  onClick={() => manager.setVisibleOnly(scene.modules)}
+                  onClick={() => applyScene(manager, scene)}
                 >
                   <b>{scene.label}</b>
                   <span>{scene.description}</span>

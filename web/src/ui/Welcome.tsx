@@ -1,6 +1,6 @@
 import { useEffect, useRef } from 'react';
 import type { ModuleManager } from '../core/moduleManager';
-import { SCENES } from '../core/scenes';
+import { SCENES, applyScene } from '../core/scenes';
 import { formatShortDate, formatTime } from './format';
 import { useClockTime, useModuleStates } from './hooks';
 import { Icon } from './icons';
@@ -88,7 +88,7 @@ export function Welcome({ manager, onClose }: WelcomeProps) {
           type="button"
           className="btn btn--primary"
           onClick={() => {
-            manager.setVisibleOnly(motion.modules);
+            applyScene(manager, motion);
             onClose();
           }}
         >

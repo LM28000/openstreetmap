@@ -15,7 +15,7 @@
 //! - `HOST` (127.0.0.1) et `PORT` (8787) : adresse d'écoute ;
 //! - `DATA_DIR` (../data) : où ranger les fichiers téléchargés ;
 //! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel et enregistre l'historique des avions, bateaux et transports ;
-//! - `HISTORIQUE_JOURS` (7) : durée de conservation de ces archives, en jours ;
+//! - `HISTORIQUE_JOURS` (7) : durée de conservation des positions enregistrées, en jours (l'archive SNCF est gardée) ;
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.

@@ -360,13 +360,13 @@ impl History {
         merge_spans(spans, MERGE_GAP_S)
     }
 
-    /// Supprime les jours entièrement plus vieux que la durée de conservation. Concerne les dossiers des couches
-    /// et l'archive brute des trains. Rend le nombre de dossiers supprimés.
+    /// Supprime les jours entièrement plus vieux que la durée de conservation, dans les dossiers des couches
+    /// seulement. L'archive brute du temps réel SNCF (`sncf-trip-updates`) est gardée sans limite : c'est la mémoire
+    /// longue des retards, à analyser plus tard. Rend le nombre de dossiers supprimés.
     pub fn purge(&self, now: i64) -> usize {
         let cutoff = now - self.retention_days * 86_400;
         let mut removed = 0;
-        let mut folders: Vec<PathBuf> = Layer::ALL.iter().map(|l| self.layer_dir(*l)).collect();
-        folders.push(self.dir.join(super::trains::ARCHIVE_FOLDER));
+        let folders: Vec<PathBuf> = Layer::ALL.iter().map(|l| self.layer_dir(*l)).collect();
         for folder in folders {
             let Ok(days) = std::fs::read_dir(&folder) else { continue };
             for day in days.flatten() {

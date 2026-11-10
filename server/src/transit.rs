@@ -138,7 +138,7 @@ fn is_excluded(title: &str) -> bool {
     ["sncf", "renfe", "agrégat", "agregat", "européen"].iter().any(|word| t.contains(word))
 }
 
-/// Ce que le catalogue donne : réseaux, flux de positions (indice du réseau, adresse) et titres des réseaux écartés pour leur clé.
+/// Ce que le catalogue donne : réseaux, flux de positions (indice du réseau, adresse) et titres des réseaux dont l'adresse publiée porte une clé.
 struct Catalog {
     nets: Vec<Net>,
     feeds: Vec<(usize, String)>,
@@ -167,9 +167,10 @@ fn parse_catalog(catalog: &Value) -> Result<Catalog> {
                 continue;
             }
             let Some(url) = resource["original_url"].as_str().or(resource["url"].as_str()) else { continue };
+            // Une clé écrite dans l'adresse publiée par le catalogue national est donnée par le
+            // producteur lui-même pour un usage public (TBM, Azalys) : on la garde, en le signalant.
             if url_has_key(url) {
                 with_key.push(title.to_string());
-                continue;
             }
             if seen_urls.insert(url.to_string()) {
                 feeds.push((net_index, url.to_string()));
@@ -727,7 +728,7 @@ pub async fn poll_forever(http: reqwest::Client, data_dir: PathBuf, state: AppSt
                 Ok(Catalog { nets: new_nets, feeds: new_feeds, with_key }) if !new_feeds.is_empty() => {
                     info!(reseaux = new_nets.len(), flux = new_feeds.len(), "transports : catalogue chargé");
                     if !with_key.is_empty() {
-                        info!("transports : flux à clé d'accès écartés : {}", with_key.join(", "));
+                        info!("transports : flux avec une clé publique du producteur : {}", with_key.join(", "));
                     }
                     // On garde l'état des flux déjà connus : un nouveau catalogue ne doit pas faire tout oublier.
                     let mut old: HashMap<String, Feed> = feeds.drain(..).map(|f| (f.url.clone(), f)).collect();
@@ -1012,7 +1013,7 @@ mod tests {
     }
 
     #[test]
-    fn catalogue_ecarte_sncf_cles_et_indisponibles() {
+    fn catalogue_ecarte_sncf_et_indisponibles_garde_les_cles_publiques() {
         let rt = |url: &str, available: bool| serde_json::json!({"format":"gtfs-rt","features":["vehicle_positions"],"is_available":available,"original_url":url,"url":"https://www.data.gouv.fr/x"});
         let dataset = |title: &str, resources: Vec<Value>| serde_json::json!({"type":"public-transit","title":title,"slug":title,"licence":"lov2","resources":resources});
         let catalog = serde_json::json!([
@@ -1023,9 +1024,13 @@ mod tests {
             dataset("Agrégat des réseaux", vec![rt("https://e.example/vp", true)]),
         ]);
         let Catalog { nets, feeds, with_key } = parse_catalog(&catalog).unwrap();
-        assert_eq!(nets.len(), 1);
+        assert_eq!(nets.len(), 2);
         assert_eq!((nets[0].name.as_str(), nets[0].gtfs.len()), ("Astuce", 1));
-        assert_eq!(feeds, vec![(0, "https://a.example/vp".to_string())], "doublon d'adresse écarté");
+        assert_eq!(
+            feeds,
+            vec![(0, "https://a.example/vp".to_string()), (1, "https://b.example/vp?apiKey=secret".to_string())],
+            "doublon d'adresse écarté, clé publique gardée"
+        );
         assert_eq!(with_key, vec!["Réseau urbain TBM"]);
         assert_eq!(network_name("Réseau urbain de la zone Centre (CACEM)"), "Réseau urbain de la zone Centre (CACEM)");
         assert_eq!(network_name("Réseau urbain et scolaire TBM"), "TBM");

@@ -252,10 +252,15 @@ Variables d'environnement : `ISO_CARS_TER`, `ISO_IDF`, `ISO_CARS_REGIONAUX` (`no
 | Satellites | Stations spatiales (ISS, Tiangong), satellites de navigation, météo et les plus brillants, en silhouettes neutres, à leur position calculée pour l'instant affiché (replay compris) ; Starlink en option. Altitude figurée par une tige (échelle non respectée), trace au sol de l'orbite au clic, visibilité de l'ISS depuis le centre de la carte. | [CelesTrak](https://celestrak.org) |
 | Jour et nuit | Le fond de carte passe à sa palette sombre la nuit (soleil au centre de la vue), l'ombre de la nuit et des crépuscules se voit de loin. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 | Radar de pluie | Les précipitations mesurées par radar, des deux dernières heures, drapées sur le relief. | [RainViewer](https://www.rainviewer.com) |
+| Photos aériennes anciennes | Les orthophotographies de l'IGN, des années 1950 (couche principale, 1950–1965) à aujourd'hui (1965–1980, 1980–1995, 2000–2005, 2006–2010, 2011–2015, actuelle), avec un **rideau avant / après** : une poignée verticale que l'on glisse (souris, doigt ou clavier) ; à gauche la photo, à droite la carte d'aujourd'hui. Réglage « Transparence » (curseur d'opacité) à la place du rideau. Drapée sur le relief 3D, étiquettes et couches par-dessus. Fiche : époque, ce que l'on voit, lien « Remonter le temps ». Indisponible sur le globe. | IGN, Géoplateforme (WMTS, sans clé), Licence Etalab 2.0 |
 | Vent | Le vent à 10 m, animé en traînées, d'après la prévision ARPEGE (suit l'horloge). | Météo-France ARPEGE via [Open-Meteo](https://open-meteo.com) |
 | Ombres des bâtiments | L'ombre portée de chaque bâtiment selon la position du soleil, à partir du zoom 14. | calcul astronomique, bâtiments OpenStreetMap |
 
 Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles (TER, grande vitesse, Intercités) reprennent les trois premières couleurs de la palette de référence. Le mode « retard » utilise une seule teinte, de plus en plus sombre, car le vert et le rouge sont confondus par les daltoniens.
+
+### Le rideau des photos aériennes
+
+MapLibre ne sait pas découper une couche à l'écran, et avec le relief 3D ses couches raster sont dessinées dans des textures par tuile, puis plaquées sur le terrain : un masque d'écran n'y change rien. Le module (`web/src/modules/aerialCurtain.ts`) dessine donc lui-même les tuiles de l'IGN dans une **couche WebGL « custom »** : chaque tuile est un maillage de 8 × 8 cases dont les sommets prennent l'altitude affichée du relief (`queryTerrainElevation`), et un `discard` dans le shader sur `gl_FragCoord.x` fait le rideau. La couche s'intercale sous les étiquettes : noms de lieux et couches deck.gl restent par-dessus la photo. Une deuxième carte synchronisée aurait coûté un second rendu du relief et caché ces couches du côté photo. Limites : les bâtiments 3D d'aujourd'hui dépassent de la photo quand la carte est inclinée ; indisponible sur le globe.
 
 ## Sources et licences
 
@@ -264,6 +269,7 @@ Les couleurs des trains ont été vérifiées pour le daltonisme. Trois familles
 | Fond de carte | [OpenFreeMap](https://openfreemap.org), données OpenStreetMap | ODbL : l'attribution doit rester visible |
 | Voies ferrées | OpenStreetMap, via l'API [Overpass](https://overpass-api.de) | ODbL |
 | Horaires et temps réel | SNCF, via [transport.data.gouv.fr](https://transport.data.gouv.fr) | ODbL |
+| Photos aériennes anciennes | IGN, Géoplateforme : `data.geopf.fr/wmts` (couches `ORTHOIMAGERY.ORTHOPHOTOS.1950-1965`, etc.) | Licence Etalab 2.0, mention « IGN » |
 | Relief | [Mapterhorn](https://mapterhorn.com/attribution) | attribution |
 | Séismes | EMSC | attribution |
 | Vigilance crues | Vigicrues (SCHAPI) | licence ouverte |

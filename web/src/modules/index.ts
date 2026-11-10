@@ -4,6 +4,7 @@
  * le panneau (à l'intérieur de chaque catégorie).
  */
 import type { LayerModule } from '../core/module';
+import { aerialPhotos } from './aerialPhotos';
 import { air } from './air';
 import { bikes } from './bikes';
 import { buildingShadows } from './buildingShadows';
@@ -31,4 +32,5 @@ export const MODULES: LayerModule[] = [
   floods, weatherAlerts, air, fires, earthquakes,
   power, chargers, fuel,
   dayNight, buildingShadows, satellites, rain, wind,
+  aerialPhotos,
 ];

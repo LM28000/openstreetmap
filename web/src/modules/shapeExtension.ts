@@ -3,10 +3,9 @@
  * (étoile, losange, triangle, carré), pour distinguer des familles d'objets par
  * leur forme et pas seulement par leur couleur.
  *
- * Pourquoi pas une `IconLayer` : dans cette configuration (deck.gl 9.4 sur le globe
- * MapLibre 5), les icônes, les étiquettes et les lignes à base d'instances ne
- * s'affichent pas du tout en vue globe, alors que les disques s'affichent. Découper
- * les disques dans le shader marche partout, y compris sur le globe.
+ * Il ne sert plus aux satellites, qui ont des silhouettes en `IconLayer` depuis que les
+ * paramètres communs `OVER_MAP` (map/parameters.ts) désactivent l'élimination des faces arrière
+ * sur le globe ; le module du trafic routier l'utilise encore pour ses disques.
  *
  * Le shader reçoit la position dans le disque (`geometry.uv`, de −1 à 1) et calcule une
  * « distance à la forme » : ≤ 1 dedans, > 1 dehors. Le bord est adouci sur 12 % du rayon.

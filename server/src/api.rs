@@ -1,4 +1,4 @@
-//! API HTTP.
+//! API HTTP, et le site lui-même (fichiers construits par `pnpm build`, servis à la racine).
 //!
 //! - `GET /api/health` : état du serveur (horaires chargés, fraîcheur du temps réel).
 //! - `GET /api/velos` : stations de vélos en libre-service de France, avec vélos et places disponibles.
@@ -18,13 +18,15 @@ use std::collections::{HashMap, HashSet};
 
 use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
-use axum::http::{StatusCode, header};
+use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::get;
+use axum::routing::{get, get_service};
 use axum::{Json, Router};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
 use tower_http::compression::CompressionLayer;
+use tower_http::services::{ServeDir, ServeFile};
+use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::network::Network;
@@ -36,8 +38,9 @@ const MAX_WINDOW_S: i64 = 12 * 3600;
 /// Un train très en retard peut encore rouler longtemps après son arrivée prévue.
 const MAX_DELAY_S: i64 = 3 * 3600;
 
-pub fn router(state: AppState) -> Router {
-    Router::new()
+/// L'API, et le site s'il est construit (`web_dir`).
+pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
+    let mut router = Router::new()
         .route("/api/health", get(health))
         .route("/api/trains", get(trains))
         .route("/api/reseau", get(network_version))
@@ -48,9 +51,21 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bateaux", get(|State(state): State<AppState>| async move { prepared(state.ships(), "bateaux") }))
         .route("/api/satellites", get(|State(state): State<AppState>| async move { prepared(state.satellites(), "satellites") }))
         .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))
-        .layer(CompressionLayer::new())
-        .layer(TraceLayer::new_for_http())
-        .with_state(state)
+        // Une adresse d'API inconnue est une erreur, pas la page du site.
+        .route("/api/{*rest}", get(|| async { (StatusCode::NOT_FOUND, "adresse d'API inconnue") }));
+    if let Some(dir) = web_dir {
+        // Les fichiers de assets/ portent une empreinte de leur contenu dans leur nom : ils ne
+        // changent jamais. La page d'accueil, elle, est revérifiée à chaque visite pour
+        // qu'une mise à jour du site soit vue aussitôt.
+        let immutable =
+            SetResponseHeaderLayer::overriding(header::CACHE_CONTROL, HeaderValue::from_static("public, max-age=31536000, immutable"));
+        let revalidate = SetResponseHeaderLayer::if_not_present(header::CACHE_CONTROL, HeaderValue::from_static("no-cache"));
+        let pages = ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html")));
+        router = router
+            .nest_service("/assets", get_service(ServeDir::new(dir.join("assets"))).layer(immutable))
+            .fallback_service(get_service(pages).layer(revalidate));
+    }
+    router.layer(CompressionLayer::new()).layer(TraceLayer::new_for_http()).with_state(state)
 }
 
 #[derive(Deserialize)]

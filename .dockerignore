@@ -1,0 +1,11 @@
+# Contexte de construction de l'image (racine du dépôt) : seulement le code.
+# Le .env contient des secrets (clé aisstream) : il ne doit jamais entrer dans l'image.
+.env
+.env.*
+.git
+.claude
+**/node_modules
+**/target
+**/dist
+data
+archive

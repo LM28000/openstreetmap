@@ -3,7 +3,11 @@
 Une carte 3D interactive de la France, avec des couches de données en temps réel : trains, météo, énergie, séismes…
 Projet personnel pour apprendre.
 
-## Lancer le projet
+## Utiliser la carte
+
+Le serveur maison sert la carte en permanence, sur le réseau de la maison : **http://192.168.0.75:8787/**. Aucun programme n'a besoin de tourner sur l'ordinateur qui l'affiche.
+
+## Lancer le projet (développement)
 
 Deux programmes tournent ensemble, chacun dans son terminal :
 
@@ -28,7 +32,7 @@ Comptez quelques minutes. Le service Overpass, qui fournit les voies OSM, est gr
 Sans le serveur, la carte s'ouvre quand même. Seule la couche des trains affiche une erreur.
 
 Autres commandes :
-- `pnpm typecheck` et `pnpm build` dans `web/` ;
+- `pnpm typecheck` et `pnpm build` dans `web/` ; après `pnpm build`, le serveur sert aussi le site construit (`web/dist`) à sa racine, sur http://127.0.0.1:8787/ ;
 - `cargo test` et `cargo clippy` dans `server/`.
 
 En développement, la carte est accessible depuis la console du navigateur via `window.__carte` (`map`, `overlay`, `clock`, `manager`).
@@ -44,7 +48,7 @@ CARTE_API=http://192.168.0.75:8787 pnpm dev
 
 ## Serveur permanent (Docker)
 
-Pour que le temps réel soit archivé en continu, le serveur tourne en permanence dans Docker (`compose.yaml`, `server/Dockerfile`).
+Le serveur tourne en permanence dans Docker (`compose.yaml`, `server/Dockerfile`) : il archive le temps réel en continu et sert le site. L'image se construit depuis la racine du dépôt : une étape Node construit le site, une étape Rust le serveur, et l'image finale (Debian minimale) contient les deux.
 
 ```bash
 git clone https://github.com/LM28000/openstreetmap.git carte-vivante && cd carte-vivante

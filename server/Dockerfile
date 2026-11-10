@@ -1,27 +1,42 @@
-# Image du serveur de la carte vivante.
+# Image de la carte vivante : le serveur et le site, dans un seul conteneur.
 #
-# Étape 1 : compilation (image Rust complète, jetée ensuite).
-# Étape 2 : image d'exécution minimale (Debian slim + certificats + le binaire).
+# Se construit depuis la racine du dépôt (contexte « . », voir compose.yaml) :
+#   docker build -f server/Dockerfile .
+#
+# Étape 1 : le site (TypeScript → fichiers statiques), jetée ensuite.
+# Étape 2 : le serveur (image Rust complète), jetée ensuite.
+# Étape 3 : image d'exécution minimale (Debian slim + certificats + le binaire + le site).
+
+FROM node:24.22-trixie-slim AS web
+RUN npm install --global pnpm@12.8.1
+WORKDIR /web
+# Les dépendances d'abord : tant que le fichier de verrouillage ne change pas, Docker garde
+# cette étape en cache.
+COPY web/package.json web/pnpm-lock.yaml ./
+RUN pnpm install --frozen-lockfile
+COPY web/ ./
+RUN pnpm build
 
 FROM rust:1.94-slim-trixie AS build
 WORKDIR /src
-# Les dépendances d'abord : tant que Cargo.toml/Cargo.lock ne changent pas, Docker garde
-# cette étape en cache et une modification du code ne recompile que notre crate.
-COPY Cargo.toml Cargo.lock ./
+# Même principe : une modification du code ne recompile que notre crate.
+COPY server/Cargo.toml server/Cargo.lock ./
 RUN mkdir src && echo 'fn main() {}' > src/main.rs && cargo build --release --locked && rm -rf src
-COPY src ./src
+COPY server/src ./src
 RUN touch src/main.rs && cargo build --release --locked
 
 FROM debian:trixie-slim
-# Certificats : le serveur télécharge en HTTPS (SNCF, OpenStreetMap, relief).
+# Certificats : le serveur télécharge en HTTPS (SNCF, OpenStreetMap, relief…).
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates \
     && rm -rf /var/lib/apt/lists/*
 COPY --from=build /src/target/release/carte-vivante-serveur /usr/local/bin/carte-vivante-serveur
+COPY --from=web /web/dist /web
 ENV HOST=0.0.0.0 \
     PORT=8787 \
     DATA_DIR=/data \
     ARCHIVE_DIR=/archive \
+    WEB_DIR=/web \
     RUST_LOG=info,tower_http=warn
 EXPOSE 8787
 # Jamais en administrateur : l'utilisateur est choisi par compose.yaml (celui qui possède les dossiers).

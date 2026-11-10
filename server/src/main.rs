@@ -41,6 +41,8 @@ struct Config {
     port: u16,
     data_dir: PathBuf,
     archive_dir: Option<PathBuf>,
+    /// Le site construit (`pnpm build` dans web/), servi à la racine ; absent = API seule.
+    web_dir: Option<PathBuf>,
 }
 
 impl Config {
@@ -51,6 +53,8 @@ impl Config {
             port: var("PORT").map(|p| p.parse()).transpose().context("PORT invalide")?.unwrap_or(8787),
             data_dir: var("DATA_DIR").map(PathBuf::from).unwrap_or_else(|| PathBuf::from("../data")),
             archive_dir: var("ARCHIVE_DIR").map(PathBuf::from),
+            web_dir: Some(var("WEB_DIR").map_or_else(|| PathBuf::from("../web/dist"), PathBuf::from))
+                .filter(|dir| dir.join("index.html").is_file()),
         })
     }
 }
@@ -82,10 +86,14 @@ async fn main() -> Result<()> {
     tokio::spawn(ships::poll_forever(state.clone()));
     tokio::spawn(satellites::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
 
+    match &config.web_dir {
+        Some(dir) => info!(dossier = %dir.display(), "site servi à la racine"),
+        None => info!("pas de site construit (pnpm build dans web/) : API seule"),
+    }
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;
     info!("serveur prêt sur http://{address}");
-    axum::serve(listener, api::router(state)).with_graceful_shutdown(shutdown_signal()).await?;
+    axum::serve(listener, api::router(state, config.web_dir.as_deref())).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 

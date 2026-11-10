@@ -1,4 +1,4 @@
-# Le serveur de la carte vivante, en service permanent (serveur maison).
+# La carte vivante (serveur et site), en service permanent (serveur maison).
 #
 #   docker compose up -d --build      installer ou mettre à jour
 #   docker compose logs -f            suivre les journaux
@@ -13,7 +13,10 @@ name: carte-vivante
 
 services:
   serveur:
-    build: ./server
+    # Contexte : la racine du dépôt (le site et le serveur sont construits ensemble).
+    build:
+      context: .
+      dockerfile: server/Dockerfile
     image: carte-vivante-serveur
     restart: unless-stopped
     user: "${RUN_AS:-1000:1000}"

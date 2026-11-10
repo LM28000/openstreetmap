@@ -382,13 +382,23 @@ function describeReached(data: IsochroneData, station: Reached, time: number): I
   const journey = journeyOf(data, station);
   const realtime = data.realtime && isLiveTime(time);
   const arrival = data.query.departure + station.seconds;
+  // Le temps compté depuis l'heure de la frise inclut l'attente du premier train : une fois
+  // l'itinéraire connu, on montre le temps passé en train et l'attente à part.
+  const legs = journey !== 'chargement' && journey !== 'erreur' ? journey.legs : undefined;
+  const firstDeparture = legs?.[0]?.departure;
+  const wait = firstDeparture === undefined ? 0 : firstDeparture - data.query.departure;
+  const fields: Array<[string, string]> =
+    firstDeparture !== undefined && wait >= 5 * 60 ? [['Attente du premier train', `${formatDuration(wait)} (départ à ${hhmm(firstDeparture)})`]] : [];
   return {
     kind: 'Gare · isochrone',
     title: station.name,
-    subtitle: origin ? `depuis ${origin.name}, départ à ${hhmm(data.query.departure)}` : undefined,
+    subtitle: origin ? `depuis ${origin.name}, en partant à ${hhmm(data.query.departure)}` : undefined,
     status: realtime ? { tone: 'live', text: 'Retards en direct pris en compte' } : { tone: 'scheduled', text: 'Horaires théoriques' },
+    fields,
     figures: [
-      { value: formatDuration(station.seconds), label: 'de trajet' },
+      firstDeparture !== undefined
+        ? { value: formatDuration(arrival - firstDeparture), label: 'en train' }
+        : { value: formatDuration(station.seconds), label: `depuis ${hhmm(data.query.departure)}` },
       { value: String(station.transfers), label: station.transfers > 1 ? 'correspondances' : 'correspondance' },
       { value: hhmm(arrival), label: 'arrivée' },
     ],

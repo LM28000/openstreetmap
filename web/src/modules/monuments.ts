@@ -52,6 +52,11 @@ type Row = [string, number, number, number, number, string, string, string, stri
 
 const isClassed = (m: Monument) => m.prot === 1 || m.prot === 3;
 const isPartial = (m: Monument) => m.prot >= 2;
+/**
+ * Priorité au désencombrement (plus petit = gardé) : les classés, puis les classés en partie, puis les inscrits ;
+ * à protection égale, le plus anciennement protégé, souvent le plus célèbre (Notre-Dame de Paris : 1862).
+ */
+const priority = (m: Monument) => (isClassed(m) ? 0 : 20_000) + (isPartial(m) ? 10_000 : 0) + (Number(m.date.slice(0, 4)) || 9999);
 
 /** Catégories d'affichage : le nom, et le tracé du pictogramme (voir `drawGlyph`). */
 const CATEGORIES = [
@@ -280,7 +285,7 @@ let sparseCache: { list: Monument[]; band: number; items: Monument[] } | undefin
 function sparse(list: Monument[], zoom: number): Monument[] {
   const band = zoomBand(zoom);
   if (sparseCache?.list !== list || sparseCache.band !== band) {
-    const items = declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: (m) => (isClassed(m) ? 0 : 1), box: { width: 9, height: 9 } });
+    const items = declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: priority, box: { width: 9, height: 9 } });
     items.sort((a, b) => Number(isClassed(a)) - Number(isClassed(b)));
     sparseCache = { list, band, items };
   }
@@ -292,7 +297,7 @@ let iconCache: { list: Monument[]; band: number; items: Monument[] } | undefined
 function spacedIcons(list: Monument[], zoom: number): Monument[] {
   const band = zoomBand(zoom);
   if (iconCache?.list !== list || iconCache.band !== band) {
-    const items = declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: (m) => (isClassed(m) ? 0 : 1), box: { width: 23, height: 23 } });
+    const items = declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: priority, box: { width: 23, height: 23 } });
     items.sort((a, b) => Number(isClassed(a)) - Number(isClassed(b)));
     iconCache = { list, band, items };
   }
@@ -303,7 +308,7 @@ let labelCache: { list: Monument[]; band: number; items: Monument[] } | undefine
 function labelled(list: Monument[], zoom: number): Monument[] {
   const band = zoomBand(zoom);
   if (labelCache?.list !== list || labelCache.band !== band) {
-    labelCache = { list, band, items: declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: (m) => (isClassed(m) ? 0 : 1), box: LABEL_BOX }) };
+    labelCache = { list, band, items: declutter(list, zoom, { lon: (m) => m.lon, lat: (m) => m.lat, rank: priority, box: LABEL_BOX }) };
   }
   return labelCache.items;
 }

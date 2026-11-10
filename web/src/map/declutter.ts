@@ -2,7 +2,8 @@
  * Désencombrement d'étiquettes, sans dépendre de l'écran.
  *
  * La carte est découpée en cases de la taille d'une étiquette au zoom affiché ;
- * dans chaque case, on ne garde que l'objet prioritaire (le plus petit `rank`).
+ * dans chaque case, on ne garde que l'objet prioritaire (le plus petit `rank`), puis on
+ * écarte ceux qui touchent encore un voisin mieux placé, de l'autre côté d'un bord de case.
  * Le calcul est refait seulement quand on change de demi-niveau de zoom.
  *
  * (Le filtre de collision de deck.gl, fait sur la carte graphique, masque toutes
@@ -35,13 +36,52 @@ export function declutter<T>(items: readonly T[], zoom: number, options: Declutt
   const metersPerPixel = (156_543.03 * COS_LAT) / 2 ** zoomBand(zoom);
   const cellWidth = options.box.width * metersPerPixel;
   const cellHeight = options.box.height * metersPerPixel;
-  const best = new Map<string, T>();
-  for (const item of items) {
-    const x = Math.floor((options.lon(item) * 111_320 * COS_LAT) / cellWidth);
-    const y = Math.floor((options.lat(item) * 110_540) / cellHeight);
-    const key = `${x}:${y}`;
-    const current = best.get(key);
-    if (!current || options.rank(item) < options.rank(current)) best.set(key, item);
+  // 1re passe : dans chaque case, l'objet prioritaire.
+  interface Winner {
+    item: T;
+    rank: number;
+    /** Position en mètres (projection simple, suffisante à l'échelle d'une étiquette). */
+    x: number;
+    y: number;
+    /** Case de la grille. */
+    cx: number;
+    cy: number;
   }
-  return [...best.values()];
+  const best = new Map<string, Winner>();
+  for (const item of items) {
+    const x = options.lon(item) * 111_320 * COS_LAT;
+    const y = options.lat(item) * 110_540;
+    const cx = Math.floor(x / cellWidth);
+    const cy = Math.floor(y / cellHeight);
+    const key = `${cx}:${cy}`;
+    const rank = options.rank(item);
+    const current = best.get(key);
+    if (!current || rank < current.rank) best.set(key, { item, rank, x, y, cx, cy });
+  }
+  // 2e passe : deux gagnants de cases voisines peuvent encore se chevaucher (tous deux près du bord commun).
+  // Dans l'ordre des priorités, on écarte celui dont la boîte touche celle d'un voisin déjà gardé. Une boîte
+  // fait la taille d'une case : seules les 8 cases voisines peuvent en contenir une qui la touche.
+  const winners = [...best.values()].sort((a, b) => a.rank - b.rank);
+  const kept = new Map<string, Winner[]>();
+  const result: T[] = [];
+  for (const w of winners) {
+    let clash = false;
+    for (let dx = -1; dx <= 1 && !clash; dx++) {
+      for (let dy = -1; dy <= 1 && !clash; dy++) {
+        for (const k of kept.get(`${w.cx + dx}:${w.cy + dy}`) ?? []) {
+          if (Math.abs(k.x - w.x) < cellWidth && Math.abs(k.y - w.y) < cellHeight) {
+            clash = true;
+            break;
+          }
+        }
+      }
+    }
+    if (clash) continue;
+    const key = `${w.cx}:${w.cy}`;
+    const list = kept.get(key);
+    if (list) list.push(w);
+    else kept.set(key, [w]);
+    result.push(w.item);
+  }
+  return result;
 }

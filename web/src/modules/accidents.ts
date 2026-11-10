@@ -153,9 +153,10 @@ function grid(data: AccidentsData, indices: Uint32Array, zoom: number, terrain: 
   const list = [...cells.values()];
   // Les colonnes partent du relief (au plus 4 000 cases : chaque altitude demandée à la carte coûte du temps).
   if (list.length <= 4000) for (const cell of list) cell.z = terrain.elevation(cell.lon, cell.lat);
-  // Hauteur : la case « pleine » est la 95e plus chargée (une seule case, Paris, écraserait toutes les autres).
+  // Hauteur : la case « pleine » est celle du 99,5e centile, pour que les très grandes villes (Paris, Lyon, Marseille)
+  // dépassent un peu sans écraser les autres. Au 95e centile, presque toutes les cases plafonnaient : un tapis uniforme.
   const counts = list.map((c) => c.n).sort((a, b) => a - b);
-  const max = Math.max(1, counts[Math.floor(counts.length * 0.95)] ?? 1);
+  const max = Math.max(1, counts[Math.floor(counts.length * 0.995)] ?? 1);
   // Teinte : quatre classes de même effectif parmi les cases d'au moins 3 accidents (une case de 1 accident
   // serait à 0 % ou à 100 %) ; la part nationale est d'environ 40 %, mais elle varie du simple au double d'une zone à l'autre.
   const shares = list.filter((c) => c.n >= 3).map(share).sort((a, b) => a - b);
@@ -320,8 +321,11 @@ export const accidents = defineModule<AccidentsData>({
       const { cells, size, max, limits } = grid(data, indices, view.zoom, terrain);
       const shareClass = (cell: Cell) => limits.filter((limit) => share(cell) >= limit).length;
       const columns = settings.forme !== 'aplat';
-      // Hauteur : racine du nombre d'accidents, pour que les petites cases restent visibles ; plafonnée à une case et demie de haut.
-      const height = (cell: Cell) => Math.min(1, Math.sqrt(cell.n / max));
+      // Hauteur proportionnelle au nombre d'accidents (une colonne deux fois plus haute = deux fois plus d'accidents),
+      // avec un socle minimal pour que les cases d'un seul accident restent visibles, et un plafond à 1,25 pour les
+      // quelques cases au-delà du 99,5e centile. À plat, l'opacité suit la racine : les petites cases restent lisibles.
+      const height = (cell: Cell) => Math.max(0.03, Math.min(1.25, cell.n / max));
+      const alpha = (cell: Cell) => Math.min(1, Math.sqrt(cell.n / max));
       return [
         new GridCellLayer<Cell>({
           id: 'accidents/grille',
@@ -330,9 +334,9 @@ export const accidents = defineModule<AccidentsData>({
           cellSize: size,
           coverage: columns ? 0.86 : 1,
           extruded: columns,
-          elevationScale: size * 1.6,
+          elevationScale: size * 5,
           getElevation: height,
-          getFillColor: (c) => [...SEVERITIES[shareClass(c)]!.color, columns ? 245 : 170 + Math.round(70 * height(c))],
+          getFillColor: (c) => [...SEVERITIES[shareClass(c)]!.color, columns ? 245 : 170 + Math.round(70 * alpha(c))],
           // Des colonnes : le test de profondeur remet les plus proches devant. À plat : au-dessus du fond, sans test.
           parameters: columns ? { depthCompare: 'less-equal', depthWriteEnabled: true, cullMode: 'back' } : OVER_MAP,
           material: columns ? { ambient: 0.7, diffuse: 0.5, shininess: 18, specularColor: [50, 50, 50] } : false,

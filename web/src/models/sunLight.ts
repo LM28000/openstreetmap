@@ -14,7 +14,8 @@ type Rgb = [number, number, number];
 
 const DAY: Rgb = [255, 255, 255];
 const DUSK: Rgb = [255, 196, 140];
-const MOON: Rgb = [170, 180, 205];
+/** Clair de lune presque neutre : bleuté, il éteindrait le rouge et l'orange (TGV, cargos). */
+const MOON: Rgb = [188, 194, 210];
 
 const mix = (a: Rgb, b: Rgb, t: number): Rgb => a.map((v, i) => Math.round(v + (b[i]! - v) * t)) as Rgb;
 const clamp01 = (v: number) => Math.min(1, Math.max(0, v));
@@ -45,8 +46,8 @@ export function sunEffects(lat: number, lon: number, time: number, followSun = t
 
   const effects = [
     new LightingEffect({
-      ambient: new AmbientLight({ color: mix(MOON, DAY, day), intensity: 0.8 + 0.25 * day }),
-      sun: new DirectionalLight({ color, intensity: 0.45 + 0.6 * day, direction }),
+      ambient: new AmbientLight({ color: mix(MOON, DAY, day), intensity: 1.0 + 0.13 * day }),
+      sun: new DirectionalLight({ color, intensity: 0.35 + 0.4 * day, direction }),
       // Lumière d'appoint, à l'opposé et faible : les faces à l'ombre ne tombent pas dans le noir.
       fill: new DirectionalLight({ color: [200, 208, 225], intensity: 0.25, direction: [-direction[0], -direction[1], -0.6] }),
     }),

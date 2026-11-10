@@ -16,8 +16,12 @@ export const MESH_PARAMETERS = {
   cullMode: 'none',
 } as const;
 
-/** Matière : un peu de brillance, assez d'ambiance pour que la face à l'ombre garde sa couleur. */
-export const MESH_MATERIAL = { ambient: 0.42, diffuse: 0.62, shininess: 24, specularColor: [38, 38, 38] as [number, number, number] };
+/**
+ * Matière : beaucoup d'ambiance, pour que la couleur de la donnée reste reconnaissable sur toutes
+ * les faces (à l'ombre, environ 70 % de la couleur le jour et 60 % la nuit ; au soleil, la couleur
+ * pleine), et un peu de brillance.
+ */
+export const MESH_MATERIAL = { ambient: 0.62, diffuse: 0.5, shininess: 24, specularColor: [34, 34, 34] as [number, number, number] };
 
 /** Réglage « Rendu » commun aux couches de véhicules. */
 export const RENDER_SETTING = {

@@ -1,6 +1,8 @@
 //! API HTTP.
 //!
 //! - `GET /api/health` : état du serveur (horaires chargés, fraîcheur du temps réel).
+//! - `GET /api/velos` : stations de vélos en libre-service de France, avec vélos et places disponibles.
+//! - `GET /api/feux` : feux détectés par satellite sur 7 jours.
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
 //!   navigateur calcule lui-même la position de chaque train à chaque image.
@@ -31,6 +33,8 @@ pub fn router(state: AppState) -> Router {
     Router::new()
         .route("/api/health", get(health))
         .route("/api/trains", get(trains))
+        .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
+        .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -229,6 +233,14 @@ fn encode_value(value: i64, out: &mut String) {
     out.push(char::from((v + 63) as u8));
 }
 
+
+/// Réponse préparée par un collecteur, ou 503 tant que la première collecte n'est pas finie.
+fn prepared(body: Option<std::sync::Arc<Vec<u8>>>, what: &str) -> axum::response::Response {
+    match body {
+        Some(body) => ([(header::CONTENT_TYPE, "application/json")], body.as_ref().clone()).into_response(),
+        None => (StatusCode::SERVICE_UNAVAILABLE, format!("{what} : première collecte en cours")).into_response(),
+    }
+}
 
 async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
     let timetable = state.timetable();

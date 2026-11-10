@@ -20,6 +20,9 @@ struct Inner {
     realtime: RwLock<Option<Arc<Realtime>>>,
     tracks: RwLock<Option<Arc<Tracks>>>,
     timetable_changed: Notify,
+    /// Réponses JSON prêtes à servir, préparées par les collecteurs.
+    bikes: RwLock<Option<Arc<Vec<u8>>>>,
+    fires: RwLock<Option<Arc<Vec<u8>>>>,
 }
 
 impl AppState {
@@ -29,6 +32,8 @@ impl AppState {
             realtime: RwLock::new(None),
             tracks: RwLock::new(None),
             timetable_changed: Notify::new(),
+            bikes: RwLock::new(None),
+            fires: RwLock::new(None),
         }))
     }
 
@@ -62,5 +67,21 @@ impl AppState {
 
     pub fn set_tracks(&self, tracks: Tracks) {
         *self.0.tracks.write().expect("verrou des tracés") = Some(Arc::new(tracks));
+    }
+
+    pub fn bikes(&self) -> Option<Arc<Vec<u8>>> {
+        self.0.bikes.read().expect("verrou des vélos").clone()
+    }
+
+    pub fn set_bikes(&self, body: Vec<u8>) {
+        *self.0.bikes.write().expect("verrou des vélos") = Some(Arc::new(body));
+    }
+
+    pub fn fires(&self) -> Option<Arc<Vec<u8>>> {
+        self.0.fires.read().expect("verrou des feux").clone()
+    }
+
+    pub fn set_fires(&self, body: Vec<u8>) {
+        *self.0.fires.write().expect("verrou des feux") = Some(Arc::new(body));
     }
 }

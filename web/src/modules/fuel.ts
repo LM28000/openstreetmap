@@ -12,6 +12,7 @@
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
+import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
 
 const EXPORT_URL =
@@ -77,8 +78,6 @@ const RING: Color = [22, 26, 38, 210];
 const LABEL_MIN_ZOOM = 11;
 /** Encombrement d'une étiquette à l'écran (avec un peu d'air), en pixels. */
 const LABEL_BOX_PX = { width: 74, height: 28 };
-/** Le désencombrement est recalculé à chaque demi-niveau de zoom. */
-const LABEL_ZOOM_BREAKS = Array.from({ length: 13 }, (_, i) => LABEL_MIN_ZOOM + i / 2);
 /** Seuls caractères des étiquettes : deck.gl ne prépare que ceux-là. */
 const LABEL_CHARACTERS = '0123456789, €';
 const shortEuros = (price: number) => `${price.toFixed(3).replace('.', ',')} €`;
@@ -156,31 +155,21 @@ function recentPrice(station: Station, fuel: FuelId): number | undefined {
 
 const fuelLabel = (id: string) => FUELS.find((f) => f.id === id)?.label ?? id;
 
-/**
- * Désencombrement des étiquettes : la carte est découpée en cases de la taille d'une
- * étiquette au zoom affiché, et on garde la station la moins chère de chaque case.
- * Calcul sur le processeur, refait seulement quand on change de demi-niveau de zoom.
- */
+/** Étiquettes gardées après désencombrement : la station la moins chère de chaque case l'emporte. */
 let labelCache: { data: FuelData; fuel: FuelId; band: number; stations: Station[] } | undefined;
 
 function labelledStations(data: FuelData, priced: Station[], fuel: FuelId, zoom: number): Station[] {
-  const band = Math.floor(zoom * 2) / 2;
-  if (labelCache?.data === data && labelCache.fuel === fuel && labelCache.band === band) return labelCache.stations;
-  // Mètres par pixel à la latitude moyenne de la France, au zoom de la case.
-  const metersPerPixel = (156_543.03 * Math.cos((46.5 * Math.PI) / 180)) / 2 ** band;
-  const cellWidth = LABEL_BOX_PX.width * metersPerPixel;
-  const cellHeight = LABEL_BOX_PX.height * metersPerPixel;
-  const best = new Map<string, Station>();
-  for (const station of priced) {
-    const x = Math.floor((station.lon * 111_320 * Math.cos((46.5 * Math.PI) / 180)) / cellWidth);
-    const y = Math.floor((station.lat * 110_540) / cellHeight);
-    const key = `${x}:${y}`;
-    const current = best.get(key);
-    if (!current || recentPrice(station, fuel)! < recentPrice(current, fuel)!) best.set(key, station);
+  const band = zoomBand(zoom);
+  if (labelCache?.data !== data || labelCache.fuel !== fuel || labelCache.band !== band) {
+    const stations = declutter(priced, zoom, {
+      lon: (s) => s.lon,
+      lat: (s) => s.lat,
+      rank: (s) => recentPrice(s, fuel)!,
+      box: LABEL_BOX_PX,
+    });
+    labelCache = { data, fuel, band, stations };
   }
-  const stations = [...best.values()];
-  labelCache = { data, fuel, band, stations };
-  return stations;
+  return labelCache.stations;
 }
 
 export const fuel = defineModule<FuelData>({
@@ -191,7 +180,7 @@ export const fuel = defineModule<FuelData>({
   attribution: 'prix-carburants.gouv.fr (licence ouverte)',
   refreshIntervalMs: 10 * 60_000,
   timeStepMs: 3_600_000, // pas d'historique : le dessin ne dépend pas de l'instant affiché
-  zoomBreaks: LABEL_ZOOM_BREAKS,
+  zoomBreaks: halfZoomBreaks(LABEL_MIN_ZOOM),
   followsTerrain: true, // posées sur le relief, sinon elles glissent sur les bords de l'écran
 
   settings: [

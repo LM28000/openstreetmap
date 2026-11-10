@@ -10,11 +10,11 @@
  * La base ne dit pas si une borne est libre en ce moment : la disponibilité en temps réel
  * existe dans la base nationale « dynamique », mais elle n'est pas reprise ici.
  */
-import type { Color } from '@deck.gl/core';
-import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { OVER_MAP } from '../map/parameters';
+import { HALO, ink, type IconSheet, KEY, packIcons, selectionRing, zoomRamp } from './symbols';
 
 export interface Station {
   id: string;
@@ -40,14 +40,86 @@ export interface ChargersData {
   updatedAt: number;
 }
 
-/** Quatre classes de puissance : une seule teinte (magenta), validée en clair et en sombre. */
-const CLASSES: Array<{ min: number; color: [number, number, number]; css: string; text: [number, number, number]; label: string }> = [
-  { min: 0, color: [255, 133, 199], css: '#ff85c7', text: [22, 26, 38], label: 'Jusqu’à 22 kW (normale)' },
-  { min: 22.5, color: [219, 95, 161], css: '#db5fa1', text: [22, 26, 38], label: '22 à 50 kW (accélérée)' },
-  { min: 50, color: [178, 57, 124], css: '#b2397c', text: [255, 255, 255], label: '50 à 150 kW (rapide)' },
-  { min: 150, color: [141, 14, 93], css: '#8d0e5d', text: [255, 255, 255], label: '150 kW et plus (ultra-rapide)' },
+/**
+ * Quatre classes de puissance : une seule teinte (turquoise), du clair (lent) au foncé
+ * (ultra-rapide). Rampe ordinale validée avec validate_palette.js (--ordinal), en clair sur
+ * le fond de la carte et en sombre sur le panneau (#0f121a) : une teinte, luminosité
+ * monotone, écarts d'au moins 0,06, extrémités à plus de 2:1 de leur fond. Elle évite
+ * le bleu (trains, pluie), l'orange (TGV), le vert (Intercités, vélos), le violet (avions)
+ * et le magenta (bus), que l'ancienne rampe rose confondait avec les bus de « Ma ville ».
+ * La taille du symbole double la couleur : plus la station est puissante, plus il est grand.
+ */
+const CLASSES: Array<{
+  min: number;
+  color: [number, number, number];
+  css: string;
+  text: [number, number, number];
+  glyph: string;
+  label: string;
+  /** Rayon du point vu de loin, et taille de l'icône vue de près (pixels). */
+  dot: number;
+  icon: number;
+}> = [
+  { min: 0, color: [92, 192, 208], css: '#5cc0d0', text: [22, 26, 38], glyph: '#141a26', label: 'Jusqu’à 22 kW (normale)', dot: 2.2, icon: 17 },
+  { min: 22.5, color: [43, 163, 184], css: '#2ba3b8', text: [22, 26, 38], glyph: '#141a26', label: '22 à 50 kW (accélérée)', dot: 3, icon: 20 },
+  { min: 50, color: [18, 130, 154], css: '#12829a', text: [255, 255, 255], glyph: '#ffffff', label: '50 à 150 kW (rapide)', dot: 4.2, icon: 24 },
+  { min: 150, color: [10, 99, 119], css: '#0a6377', text: [255, 255, 255], glyph: '#ffffff', label: '150 kW et plus (ultra-rapide)', dot: 5.6, icon: 29 },
 ];
-const RING: Color = [22, 26, 38, 220];
+/** À partir de ce zoom, chaque station porte le pictogramme d'une prise. */
+const PLUG_MIN_ZOOM = 13;
+
+// --- Pictogramme de prise ---
+
+const PLUG_SCALE = 1.2;
+const PLUG_BOX = 48;
+const PLUG_CELL = Math.ceil((PLUG_BOX + 2 + 2 * 2.4 + 1) * PLUG_SCALE);
+const plugKey = (cls: number) => `prise:${cls}`;
+
+let plugs: IconSheet | undefined;
+/** Les pictogrammes sont dessinés au premier usage (il faut un document pour créer un canvas). */
+function plugSheet(): IconSheet {
+  plugs ??= packIcons(
+    CLASSES.map((cls, index) => ({
+      key: plugKey(index),
+      width: PLUG_CELL,
+      height: PLUG_CELL,
+      draw(c: CanvasRenderingContext2D) {
+        c.translate(PLUG_CELL / 2, PLUG_CELL / 2);
+        c.scale(PLUG_SCALE, PLUG_SCALE);
+        ink(
+          c,
+          (k) => {
+            k.beginPath();
+            k.roundRect(-PLUG_BOX / 2, -PLUG_BOX / 2, PLUG_BOX, PLUG_BOX, 12);
+          },
+          cls.css,
+          { key: 2 },
+        );
+        // La prise : deux broches, le boîtier arrondi, le câble.
+        c.strokeStyle = cls.glyph;
+        c.lineWidth = 4;
+        c.lineCap = 'round';
+        c.lineJoin = 'round';
+        c.beginPath();
+        c.moveTo(-6, -14);
+        c.lineTo(-6, -4);
+        c.moveTo(6, -14);
+        c.lineTo(6, -4);
+        c.moveTo(-11, -4);
+        c.lineTo(11, -4);
+        c.lineTo(11, 2);
+        c.quadraticCurveTo(11, 10, 0, 10);
+        c.quadraticCurveTo(-11, 10, -11, 2);
+        c.closePath();
+        c.moveTo(0, 10);
+        c.lineTo(0, 17);
+        c.stroke();
+      },
+    })),
+  );
+  return plugs;
+}
+
 const LABEL_MIN_ZOOM = 12;
 const LABEL_BOX_PX = { width: 64, height: 26 };
 
@@ -152,27 +224,63 @@ export const chargers = defineModule<ChargersData>({
     const chosen = selection ? data.byId.get((selection as { id: string }).id) : undefined;
     const onGround = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
     const trigger = `${settings.puissance}|${settings.acces}`;
+    const plugged = view.zoom >= PLUG_MIN_ZOOM;
+    const dotScale = zoomRamp(view.zoom, 5, 10, 0.65, 1);
+    const dotRadius = (s: Station) => CLASSES[classOf(s.kw)]!.dot;
+    const iconSize = (s: Station) => CLASSES[classOf(s.kw)]!.icon;
+    const sheet = plugged ? plugSheet() : undefined;
     return [
-      new ScatterplotLayer<Station>({
-        id: 'bornes/stations',
-        data: list,
-        getPosition: onGround,
-        radiusUnits: 'meters',
-        getRadius: 150,
-        radiusMinPixels: 2,
-        radiusMaxPixels: 8,
-        getFillColor: (s) => CLASSES[classOf(s.kw)]!.color,
-        stroked: true,
-        getLineColor: RING,
-        lineWidthUnits: 'pixels',
-        getLineWidth: 0.8,
-        billboard: true,
-        pickable: true,
-        autoHighlight: view.zoom < LABEL_MIN_ZOOM,
-        highlightColor: [255, 255, 255, 160],
-        updateTriggers: { getPosition: terrain.version, getFillColor: trigger },
-        parameters: OVER_MAP,
-      }),
+      // De loin : un point par station, plus gros quand elle est plus puissante ; le halo clair dès qu'il se voit.
+      !plugged &&
+        view.zoom >= 9 &&
+        new ScatterplotLayer<Station>({
+          id: 'bornes/halo',
+          data: list,
+          getPosition: onGround,
+          radiusUnits: 'pixels',
+          getRadius: (s) => dotRadius(s) + 1.6,
+          radiusScale: dotScale,
+          getFillColor: HALO,
+          billboard: true,
+          updateTriggers: { getPosition: terrain.version },
+          parameters: OVER_MAP,
+        }),
+      !plugged &&
+        new ScatterplotLayer<Station>({
+          id: 'bornes/stations',
+          data: list,
+          getPosition: onGround,
+          radiusUnits: 'pixels',
+          getRadius: dotRadius,
+          radiusScale: dotScale,
+          getFillColor: (s) => CLASSES[classOf(s.kw)]!.color,
+          stroked: true,
+          getLineColor: KEY,
+          lineWidthUnits: 'pixels',
+          getLineWidth: 0.8,
+          billboard: true,
+          pickable: true,
+          autoHighlight: view.zoom < LABEL_MIN_ZOOM,
+          highlightColor: [255, 255, 255, 160],
+          updateTriggers: { getPosition: terrain.version, getFillColor: trigger },
+          parameters: OVER_MAP,
+        }),
+      // De près : le pictogramme d'une prise, à la couleur et à la taille de la classe.
+      sheet &&
+        new IconLayer<Station>({
+          id: 'bornes/prises',
+          data: list,
+          iconAtlas: sheet.atlas,
+          iconMapping: sheet.mapping,
+          getIcon: (s) => plugKey(classOf(s.kw)),
+          getPosition: onGround,
+          sizeUnits: 'pixels',
+          getSize: iconSize,
+          billboard: true,
+          pickable: true,
+          updateTriggers: { getPosition: terrain.version },
+          parameters: OVER_MAP,
+        }),
       view.zoom >= LABEL_MIN_ZOOM &&
         new TextLayer<Station>({
           id: 'bornes/puissance',
@@ -184,34 +292,22 @@ export const chargers = defineModule<ChargersData>({
           fontWeight: 700,
           getSize: 12,
           getColor: (s) => CLASSES[classOf(s.kw)]!.text,
-          getTextAnchor: 'middle',
+          // À droite du symbole, pour ne pas le cacher.
+          getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
+          getPixelOffset: (s) => [(plugged ? iconSize(s) : dotRadius(s) * 2) / 2 + 3, 0],
           background: true,
           getBackgroundColor: (s) => [...CLASSES[classOf(s.kw)]!.color, 245],
-          getBorderColor: [22, 26, 38, 150],
+          getBorderColor: [20, 26, 38, 170],
           getBorderWidth: 1,
           backgroundBorderRadius: 9,
           backgroundPadding: [6, 3],
           billboard: true,
           pickable: true,
-          updateTriggers: { getPosition: terrain.version },
+          updateTriggers: { getPosition: terrain.version, getPixelOffset: plugged },
           parameters: OVER_MAP,
         }),
-      chosen &&
-        new ScatterplotLayer<Station>({
-          id: 'bornes/choisie',
-          data: [chosen],
-          getPosition: onGround,
-          radiusUnits: 'pixels',
-          getRadius: 12,
-          filled: false,
-          stroked: true,
-          getLineColor: [79, 140, 255],
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
-          billboard: true,
-          parameters: OVER_MAP,
-        }),
+      chosen && selectionRing('bornes/choisie', [chosen], onGround, (s) => (plugged ? iconSize(s) * 0.62 : dotRadius(s) + 8), OVER_MAP),
     ];
   },
 

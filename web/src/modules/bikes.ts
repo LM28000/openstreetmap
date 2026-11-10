@@ -10,11 +10,12 @@
  * station hors service est un simple anneau, pour ne pas reposer sur la couleur.
  */
 import type { Color } from '@deck.gl/core';
-import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
+import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { formatRelative } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
+import { HALO, ink, type IconSheet, KEY, packIcons, selectionRing, zoomRamp } from './symbols';
 
 interface ApiStation {
   network: number;
@@ -54,9 +55,10 @@ const LEVELS: Record<Level, { color: [number, number, number]; css: string; text
   beaucoup: { color: [10, 69, 53], css: '#0a4535', text: [255, 255, 255] },
 };
 const LEVEL_ORDER: Level[] = ['beaucoup', 'quelques', 'peu', 'aucun'];
-const RING: Color = [22, 26, 38, 210];
 const OUT_OF_SERVICE: Color = [120, 124, 134, 230];
 const LABEL_MIN_ZOOM = 14;
+/** À partir de ce zoom, chaque station est une jauge ; avant, un simple point. */
+const GAUGE_MIN_ZOOM = 12;
 const LABEL_BOX_PX = { width: 40, height: 26 };
 
 function count(station: Station, mode: Mode): number {
@@ -82,6 +84,94 @@ function legendLabel(level: Level, mode: Mode): string {
     case 'beaucoup':
       return `6 ${unit}s ou plus`;
   }
+}
+
+
+// --- Jauge : la part de vélos (ou de places) disponibles, en anneau ---
+
+/** Nombre de crans de la jauge : un cran vaut 1/12 de tour. */
+const GAUGE_STEPS = 12;
+const GAUGE_SCALE = 1.4;
+/** Rayons de la planche (en u) : disque blanc, jauge colorée, trou central. */
+const GAUGE_R = { disc: 26, fill: 22, hole: 11 };
+const GAUGE_CELL = Math.ceil((2 * (GAUGE_R.disc + 1 + 2.4) + 1) * GAUGE_SCALE);
+const gaugeKey = (level: Level, step: number) => `jauge:${level}:${step}`;
+const OUT_OF_SERVICE_KEY = 'jauge:hors-service';
+
+let gauges: IconSheet | undefined;
+/** Les jauges sont dessinées au premier usage (il faut un document pour créer un canvas). */
+function gaugeSheet(): IconSheet {
+  if (gauges) return gauges;
+  const cells: Parameters<typeof packIcons>[0][number][] = [];
+  const disc = (c: CanvasRenderingContext2D) => {
+    c.beginPath();
+    c.arc(0, 0, GAUGE_R.disc, 0, Math.PI * 2);
+  };
+  const hole = (c: CanvasRenderingContext2D) => {
+    c.beginPath();
+    c.arc(0, 0, GAUGE_R.hole, 0, Math.PI * 2);
+  };
+  const frame = (draw: (c: CanvasRenderingContext2D) => void) => (c: CanvasRenderingContext2D) => {
+    c.translate(GAUGE_CELL / 2, GAUGE_CELL / 2);
+    c.scale(GAUGE_SCALE, GAUGE_SCALE);
+    draw(c);
+  };
+  const add = (key: string, level: Level, step: number) =>
+    cells.push({
+      key,
+      width: GAUGE_CELL,
+      height: GAUGE_CELL,
+      draw: frame((c) => {
+        ink(c, disc, '#ffffff', { key: 2 });
+        if (step > 0) {
+          c.beginPath();
+          c.moveTo(0, 0);
+          c.arc(0, 0, GAUGE_R.fill, -Math.PI / 2, -Math.PI / 2 + (Math.PI * 2 * step) / GAUGE_STEPS);
+          c.closePath();
+          c.fillStyle = LEVELS[level].css;
+          c.fill();
+        }
+        ink(c, hole, '#ffffff', { key: 1.4, noHalo: true });
+      }),
+    });
+  add(gaugeKey('aucun', 0), 'aucun', 0);
+  for (const level of ['peu', 'quelques', 'beaucoup'] as const) {
+    for (let step = 1; step <= GAUGE_STEPS; step++) add(gaugeKey(level, step), level, step);
+  }
+  // Hors service : un anneau gris, sans remplissage.
+  cells.push({
+    key: OUT_OF_SERVICE_KEY,
+    width: GAUGE_CELL,
+    height: GAUGE_CELL,
+    draw: frame((c) => {
+      c.beginPath();
+      c.arc(0, 0, GAUGE_R.fill, 0, Math.PI * 2);
+      c.strokeStyle = 'rgba(255,255,255,0.93)';
+      c.lineWidth = 8;
+      c.stroke();
+      c.strokeStyle = '#787c86';
+      c.lineWidth = 3.5;
+      c.stroke();
+    }),
+  });
+  gauges = packIcons(cells);
+  return gauges;
+}
+
+/** Part du compte affiché (vélos ou places) parmi les vélos et les places de la station. */
+function share(station: Station, mode: Mode): number {
+  const total = station.bikes + station.docks;
+  const whole = total > 0 ? total : (station.capacity ?? 0);
+  return whole > 0 ? Math.min(1, count(station, mode) / whole) : 0;
+}
+
+function gaugeIcon(station: Station, mode: Mode): string {
+  if (!station.renting) return OUT_OF_SERVICE_KEY;
+  const n = count(station, mode);
+  if (n === 0) return gaugeKey('aucun', 0);
+  // Au moins un cran dès qu'il y en a un : une station presque vide n'est pas une station vide.
+  const step = Math.max(1, Math.round(share(station, mode) * GAUGE_STEPS));
+  return gaugeKey(levelOf(n), step);
 }
 
 async function loadBikes(signal: AbortSignal): Promise<BikesData> {
@@ -123,7 +213,7 @@ export const bikes = defineModule<BikesData>({
   attribution: 'réseaux de vélos (GBFS) via transport.data.gouv.fr',
   refreshIntervalMs: 60_000,
   timeStepMs: 3_600_000, // état du moment : ne dépend pas de l'instant affiché
-  zoomBreaks: halfZoomBreaks(LABEL_MIN_ZOOM),
+  zoomBreaks: halfZoomBreaks(GAUGE_MIN_ZOOM),
   followsTerrain: true,
 
   settings: [
@@ -162,28 +252,67 @@ export const bikes = defineModule<BikesData>({
     const parameters = OVER_MAP;
     const showLabels = view.zoom >= LABEL_MIN_ZOOM;
 
+    const gaugeLayers = view.zoom >= GAUGE_MIN_ZOOM;
+    const gaugeSize = zoomRamp(view.zoom, GAUGE_MIN_ZOOM, 15, 20, 32);
+    const sheet = gaugeLayers ? gaugeSheet() : undefined;
+
     return [
-      new ScatterplotLayer<Station>({
-        id: 'velos/stations',
-        data: data.stations,
-        getPosition: onGround,
-        radiusUnits: 'meters',
-        getRadius: 40,
-        radiusMinPixels: 2.5,
-        radiusMaxPixels: 9,
-        // Hors service : un anneau gris, sans remplissage.
-        getFillColor: (s) => (s.renting ? LEVELS[levelOf(count(s, mode))].color : [0, 0, 0, 0]),
-        stroked: true,
-        getLineColor: (s) => (s.renting ? RING : OUT_OF_SERVICE),
-        lineWidthUnits: 'pixels',
-        getLineWidth: (s) => (s.renting ? 1 : 2),
-        billboard: true,
-        pickable: true,
-        autoHighlight: !showLabels,
-        highlightColor: [255, 255, 255, 160],
-        updateTriggers: { getFillColor: mode, getPosition: terrain.version },
-        parameters,
-      }),
+      // De loin : un point par station (couleur du niveau, contour sombre), avec un halo clair dès qu'il se voit.
+      !gaugeLayers &&
+        view.zoom >= 10 &&
+        new ScatterplotLayer<Station>({
+          id: 'velos/stations-halo',
+          data: data.stations,
+          getPosition: onGround,
+          radiusUnits: 'meters',
+          getRadius: 40,
+          radiusMinPixels: 4.2,
+          radiusMaxPixels: 11,
+          getFillColor: HALO,
+          billboard: true,
+          updateTriggers: { getPosition: terrain.version },
+          parameters,
+        }),
+      !gaugeLayers &&
+        new ScatterplotLayer<Station>({
+          id: 'velos/stations',
+          data: data.stations,
+          getPosition: onGround,
+          radiusUnits: 'meters',
+          getRadius: 40,
+          radiusMinPixels: 2.5,
+          radiusMaxPixels: 9,
+          // Hors service : un anneau gris, sans remplissage.
+          getFillColor: (s) => (s.renting ? LEVELS[levelOf(count(s, mode))].color : [0, 0, 0, 0]),
+          stroked: true,
+          getLineColor: (s) => (s.renting ? KEY : OUT_OF_SERVICE),
+          lineWidthUnits: 'pixels',
+          getLineWidth: (s) => (s.renting ? 1 : 2),
+          billboard: true,
+          pickable: true,
+          autoHighlight: true,
+          highlightColor: [255, 255, 255, 160],
+          updateTriggers: { getFillColor: mode, getPosition: terrain.version },
+          parameters,
+        }),
+      // De près : la jauge de vélos disponibles.
+      sheet &&
+        new IconLayer<Station>({
+          id: 'velos/jauges',
+          data: data.stations,
+          iconAtlas: sheet.atlas,
+          iconMapping: sheet.mapping,
+          getIcon: (s) => gaugeIcon(s, mode),
+          getPosition: onGround,
+          sizeUnits: 'pixels',
+          getSize: gaugeSize,
+          billboard: true,
+          pickable: true,
+          autoHighlight: !showLabels,
+          highlightColor: [255, 255, 255, 120],
+          updateTriggers: { getIcon: mode, getPosition: terrain.version },
+          parameters,
+        }),
       showLabels &&
         new TextLayer<Station>({
           id: 'velos/nombres',
@@ -195,11 +324,13 @@ export const bikes = defineModule<BikesData>({
           fontWeight: 700,
           getSize: 12.5,
           getColor: (s) => LEVELS[levelOf(count(s, mode))].text,
-          getTextAnchor: 'middle',
+          // À droite de la jauge, pour ne pas la cacher.
+          getTextAnchor: 'start',
           getAlignmentBaseline: 'center',
+          getPixelOffset: [gaugeSize / 2 + 3, 0],
           background: true,
           getBackgroundColor: (s) => [...LEVELS[levelOf(count(s, mode))].color, 245],
-          getBorderColor: [22, 26, 38, 150],
+          getBorderColor: [20, 26, 38, 170],
           getBorderWidth: 1,
           backgroundBorderRadius: 9,
           backgroundPadding: [7, 3],
@@ -208,21 +339,7 @@ export const bikes = defineModule<BikesData>({
           updateTriggers: { getText: mode, getColor: mode, getBackgroundColor: mode, getPosition: terrain.version },
           parameters,
         }),
-      chosen &&
-        new ScatterplotLayer<Station>({
-          id: 'velos/choisie',
-          data: [chosen],
-          getPosition: onGround,
-          radiusUnits: 'pixels',
-          getRadius: 12,
-          filled: false,
-          stroked: true,
-          getLineColor: [79, 140, 255],
-          lineWidthUnits: 'pixels',
-          getLineWidth: 3,
-          billboard: true,
-          parameters,
-        }),
+      chosen && selectionRing('velos/choisie', [chosen], onGround, gaugeLayers ? gaugeSize * 0.62 : 12, parameters),
     ];
   },
 

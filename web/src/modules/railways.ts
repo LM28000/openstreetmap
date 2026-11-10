@@ -13,6 +13,7 @@ import { PathLayer } from '@deck.gl/layers';
 import { defineModule } from '../core/module';
 import { fetchJson, loadNetwork, type RailNetwork, trackAt } from './railNetwork';
 import { OVER_MAP } from '../map/parameters';
+import { KEY } from './symbols';
 
 /** Une portion de tracé de vitesse maximale constante. */
 interface Run {
@@ -55,7 +56,6 @@ const SPEED_ORDER: SpeedClass[] = ['lgv', 'rapide', 'moyenne', 'lente', 'inconnu
 const DISCREET: Color = [52, 58, 76, 170];
 const CASING: Color = [255, 255, 255, 150];
 const FAR_ZOOM = 7;
-const ACCENT: Color = [79, 140, 255];
 
 const lowerFirst = (text: string) => text.charAt(0).toLowerCase() + text.slice(1);
 
@@ -210,13 +210,23 @@ export const railways = defineModule<RailsData>({
         pickable: true,
         updateTriggers: { getPath: data.pathVersion, getColor: bySpeed, getWidth: bySpeed },
       }),
+      // Sélection : une bande blanche cernée d'un trait sombre, comme l'anneau des points (jamais bleue).
       chosen &&
         new PathLayer<Run>({
           ...common,
-          id: 'voies/choisie',
+          id: 'voies/choisie-blanc',
           data: chosen,
-          getColor: ACCENT,
-          getWidth: 5,
+          getColor: [255, 255, 255, 245],
+          getWidth: 8,
+          updateTriggers: { getPath: data.pathVersion },
+        }),
+      chosen &&
+        new PathLayer<Run>({
+          ...common,
+          id: 'voies/choisie-sombre',
+          data: chosen,
+          getColor: KEY,
+          getWidth: 3,
           updateTriggers: { getPath: data.pathVersion },
         }),
     ];

@@ -12,6 +12,7 @@ import type { Color } from '@deck.gl/core';
 import { defineModule } from '../core/module';
 import { formatDateTime } from '../ui/format';
 import { OVER_MAP } from '../map/parameters';
+import { selectionRing } from './symbols';
 
 interface Quake {
   id: string;
@@ -83,6 +84,30 @@ function colorForAge(age: number): Color {
   return [255, 204, 64, Math.round(210 - fade * 130)];
 }
 
+/**
+ * Ondes : un anneau autour des séismes de magnitude 3 et plus, deux à partir de 4,5, trois
+ * à partir de 6. Plus le séisme est fort, plus il rayonne loin.
+ */
+const WAVE_MAGNITUDES = [3, 4.5, 6];
+
+/** Rayon (pixels) de la k-ième onde : au-delà du disque, d'un écart qui croît avec lui sans dépasser 12 px. */
+const waveRadius = (mag: number, k: number) => radiusPixels(mag) + Math.min(radiusPixels(mag) * 1.1, 12) * k;
+
+/** Couleur d'un trait ou d'un halo qui suit l'opacité du disque (un séisme ancien s'estompe, un futur est absent). */
+function withAlpha(rgb: [number, number, number], age: number, factor = 1): Color {
+  const alpha = colorForAge(age)[3] ?? 0;
+  return [...rgb, Math.round(alpha * factor)] as Color;
+}
+
+/** Les séismes qui ont `k` ondes ou plus (calculé une fois par chargement). */
+let waveCache: { data: Quake[]; sets: Quake[][] } | undefined;
+function wavesOf(data: Quake[]): Quake[][] {
+  if (waveCache?.data !== data) {
+    waveCache = { data, sets: WAVE_MAGNITUDES.map((min) => data.filter((q) => q.mag >= min)) };
+  }
+  return waveCache.sets;
+}
+
 const SMALL_WORDS = new Set(['of', 'the', 'and', 'off', 'near']);
 
 /** « NEAR SOUTH COAST OF FRANCE » → « Near South Coast of France » */
@@ -129,7 +154,7 @@ export const earthquakes = defineModule<Quake[]>({
     return [...byId.values()].sort((a, b) => a.mag - b.mag);
   },
 
-  deckLayers({ data, time, terrain }) {
+  deckLayers({ data, time, terrain, selection }) {
     if (!data) return [];
     const minute = Math.floor(time / 60_000);
     const phase = (performance.now() % PULSE_PERIOD_MS) / PULSE_PERIOD_MS;
@@ -137,8 +162,45 @@ export const earthquakes = defineModule<Quake[]>({
     // même s'il est derrière une montagne.
     const getPosition = (q: Quake): [number, number, number] => [q.lon, q.lat, terrain.elevation(q.lon, q.lat)];
     const parameters = OVER_MAP;
+    const chosenId = (selection as { id: string } | null)?.id;
+    const chosen = chosenId ? data.find((q) => q.id === chosenId) : undefined;
+    const triggers = { getPosition: terrain.version, getFillColor: minute, getLineColor: minute };
 
     return [
+      // Ondes : des anneaux de la couleur du séisme, d'autant plus nombreux que la magnitude est forte.
+      ...wavesOf(data).map(
+        (quakes, i) =>
+          new ScatterplotLayer<Quake>({
+            id: `seismes/onde-${i + 1}`,
+            data: quakes,
+            getPosition,
+            getRadius: (q) => waveRadius(q.mag, i + 1),
+            radiusUnits: 'pixels',
+            billboard: true,
+            filled: false,
+            stroked: true,
+            getLineColor: (q) => {
+              const c = colorForAge(time - q.time);
+              return [c[0], c[1], c[2], Math.round((c[3] ?? 0) * 0.55)] as Color;
+            },
+            lineWidthUnits: 'pixels',
+            getLineWidth: 2,
+            updateTriggers: triggers,
+            parameters,
+          }),
+      ),
+      // Halo clair sous le disque, puis le disque lui-même, cerné d'un contour sombre.
+      new ScatterplotLayer<Quake>({
+        id: 'seismes/halo',
+        data,
+        getPosition,
+        getRadius: (q) => radiusPixels(q.mag) + 2.6,
+        radiusUnits: 'pixels',
+        billboard: true,
+        getFillColor: (q) => withAlpha([255, 255, 255], time - q.time, 0.95),
+        updateTriggers: triggers,
+        parameters,
+      }),
       new ScatterplotLayer<Quake>({
         id: 'seismes/points',
         data,
@@ -147,14 +209,14 @@ export const earthquakes = defineModule<Quake[]>({
         radiusUnits: 'pixels',
         billboard: true, // toujours face à la caméra, lisible en vue inclinée
         getFillColor: (q) => colorForAge(time - q.time),
-        getLineColor: (q) => (q.time > time ? [0, 0, 0, 0] : [255, 255, 255, 170]),
+        getLineColor: (q) => withAlpha([20, 26, 38], time - q.time),
         stroked: true,
         lineWidthUnits: 'pixels',
-        getLineWidth: 0.75,
+        getLineWidth: 1.5,
         pickable: true,
         autoHighlight: true,
         highlightColor: [255, 255, 255, 110],
-        updateTriggers: { getPosition: terrain.version, getFillColor: minute, getLineColor: minute },
+        updateTriggers: triggers,
         parameters,
       }),
       new ScatterplotLayer<Quake>({
@@ -174,6 +236,8 @@ export const earthquakes = defineModule<Quake[]>({
         updateTriggers: { getPosition: terrain.version },
         parameters,
       }),
+      chosen &&
+        selectionRing('seismes/choisi', [chosen], getPosition, (q) => waveRadius(q.mag, WAVE_MAGNITUDES.filter((m) => q.mag >= m).length) + 6, parameters),
     ];
   },
 

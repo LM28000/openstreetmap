@@ -10,6 +10,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { clock } from '../core/clock';
 import type { LayerModule, RenderContext } from '../core/module';
 import type { ModuleManager } from '../core/moduleManager';
+import { currentNight } from '../map/baseMap';
 
 interface Internals {
   map?: MapLibreMap;
@@ -69,6 +70,7 @@ export function locate(manager: ModuleManager, moduleId: string, selection: unkn
     settings: manager.getSnapshot()[moduleId]?.settings ?? {},
     selection,
     view: { zoom: mapOf(manager)?.getZoom() ?? 0, bearing: 0, pitch: 0 },
+    night: currentNight(),
   } satisfies RenderContext<unknown>;
   try {
     return focus.call(entry.module, selection, ctx);

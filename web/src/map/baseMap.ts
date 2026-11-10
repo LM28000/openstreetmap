@@ -101,6 +101,11 @@ const quantize = (amount: number) => Math.round(Math.min(1, Math.max(0, amount))
 let nightValue = 0;
 let sunDrivesNight = false;
 
+/** Part de nuit du fond de carte (0 = jour, 1 = nuit), pour que les couches adaptent leurs couleurs. */
+export function currentNight(): number {
+  return nightValue;
+}
+
 /**
  * Fait passer tout le fond de sa palette de jour (0) à sa palette de nuit (1). Un seul réglage
  * d'état global : les couleurs du style le lisent (voir calmStyle.ts).

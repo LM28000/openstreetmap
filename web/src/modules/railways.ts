@@ -53,7 +53,11 @@ const SPEEDS: Record<SpeedClass, { color: [number, number, number]; css: string;
   lgv: { color: [38, 41, 51], css: '#262933', label: 'Plus de 220 km/h (LGV)', width: 3.5 },
 };
 const SPEED_ORDER: SpeedClass[] = ['lgv', 'rapide', 'moyenne', 'lente', 'inconnue'];
-const DISCREET: Color = [52, 58, 76, 170];
+/** Trait discret : gris sombre sur le fond de jour, gris clair sur le fond de nuit (sinon il s'y perd). */
+const DISCREET_DAY: Color = [52, 58, 76, 170];
+const DISCREET_NIGHT: Color = [140, 148, 166, 175];
+const discreet = (night: number): Color =>
+  DISCREET_DAY.map((value, i) => Math.round(value + ((DISCREET_NIGHT[i] ?? value) - value) * night)) as unknown as Color;
 const CASING: Color = [255, 255, 255, 150];
 const FAR_ZOOM = 7;
 
@@ -169,8 +173,9 @@ export const railways = defineModule<RailsData>({
     return `${data.runsByTrack.size.toLocaleString('fr-FR')} tronçons entre gares`;
   },
 
-  deckLayers({ data, terrain, settings, selection, view }) {
+  deckLayers({ data, terrain, settings, selection, view, night }) {
     if (!data) return [];
+    const discreetColor = discreet(night);
     refreshPaths(data, terrain.exaggeration);
     const bySpeed = settings.couleur === 'vitesse';
     const parameters = OVER_MAP;
@@ -203,12 +208,12 @@ export const railways = defineModule<RailsData>({
         ...common,
         id: 'voies/lignes',
         data: data.runs,
-        getColor: (run) => (bySpeed ? [...SPEEDS[speedClass(run.limit)].color, 255] : DISCREET),
+        getColor: (run) => (bySpeed ? [...SPEEDS[speedClass(run.limit)].color, 255] : discreetColor),
         getWidth: width,
         widthScale: scale,
         // Pas d'autoHighlight : il casserait les clics sur les trains dessinés au-dessus.
         pickable: true,
-        updateTriggers: { getPath: data.pathVersion, getColor: bySpeed, getWidth: bySpeed },
+        updateTriggers: { getPath: data.pathVersion, getColor: [bySpeed, discreetColor.join()], getWidth: bySpeed },
       }),
       // Sélection : une bande blanche cernée d'un trait sombre, comme l'anneau des points (jamais bleue).
       chosen &&

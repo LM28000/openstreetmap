@@ -46,6 +46,12 @@ export interface RenderContext<TData> {
   /** État de la vue : par exemple pour n'afficher les gares qu'à partir d'un certain zoom. */
   /** Vue de la carte : zoom, cap (degrés depuis le nord) et inclinaison (degrés). */
   view: { zoom: number; bearing: number; pitch: number };
+  /**
+   * Part de nuit du fond de carte (0 = jour, 1 = nuit) : le fond passe à une palette sombre la
+   * nuit, les couches dont la couleur se perdrait sur l'un des deux fonds l'adaptent avec ceci.
+   * Les couches sont redessinées quand elle change d'un huitième.
+   */
+  night: number;
 }
 
 export interface LoadContext {

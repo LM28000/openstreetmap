@@ -8,6 +8,7 @@
 import type { Layer, LayersList } from '@deck.gl/core';
 import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
 import type { InfoContent, LayerModule, LegendItem, RenderContext, TerrainSampler } from './module';
+import { currentNight } from '../map/baseMap';
 
 export type ModuleStatus = 'idle' | 'loading' | 'ready' | 'error';
 
@@ -274,7 +275,9 @@ export class ModuleManager {
       const terrainVersion = module.followsTerrain ? this.terrain.version : 0;
       const viewVersion = module.followsView ? this.viewVersion : 0;
       const zoomBand = module.zoomBreaks?.filter((z) => ctx.view.zoom >= z).length ?? 0;
-      const key = `${entry.version}:${step}:${terrainVersion}:${viewVersion}:${zoomBand}`;
+      // Le fond change de palette au crépuscule : on redessine par huitièmes de nuit, pas plus souvent.
+      const nightBand = Math.round(ctx.night * 8);
+      const key = `${entry.version}:${step}:${terrainVersion}:${viewVersion}:${zoomBand}:${nightBand}`;
       if (key === entry.renderedKey) continue;
       entry.renderedKey = key;
 
@@ -311,6 +314,7 @@ export class ModuleManager {
       settings: this.snapshot[entry.module.id]?.settings ?? {},
       selection,
       view: { zoom: this.map?.getZoom() ?? 0, bearing: this.map?.getBearing() ?? 0, pitch: this.map?.getPitch() ?? 0 },
+      night: currentNight(),
     };
   }
 

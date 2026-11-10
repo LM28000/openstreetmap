@@ -7,6 +7,7 @@
 //! - `GET /api/avions` : avions en vol au-dessus de la France (adsb.lol), mis à jour toutes les 10 s.
 //! - `GET /api/satellites` : éléments orbitaux CelesTrak (stations, GPS, Galileo, météo, brillants) ;
 //!   `GET /api/satellites/starlink` : ceux de la constellation Starlink, à part car volumineux.
+//! - `GET /api/vent` : champ de vent à 10 m sur la France (Open-Meteo, ARPEGE), pour l'heure actuelle et les suivantes.
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
 //!   navigateur calcule lui-même la position de chaque train à chaque image.
@@ -48,6 +49,7 @@ pub fn router(state: AppState) -> Router {
         .route("/api/bateaux", get(|State(state): State<AppState>| async move { prepared(state.ships(), "bateaux") }))
         .route("/api/satellites", get(|State(state): State<AppState>| async move { prepared(state.satellites(), "satellites") }))
         .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))
+        .route("/api/vent", get(|State(state): State<AppState>| async move { prepared(state.wind(), "vent") }))
         .layer(CompressionLayer::new())
         .layer(TraceLayer::new_for_http())
         .with_state(state)

@@ -80,7 +80,7 @@ interface ApiTransit {
   vehicles: ApiVehicle[];
 }
 
-interface Network {
+export interface Network {
   index: number;
   name: string;
   licence: string;
@@ -93,7 +93,7 @@ interface Network {
   radius: number;
 }
 
-interface Line {
+export interface Line {
   network: Network;
   id?: string;
   name?: string;
@@ -119,7 +119,7 @@ interface Estimate {
   xy: Float64Array;
 }
 
-interface Vehicle {
+export interface Vehicle {
   key: string;
   id: string;
   line: Line;
@@ -147,7 +147,7 @@ interface Vehicle {
   groundVersion: number;
 }
 
-interface TransitData {
+export interface TransitData {
   vehicles: Vehicle[];
   byKey: Map<string, Vehicle>;
   networks: Network[];
@@ -157,7 +157,7 @@ interface TransitData {
   motion: number;
 }
 
-type TransitSelection = { type: 'vehicle'; key: string } | { type: 'network'; name: string };
+export type TransitSelection = { type: 'vehicle'; key: string } | { type: 'network'; name: string };
 
 /** Sous ce zoom : un rond par réseau. À partir de là : chaque véhicule. */
 const VEHICLES_FROM_ZOOM = 9;

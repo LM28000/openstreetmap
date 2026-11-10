@@ -70,7 +70,7 @@ type Family = 'ter' | 'grande-vitesse' | 'intercites';
 type DelayClass = 'inconnu' | 'heure' | 'retard' | 'gros-retard';
 
 /** Une gare : sa position, et tous les passages de trains (pour son tableau d'affichage). */
-interface Station {
+export interface Station {
   /** Identifiant stable d'un chargement à l'autre (nom + position). */
   key: string;
   name: string;
@@ -80,14 +80,14 @@ interface Station {
 }
 
 /** Le passage d'une circulation à une gare. */
-interface Visit {
+export interface Visit {
   run: Run;
   /** Indice de l'arrêt dans `run.stations`. */
   stop: number;
 }
 
 /** Une circulation : ce qu'il faut pour les fiches et les tableaux, qu'elle roule ou soit supprimée. */
-interface Run {
+export interface Run {
   id: string;
   number: string;
   category: string;
@@ -107,7 +107,7 @@ interface Run {
 }
 
 /** Un train qui roule : une circulation avec son chemin sur les voies. */
-interface Train extends Run {
+export interface Train extends Run {
   /** Proportion du trajet faite sur un tracé réel (1 = tout sur les voies). */
   onTracks: number;
   // Chemin complet, un sommet par point de voie, avec l'heure de passage.
@@ -148,7 +148,7 @@ interface Head {
   limit: number;
 }
 
-interface TrainsData {
+export interface TrainsData {
   /** Période chargée (secondes UTC). */
   from: number;
   to: number;
@@ -169,7 +169,7 @@ interface TrainsData {
 }
 
 /** Ce que l'on retient d'un clic : un train ou une gare, retrouvés par identifiant après chaque rechargement. */
-type TrainsSelection = { type: 'train'; id: string } | { type: 'gare'; key: string };
+export type TrainsSelection = { type: 'train'; id: string } | { type: 'gare'; key: string };
 
 // --- Apparence (couleurs vérifiées pour le daltonisme, voir README) ---
 

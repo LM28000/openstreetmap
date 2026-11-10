@@ -16,7 +16,7 @@ import { defineModule } from '../core/module';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
 import { OVER_MAP } from '../map/parameters';
 
-interface Station {
+export interface Station {
   id: string;
   lon: number;
   lat: number;
@@ -34,7 +34,7 @@ interface Station {
   updated?: string;
 }
 
-interface ChargersData {
+export interface ChargersData {
   stations: Station[];
   byId: Map<string, Station>;
   updatedAt: number;

@@ -17,7 +17,8 @@ export const SCENES: readonly Scene[] = [
     id: 'mouvement',
     label: 'Ce qui bouge',
     description: 'trains, avions, bateaux, bus',
-    modules: ['trains', 'avions', 'bateaux', 'transports'],
+    // Les voies, discrètes, donnent leur contexte aux trains.
+    modules: ['trains', 'voies', 'avions', 'bateaux', 'transports'],
   },
   {
     id: 'meteo',

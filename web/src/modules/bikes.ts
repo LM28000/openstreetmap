@@ -29,13 +29,13 @@ interface ApiStation {
   reportedAt: number | null;
 }
 
-interface Station extends Omit<ApiStation, 'network'> {
+export interface Station extends Omit<ApiStation, 'network'> {
   /** Identifiant stable d'un chargement à l'autre (réseau + nom + position). */
   key: string;
   network: string;
 }
 
-interface BikesData {
+export interface BikesData {
   stations: Station[];
   byKey: Map<string, Station>;
   networks: number;

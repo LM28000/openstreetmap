@@ -80,7 +80,7 @@ const SIZE_CLASS: Record<ShipType, SizeClass> = {
 /** Longueur minimale à l'écran (pixels) d'une coque quand la longueur réelle serait plus petite. */
 const MIN_PX: Record<SizeClass, number> = { petit: 12, moyen: 15, grand: 30 };
 
-interface Ship extends ApiShip {
+export interface Ship extends ApiShip {
   type: ShipType;
   sizeClass: SizeClass;
   moving: boolean;
@@ -95,7 +95,7 @@ interface Ship extends ApiShip {
   position: [number, number, number];
 }
 
-interface ShipsData {
+export interface ShipsData {
   ships: Ship[];
   byMmsi: Map<number, Ship>;
   /** Les navires en route (les seuls dont la position change). */

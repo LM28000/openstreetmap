@@ -8,6 +8,7 @@ description = "Serveur de la carte vivante : horaires et temps réel des trains 
 [dependencies]
 anyhow = "1.0.104"
 axum = "0.8.9"
+csv = "1.4.0"
 flate2 = "1.1.11"
 futures-util = { version = "0.3.34", default-features = false, features = ["sink", "std"] }
 image-webp = "0.2.4"
@@ -23,6 +24,8 @@ tokio-tungstenite = { version = "0.30.0", default-features = false, features = [
 tower-http = { version = "0.7.1", features = ["compression-gzip", "fs", "set-header", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
+# Lecture en flux des GTFS des réseaux (mêmes versions et fonctionnalités que gtfs-structures, déjà compilé).
+zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 
 [profile.release]
 lto = "thin"

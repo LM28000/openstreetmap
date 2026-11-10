@@ -19,13 +19,21 @@
  * (rose, bleu-vert, or : voir MODE_COLORS). La couleur ne distingue jamais les modes à elle seule :
  * c'est la forme (rond, carré, losange, triangle) ; un contour clair ou sombre garde chaque couleur lisible.
  *
+ * **Positions estimées.** Plusieurs grandes villes (Lille, Toulouse, Nantes, Reims, Nancy…) ne publient pas la position
+ * de leurs véhicules, mais leurs horaires en temps réel. Le serveur (server/src/estimates.rs) en déduit où ils sont :
+ * sur le tracé de la ligne, d'après l'heure prévue à chaque arrêt corrigée du retard annoncé. Ces véhicules s'affichent
+ * comme les autres, avec un **contour pointillé**. Au lieu d'une position à rattraper en glissant, le serveur envoie
+ * pour chacun sa trajectoire des 64 secondes suivantes (un point toutes les 8 s) : le navigateur y lit la position
+ * à l'heure de son horloge. Le mouvement est ainsi continu et sans retard, même si la réponse a une trentaine de
+ * secondes. Une position mesurée, elle, ne dit rien de l'avenir : d'où le glissement ci-dessus, avec son léger retard.
+ *
  * Cette couche n'a de sens qu'en direct : le serveur ne garde pas d'historique des positions.
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
 import { declutter, halfZoomBreaks } from '../map/declutter';
-import { bubbleIcon, buildTransitAtlas, legendIcon, type Kind, type TransitAtlas } from './transitIcons';
+import { bubbleIcon, buildTransitAtlas, estimatedLegendIcon, legendIcon, type Kind, type TransitAtlas } from './transitIcons';
 import { OVER_MAP } from '../map/parameters';
 
 interface ApiLine {
@@ -37,6 +45,20 @@ interface ApiLine {
   mode?: 'bus' | 'tram' | 'metro' | 'train' | 'ferry' | 'cable';
 }
 
+/** Ce que le serveur sait d'une position estimée d'après les horaires (absent : position mesurée). */
+interface ApiEstimate {
+  /** Vrai : horaire théorique seulement ; faux ou absent : le flux temps réel du réseau annonce cette circulation. */
+  theoretical?: boolean;
+  to?: string;
+  next?: string;
+  /** Heure prévue au prochain arrêt (secondes UTC). */
+  nextAt?: number;
+  /** Retard à ce prochain arrêt (secondes ; négatif : en avance). */
+  delay?: number;
+  /** Écarts [dlon, dlat, …] en cent-millièmes de degré, un point toutes les `estStep` secondes après (lon, lat). */
+  path: number[];
+}
+
 interface ApiVehicle {
   id: string;
   line: number;
@@ -45,10 +67,12 @@ interface ApiVehicle {
   heading?: number;
   speed?: number;
   ts: number;
+  est?: ApiEstimate;
 }
 
 interface ApiTransit {
   updatedAt: number;
+  estStep?: number;
   networks: Array<{ name: string; licence: string; vehicles: number }>;
   lines: ApiLine[];
   vehicles: ApiVehicle[];
@@ -59,6 +83,8 @@ interface Network {
   name: string;
   licence: string;
   count: number;
+  /** Dont positions estimées d'après les horaires. */
+  estimated: number;
   /** Centre de ses véhicules : où poser le rond de la vue d'ensemble. */
   lon: number;
   lat: number;
@@ -74,6 +100,21 @@ interface Line {
   officialColor?: string;
   mode?: ApiLine['mode'];
   kind: Kind;
+}
+
+/** Position estimée : où est le véhicule à chaque instant de la trajectoire envoyée par le serveur. */
+interface Estimate {
+  theoretical: boolean;
+  to?: string;
+  next?: string;
+  /** Heure prévue au prochain arrêt (ms). */
+  nextAt?: number;
+  delayS?: number;
+  /** Instant (ms) du premier point de la trajectoire et écart (ms) entre deux points. */
+  t0: number;
+  stepMs: number;
+  /** Longitude et latitude de chaque point : [lon0, lat0, lon1, lat1, …]. */
+  xy: Float64Array;
 }
 
 interface Vehicle {
@@ -94,6 +135,8 @@ interface Vehicle {
   ts: number;
   fill: Color;
   halo: Color;
+  /** Vrai quand la position est estimée d'après les horaires (la trajectoire est dans `estimate`). */
+  estimate?: Estimate;
   /** Position affichée (recalculée à chaque image) : [lon, lat, altitude]. */
   position: [number, number, number];
   settled: boolean;
@@ -128,6 +171,10 @@ const MAX_GLIDE_DEG = 0.03;
 /** Une position plus vieille que cela (secondes) est affichée estompée. */
 const DIM_AFTER_S = 120;
 const LIVE_TOLERANCE_MS = 60_000;
+/** Au-delà de cet écart (ms) entre l'horloge du serveur et celle du navigateur, on ne se fie pas à l'heure du serveur pour lire les trajectoires. */
+const MAX_CLOCK_SKEW_MS = 60_000;
+/** Un retard de moins que cela (secondes) se dit « à l'heure ». */
+const ON_TIME_S = 60;
 const STALE_AFTER_S = 120;
 
 /**
@@ -214,6 +261,42 @@ function textColorOn(fill: Color): Color {
 
 let previous: TransitData | undefined;
 
+/** La trajectoire d'un véhicule estimé : points absolus (le serveur envoie des écarts). */
+function estimateOf(v: ApiVehicle, e: ApiEstimate, receivedAt: number, stepMs: number): Estimate {
+  const xy = new Float64Array(2 + e.path.length);
+  xy[0] = v.lon;
+  xy[1] = v.lat;
+  // Les écarts sont en cent-millièmes de degré, comme les coordonnées arrondies à 5 décimales du serveur.
+  for (let i = 0; i < e.path.length; i += 2) {
+    xy[i + 2] = xy[i]! + e.path[i]! / 1e5;
+    xy[i + 3] = xy[i + 1]! + e.path[i + 1]! / 1e5;
+  }
+  // La trajectoire part de l'heure du serveur ; si son horloge est décalée de la nôtre, on la fait partir de la réception.
+  const serverMs = v.ts * 1000;
+  return {
+    theoretical: e.theoretical === true,
+    to: e.to,
+    next: e.next,
+    nextAt: e.nextAt === undefined ? undefined : e.nextAt * 1000,
+    delayS: e.delay,
+    t0: Math.abs(receivedAt - serverMs) < MAX_CLOCK_SKEW_MS ? serverMs : receivedAt,
+    stepMs,
+    xy,
+  };
+}
+
+/** Écrit dans `out` la position de la trajectoire à l'instant `time` ; vrai si la trajectoire est finie (le véhicule s'y arrête). */
+function atTime(e: Estimate, time: number, out: [number, number, number]): boolean {
+  const last = e.xy.length / 2 - 1;
+  const u = Math.min(Math.max((time - e.t0) / e.stepMs, 0), last);
+  const i = Math.min(Math.floor(u), Math.max(last - 1, 0));
+  const f = u - i;
+  const next = Math.min(i + 1, last);
+  out[0] = e.xy[2 * i]! + (e.xy[2 * next]! - e.xy[2 * i]!) * f;
+  out[1] = e.xy[2 * i + 1]! + (e.xy[2 * next + 1]! - e.xy[2 * i + 1]!) * f;
+  return u >= last;
+}
+
 async function loadTransit(signal: AbortSignal): Promise<TransitData> {
   const response = await fetch('/api/transports', { signal });
   if (response.status === 503) throw new Error('le serveur n’a pas encore reçu les positions, nouvel essai dans quelques secondes');
@@ -221,7 +304,8 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
   const json = (await response.json()) as ApiTransit;
   const receivedAt = Date.now();
 
-  const networks: Network[] = json.networks.map((n, index) => ({ index, name: n.name, licence: n.licence, count: n.vehicles, lon: 0, lat: 0, radius: 0 }));
+  const networks: Network[] = json.networks.map((n, index) => ({ index, name: n.name, licence: n.licence, count: n.vehicles, estimated: 0, lon: 0, lat: 0, radius: 0 }));
+  const stepMs = (json.estStep ?? 8) * 1000;
   const lines: Line[] = json.lines.map((l) => ({
     network: networks[l.network]!,
     id: l.id,
@@ -238,8 +322,9 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
     const sum = sums[line.network.index]!;
     sum.lon += v.lon;
     sum.lat += v.lat;
+    if (v.est) line.network.estimated++;
     const ageS = receivedAt / 1000 - v.ts;
-    const { fill, halo } = colorsOf(line, ageS > DIM_AFTER_S);
+    const { fill, halo } = colorsOf(line, !v.est && ageS > DIM_AFTER_S);
     const key = `${line.network.name}|${v.id}`;
     const vehicle: Vehicle = {
       key,
@@ -256,13 +341,15 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
       ts: v.ts * 1000,
       fill,
       halo,
+      estimate: v.est && estimateOf(v, v.est, receivedAt, stepMs),
       position: [v.lon, v.lat, 0],
-      settled: true,
+      // Une position estimée se lit sur sa trajectoire, à chaque image, jusqu'à la fin de celle-ci.
+      settled: !v.est,
       groundVersion: -1,
     };
     // Continuité : le véhicule part de là où on le voyait, et non de sa position précédente.
-    const old = previous?.byKey.get(key);
-    if (old) {
+    const old = vehicle.estimate ? undefined : previous?.byKey.get(key);
+    if (old && !old.estimate) {
       if (old.ts === vehicle.ts) {
         // Pas de nouvelle mesure : le mouvement en cours se poursuit.
         Object.assign(vehicle, { fromLon: old.fromLon, fromLat: old.fromLat, arrivedAt: old.arrivedAt, spanMs: old.spanMs, settled: old.settled });
@@ -315,7 +402,9 @@ function place(data: TransitData, time: number, terrain: { elevation(lon: number
   for (const v of data.vehicles) {
     const needsGround = v.groundVersion !== terrain.version;
     if (v.settled && !needsGround) continue;
-    if (!v.settled) {
+    if (v.estimate) {
+      v.settled = atTime(v.estimate, time, v.position);
+    } else if (!v.settled) {
       const p = Math.min(Math.max((time - v.arrivedAt) / v.spanMs, 0), 1);
       v.position[0] = v.fromLon + (v.lon - v.fromLon) * p;
       v.position[1] = v.fromLat + (v.lat - v.fromLat) * p;
@@ -350,6 +439,38 @@ function ageText(ts: number, time: number): string {
   if (s < 5) return 'à l’instant';
   if (s < 90) return `il y a ${s} s`;
   return `il y a ${Math.round(s / 60)} min`;
+}
+
+/** Heure locale (« 14:32 »). */
+function clockText(ms: number): string {
+  return new Date(ms).toLocaleTimeString('fr-FR', { hour: '2-digit', minute: '2-digit' });
+}
+
+function delayText(seconds: number): string {
+  if (Math.abs(seconds) < ON_TIME_S) return 'à l’heure';
+  const minutes = Math.round(Math.abs(seconds) / 60);
+  return seconds > 0 ? `${minutes} min de retard` : `${minutes} min d’avance`;
+}
+
+/** Fiche d'un véhicule dont la position est estimée : dit d'où vient l'estimation, avec le prochain arrêt et le retard si on les connaît. */
+function describeEstimated(v: Vehicle, e: Estimate, line: Line, fields: Array<[string, string]>): InfoContent {
+  fields.push(['Position', e.theoretical ? 'estimée d’après l’horaire théorique' : 'estimée d’après les horaires en temps réel']);
+  if (e.to) fields.push(['Direction', e.to]);
+  if (e.next) fields.push(['Prochain arrêt', e.nextAt === undefined ? e.next : `${e.next} · ${clockText(e.nextAt)}`]);
+  if (e.theoretical) fields.push(['Retard', 'inconnu : pas de temps réel pour cette circulation']);
+  else if (e.delayS !== undefined) fields.push(['Retard', delayText(e.delayS)]);
+  if (v.speedKmh !== undefined) fields.push(['Vitesse estimée', `${nf(v.speedKmh)} km/h`]);
+  fields.push(['Licence des données', LICENCES[line.network.licence] ?? line.network.licence]);
+  return {
+    title: lineTitle(line),
+    subtitle: `${line.network.name} · position estimée`,
+    fields,
+    note: `Ce réseau ne publie pas la position de ses véhicules, seulement ses horaires. La carte place le véhicule sur le tracé de sa ligne ${
+      e.theoretical
+        ? 'd’après l’heure prévue à chaque arrêt (horaire théorique : le réseau n’annonce aucun écart pour cette circulation)'
+        : 'd’après l’heure prévue à chaque arrêt, corrigée du retard annoncé en temps réel'
+    }, à vitesse régulière d’un arrêt au suivant. La position réelle peut différer de quelques centaines de mètres.`,
+  };
 }
 
 function lineTitle(line: Line): string {
@@ -398,8 +519,9 @@ export const transit = defineModule<TransitData>({
   name: 'Bus, trams et métros',
   category: 'transport',
   description:
-    'Véhicules des transports urbains en temps réel, dans les villes dont le réseau publie ses positions. Un rond par réseau de loin, chaque véhicule de près. En direct seulement.',
-  attribution: 'Réseaux de transport, via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau)',
+    'Véhicules des transports urbains en temps réel : leur position quand le réseau la publie, sinon estimée d’après ses horaires en temps réel (contour pointillé). Un rond par réseau de loin, chaque véhicule de près. En direct seulement.',
+  attribution:
+    'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche). Positions estimées par la carte d’après ces horaires',
   refreshIntervalMs: 30_000,
   timeStepMs: (view) => glideStepMs(view.zoom),
   zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), ...halfZoomBreaks(LABELS_FROM_ZOOM)],
@@ -412,6 +534,11 @@ export const transit = defineModule<TransitData>({
       { color: MODE_COLORS.metro, icon: legendIcon('metro', MODE_COLORS.metro), label: 'Métro (losange)' },
       { color: MODE_COLORS.other, icon: legendIcon('other', MODE_COLORS.other), label: 'Train, bateau, câble (triangle)' },
       { color: UNKNOWN_MODE_COLOR, icon: legendIcon('bus', UNKNOWN_MODE_COLOR), label: 'Mode inconnu (rond gris)' },
+      {
+        color: 'transparent',
+        icon: estimatedLegendIcon('bus', MODE_COLORS.bus),
+        label: 'Contour pointillé : position estimée d’après les horaires du réseau, qui ne publie pas ses positions (même formes et mêmes couleurs)',
+      },
       { color: 'transparent', icon: bubbleIcon(), label: 'Vue d’ensemble : un rond par réseau, plus gros avec le nombre de véhicules' },
       { color: 'transparent', label: 'La couleur est celle de la ligne quand le réseau la donne ; sinon celle du mode (ci-dessus).' },
     ];
@@ -426,7 +553,9 @@ export const transit = defineModule<TransitData>({
     if (data.vehicles.length === 0) return `Aucun véhicule en circulation dans les flux pour l’instant (la nuit, beaucoup de réseaux sont à l’arrêt).${stale}`;
     const n = data.vehicles.length;
     const m = data.networks.length;
-    return `${nf(n)} véhicule${n > 1 ? 's' : ''} sur ${nf(m)} réseau${m > 1 ? 'x' : ''}${stale}`;
+    const e = data.vehicles.filter((v) => v.estimate).length;
+    const estimated = e > 0 ? `, dont ${nf(e)} position${e > 1 ? 's' : ''} estimée${e > 1 ? 's' : ''} d’après les horaires` : '';
+    return `${nf(n)} véhicule${n > 1 ? 's' : ''} sur ${nf(m)} réseau${m > 1 ? 'x' : ''}${estimated}${stale}`;
   },
 
   deckLayers({ data, time, terrain, selection, view }) {
@@ -513,7 +642,8 @@ export const transit = defineModule<TransitData>({
       new IconLayer<Vehicle>({
         ...common,
         id: 'transports/contours',
-        getIcon: (v) => `${v.line.kind}-halo`,
+        // Contour pointillé pour une position estimée d'après les horaires ; plein pour une position mesurée.
+        getIcon: (v) => `${v.line.kind}-${v.estimate ? 'halo-est' : 'halo'}`,
         getColor: (v) => v.halo,
         updateTriggers: { getPosition: [data.motion, terrain.version] },
       }),
@@ -585,10 +715,14 @@ export const transit = defineModule<TransitData>({
         subtitle: 'Réseau de transport',
         fields: [
           ['Véhicules en circulation', nf(net.count)],
+          ...(net.estimated > 0 ? [['dont positions estimées d’après les horaires', nf(net.estimated)] as [string, string]] : []),
           ['Lignes en service', nf(lines)],
           ['Licence des données', LICENCES[net.licence] ?? net.licence],
         ],
-        note: 'Rond de la vue d’ensemble, placé au centre des véhicules du réseau. Zoomez pour voir chaque véhicule.',
+        note:
+          net.estimated > 0
+            ? `Rond de la vue d’ensemble, placé au centre des véhicules du réseau. ${net.estimated === net.count ? 'Ce réseau ne publie pas la position de ses véhicules' : 'Une partie de ses véhicules est estimée'} : la carte les place d’après ses horaires en temps réel. Zoomez pour voir chaque véhicule.`
+            : 'Rond de la vue d’ensemble, placé au centre des véhicules du réseau. Zoomez pour voir chaque véhicule.',
       };
     }
     const v = data.byKey.get(sel.key);
@@ -597,6 +731,7 @@ export const transit = defineModule<TransitData>({
     const fields: Array<[string, string]> = [['Réseau', line.network.name]];
     fields.push(['Ligne', [line.name ?? line.id, line.longName].filter(Boolean).join(' · ') || 'inconnue (le flux ne la précise pas)']);
     fields.push(['Mode', line.mode ? MODE_LABELS[line.mode] : 'non précisé']);
+    if (v.estimate) return describeEstimated(v, v.estimate, line, fields);
     fields.push(['Véhicule', v.id]);
     if (v.speedKmh !== undefined) fields.push(['Vitesse', `${nf(v.speedKmh)} km/h`]);
     if (v.headingDeg !== undefined) fields.push(['Cap', `${nf(v.headingDeg)}°`]);

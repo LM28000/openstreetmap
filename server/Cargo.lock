@@ -173,6 +173,7 @@ version = "0.1.0"
 dependencies = [
  "anyhow",
  "axum",
+ "csv",
  "flate2",
  "futures-util",
  "gtfs-structures",
@@ -187,6 +188,7 @@ dependencies = [
  "tower-http 0.7.1",
  "tracing",
  "tracing-subscriber",
+ "zip",
 ]
 
 [[package]]

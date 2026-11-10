@@ -18,6 +18,9 @@
 //! - `GET /api/reseau/{version}` : les gares et les tracés auxquels renvoient les
 //!   trains (voir `network.rs`). Ne change jamais pour une version donnée.
 //! - `GET /api/reseau` : la version actuelle du réseau.
+//! - `GET /api/isochrone?depuis=<code UIC>&depart=<secondes UTC>&max=<minutes>&correspondances=<n>` : les
+//!   gares atteignables en train depuis une gare (algorithme RAPTOR, voir `raptor.rs`), avec durée et correspondances ;
+//!   `GET /api/isochrone/trajet?…&vers=<code UIC>` : l'itinéraire jusqu'à l'une d'elles.
 
 use std::collections::{HashMap, HashSet};
 
@@ -35,6 +38,7 @@ use tower_http::set_header::SetResponseHeaderLayer;
 use tower_http::trace::TraceLayer;
 
 use crate::network::Network;
+use crate::raptor::{self, Leg, MAX_ROUNDS};
 use crate::realtime::Realtime;
 use crate::state::AppState;
 
@@ -50,6 +54,8 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
         .route("/api/trains", get(trains))
         .route("/api/reseau", get(network_version))
         .route("/api/reseau/{version}", get(network))
+        .route("/api/isochrone", get(isochrone))
+        .route("/api/isochrone/trajet", get(isochrone_journey))
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .route("/api/avions", get(|State(state): State<AppState>| async move { prepared(state.planes(), "avions") }))
@@ -298,4 +304,144 @@ async fn health(State(state): State<AppState>) -> Json<serde_json::Value> {
         })),
         "now": { "running": runs.len(), "withRealtime": live },
     }))
+}
+
+// --- Isochrones ---
+
+/// Durée maximale par défaut, et plafond (minutes). Au-delà de 12 h, le jour de service suivant entrerait en jeu.
+const DEFAULT_MAX_MINUTES: i32 = 180;
+const MAX_MINUTES: i32 = 12 * 60;
+
+#[derive(Deserialize)]
+struct IsochroneQuery {
+    /// Code UIC de la gare de départ (« 87471003 »), tel que le donne `/api/reseau/{version}`.
+    depuis: String,
+    /// Heure de départ, en secondes UTC.
+    depart: i64,
+    /// Durée maximale du trajet, en minutes.
+    max: Option<i32>,
+    /// Nombre maximal de correspondances ; absent : pas de limite (au plus `MAX_ROUNDS` trains).
+    correspondances: Option<usize>,
+    /// Gare d'arrivée (pour `/api/isochrone/trajet` seulement).
+    vers: Option<String>,
+}
+
+#[derive(Serialize)]
+struct IsochroneResponse<'a> {
+    /// Version du réseau, à laquelle renvoient les indices de gares.
+    network: &'a str,
+    origin: u32,
+    departure: i64,
+    /// Le temps réel (retards, suppressions) a-t-il été appliqué ?
+    realtime: bool,
+    /// Gares atteintes, en colonnes pour rester compact : indice, durée en secondes, correspondances.
+    stations: Vec<u32>,
+    seconds: Vec<i32>,
+    transfers: Vec<u8>,
+}
+
+#[derive(Serialize)]
+#[serde(tag = "type", rename_all = "camelCase")]
+enum LegOut<'a> {
+    Train {
+        number: &'a str,
+        category: &'a str,
+        line: &'a str,
+        from: u32,
+        to: u32,
+        departure: i64,
+        arrival: i64,
+        /// Arrêts desservis, extrémités comprises.
+        stops: u16,
+    },
+    /// Correspondance à pied, ou en métro ou RER entre deux gares parisiennes.
+    Walk { from: u32, to: u32, departure: i64, arrival: i64 },
+}
+
+#[derive(Serialize)]
+struct JourneyResponse<'a> {
+    network: &'a str,
+    realtime: bool,
+    legs: Vec<LegOut<'a>>,
+}
+
+/// Lance RAPTOR (quelques millisecondes à quelques dizaines : hors de la boucle asynchrone) et met en forme.
+async fn run_isochrone<T: Send + 'static>(
+    state: &AppState,
+    query: IsochroneQuery,
+    format: impl FnOnce(&Network, &raptor::Isochrone, &IsochroneQuery) -> Result<T, (StatusCode, String)> + Send + 'static,
+) -> Result<T, (StatusCode, String)> {
+    let network = state.network();
+    let realtime = state.realtime();
+    tokio::task::spawn_blocking(move || {
+        let timetable = &network.timetable;
+        let origin = station_by_code(&network, &query.depuis)
+            .ok_or_else(|| (StatusCode::NOT_FOUND, format!("gare inconnue : {}", query.depuis)))?;
+        let max_minutes = query.max.unwrap_or(DEFAULT_MAX_MINUTES).clamp(1, MAX_MINUTES);
+        let params = raptor::Params {
+            origin,
+            depart: query.depart,
+            max_duration: max_minutes * 60,
+            max_trips: query.correspondances.map_or(MAX_ROUNDS, |n| n.saturating_add(1)),
+        };
+        let iso = raptor::isochrone(timetable, realtime.as_deref(), Timestamp::now().as_second(), &params);
+        format(&network, &iso, &query)
+    })
+    .await
+    .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))?
+}
+
+fn station_by_code(network: &Network, code: &str) -> Option<u32> {
+    network.timetable.stations.iter().position(|s| s.code == code).map(|i| i as u32)
+}
+
+async fn isochrone(
+    State(state): State<AppState>,
+    Query(query): Query<IsochroneQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    let body = run_isochrone(&state, query, |network, iso, query| {
+        let reached = iso.reached();
+        let origin = station_by_code(network, &query.depuis).unwrap_or_default();
+        serde_json::to_vec(&IsochroneResponse {
+            network: &network.version,
+            origin,
+            departure: query.depart,
+            realtime: iso.realtime,
+            stations: reached.iter().map(|r| r.station).collect(),
+            seconds: reached.iter().map(|r| r.seconds).collect(),
+            transfers: reached.iter().map(|r| r.transfers).collect(),
+        })
+        .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], body))
+}
+
+async fn isochrone_journey(
+    State(state): State<AppState>,
+    Query(query): Query<IsochroneQuery>,
+) -> Result<impl IntoResponse, (StatusCode, String)> {
+    if query.vers.is_none() {
+        return Err((StatusCode::BAD_REQUEST, "paramètre « vers » manquant".to_string()));
+    }
+    let body = run_isochrone(&state, query, |network, iso, query| {
+        let target = query.vers.as_deref().unwrap_or_default();
+        let station = station_by_code(network, target).ok_or_else(|| (StatusCode::NOT_FOUND, format!("gare inconnue : {target}")))?;
+        let legs = iso.journey(station).ok_or_else(|| (StatusCode::NOT_FOUND, "gare hors de portée".to_string()))?;
+        let timetable = &network.timetable;
+        let legs = legs
+            .into_iter()
+            .map(|leg| match leg {
+                Leg::Train { trip, from, to, departure, arrival, stops } => {
+                    let trip = &timetable.trips[trip as usize];
+                    LegOut::Train { number: &trip.number, category: &trip.category, line: &trip.line, from, to, departure, arrival, stops }
+                }
+                Leg::Walk { from, to, departure, arrival } => LegOut::Walk { from, to, departure, arrival },
+            })
+            .collect();
+        serde_json::to_vec(&JourneyResponse { network: &network.version, realtime: iso.realtime, legs })
+            .map_err(|error| (StatusCode::INTERNAL_SERVER_ERROR, error.to_string()))
+    })
+    .await?;
+    Ok(([(header::CONTENT_TYPE, "application/json")], body))
 }

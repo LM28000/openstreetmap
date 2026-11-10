@@ -13,6 +13,7 @@ use jiff::civil::Date;
 use jiff::tz::TimeZone;
 use tracing::{info, warn};
 
+use crate::raptor::Raptor;
 use crate::state::AppState;
 
 /// Horaires des TGV, Intercités et TER (jeu « Réseau SNCF TGV, Intercités et TER », licence ODbL).
@@ -21,6 +22,8 @@ pub const GTFS_URL: &str = "https://eu.ftp.opendatasoft.com/sncf/plandata/Export
 const MAX_AGE: Duration = Duration::from_secs(12 * 3600);
 
 pub struct Station {
+    /// Code UIC de la gare (« 87481002 »), stable d'un chargement à l'autre, contrairement à l'indice.
+    pub code: String,
     pub name: String,
     pub lon: f64,
     pub lat: f64,
@@ -45,7 +48,7 @@ pub struct Trip {
     pub category: String,
     /// Nom de la ligne, par exemple « Paris - Lyon ».
     pub line: String,
-    service: u32,
+    pub(crate) service: u32,
     pub stops: Vec<StopTime>,
 }
 
@@ -61,6 +64,8 @@ pub struct Timetable {
     services: Vec<Vec<u16>>,
     base_date: Date,
     tz: TimeZone,
+    /// Index de l'algorithme RAPTOR (isochrones), construit une fois avec les horaires.
+    pub raptor: Raptor,
 }
 
 /// Une circulation : un trajet, un jour donné.
@@ -72,6 +77,33 @@ pub struct Run<'a> {
 }
 
 impl Timetable {
+    /// Assemble les horaires et construit l'index RAPTOR qui va avec.
+    #[allow(clippy::too_many_arguments)]
+    pub(crate) fn new(
+        id: u64,
+        stations: Vec<Station>,
+        stop_points: Vec<String>,
+        trips: Vec<Trip>,
+        feed_version: String,
+        services: Vec<Vec<u16>>,
+        base_date: Date,
+        tz: TimeZone,
+    ) -> Self {
+        let raptor = Raptor::build(&stations, &trips);
+        info!(lignes = raptor.route_count(), memoire_ko = raptor.bytes() / 1024, "index des isochrones prêt");
+        Self { id, stations, stop_points, trips, feed_version, services, base_date, tz, raptor }
+    }
+
+    /// Le service `service` circule-t-il ce jour-là ?
+    pub fn service_runs_on(&self, service: u32, date: Date) -> bool {
+        self.day_offset(date).is_some_and(|offset| self.services[service as usize].binary_search(&offset).is_ok())
+    }
+
+    /// Nombre de services (calendriers) distincts.
+    pub fn service_count(&self) -> usize {
+        self.services.len()
+    }
+
     /// Toutes les circulations qui roulent au moins un instant entre `from` et `to` (secondes UTC),
     /// selon les horaires théoriques.
     pub fn runs_between(&self, from: i64, to: i64) -> Vec<Run<'_>> {
@@ -115,7 +147,7 @@ impl Timetable {
         pairs
     }
 
-    fn local_date(&self, seconds: i64) -> Date {
+    pub(crate) fn local_date(&self, seconds: i64) -> Date {
         Timestamp::from_second(seconds).unwrap_or(Timestamp::UNIX_EPOCH).to_zoned(self.tz.clone()).date()
     }
 
@@ -126,7 +158,7 @@ impl Timetable {
 
     /// Norme GTFS : les heures comptent depuis « midi moins 12 h », heure locale.
     /// (Ça ne fait pas toujours minuit : les jours de changement d'heure, c'est 23 h ou 1 h.)
-    fn service_day_start(&self, date: Date) -> Result<i64> {
+    pub(crate) fn service_day_start(&self, date: Date) -> Result<i64> {
         let noon = date.at(12, 0, 0, 0).to_zoned(self.tz.clone())?;
         Ok(noon.timestamp().as_second() - 12 * 3600)
     }
@@ -238,7 +270,12 @@ fn build(path: &Path) -> Result<Timetable> {
                 .unwrap_or(&st.stop);
             let (Some(lon), Some(lat)) = (station_stop.longitude, station_stop.latitude) else { continue };
             let station = *station_index.entry(station_stop.id.clone()).or_insert_with(|| {
-                stations.push(Station { name: station_stop.name.clone().unwrap_or_default(), lon, lat });
+                stations.push(Station {
+                    code: station_stop.id.strip_prefix("StopArea:OCE").unwrap_or(&station_stop.id).to_string(),
+                    name: station_stop.name.clone().unwrap_or_default(),
+                    lon,
+                    lat,
+                });
                 (stations.len() - 1) as u32
             });
             let stop_point = *stop_point_index.entry(st.stop.id.clone()).or_insert_with(|| {
@@ -280,7 +317,7 @@ fn build(path: &Path) -> Result<Timetable> {
     info!(trajets = trips.len(), gares = stations.len(), version = %feed_version, "horaires prêts");
     static NEXT_ID: AtomicU64 = AtomicU64::new(1);
     let id = NEXT_ID.fetch_add(1, Ordering::Relaxed);
-    Ok(Timetable { id, stations, stop_points, trips, feed_version, services, base_date, tz })
+    Ok(Timetable::new(id, stations, stop_points, trips, feed_version, services, base_date, tz))
 }
 
 /// La catégorie est dans l'identifiant du quai : « StopPoint:OCETGV INOUI-87686006 » → « TGV INOUI ».

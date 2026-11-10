@@ -38,6 +38,8 @@ struct NetworkOut<'a> {
 
 #[derive(Serialize)]
 struct StationOut<'a> {
+    /// Code UIC, stable d'un chargement à l'autre (l'indice, lui, change).
+    code: &'a str,
     name: &'a str,
     lon: f64,
     lat: f64,
@@ -48,7 +50,7 @@ impl Network {
     pub fn new(timetable: Arc<Timetable>, tracks: Option<Arc<Tracks>>) -> Self {
         debug_assert!(tracks.as_ref().is_none_or(|t| t.timetable_id == timetable.id));
         let out = NetworkOut {
-            stations: timetable.stations.iter().map(|s| StationOut { name: &s.name, lon: s.lon, lat: s.lat }).collect(),
+            stations: timetable.stations.iter().map(|s| StationOut { code: &s.code, name: &s.name, lon: s.lon, lat: s.lat }).collect(),
             tracks: tracks
                 .iter()
                 .flat_map(|t| &t.segments)

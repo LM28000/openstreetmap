@@ -29,12 +29,28 @@
  * à l'heure de son horloge. Le mouvement est ainsi continu et sans retard, même si la réponse a une trentaine de
  * secondes. Une position mesurée, elle, ne dit rien de l'avenir : d'où le glissement ci-dessus, avec son léger retard.
  *
- * Cette couche n'a de sens qu'en direct : le serveur ne garde pas d'historique des positions.
+ * **Relecture.** Le serveur enregistre les positions qu'il sert, mesurées comme estimées (server/src/history/). Quand
+ * l'horloge est à plus de deux minutes dans le passé, la couche relit l'enregistrement (core/replay.ts) : chaque
+ * véhicule est placé par interpolation entre ses deux positions enregistrées voisines. Une position estimée reste
+ * marquée comme telle (contour pointillé, fiche), avec le prochain arrêt et le retard connus à ce moment-là. Là où rien
+ * n'a été enregistré, la couche se masque et dit pourquoi.
  */
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
-import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
+import { defineModule, type InfoContent, type InfoFigure, type InfoStatus, type LegendItem } from '../core/module';
 import { estimatedStatus, measuredStatus } from '../core/infoStatus';
+import {
+  isReplayTime,
+  loadReplay,
+  measure,
+  measureAngle,
+  newSample,
+  prefetchNear,
+  replayKey,
+  replayLabel,
+  sample,
+  type DecodedChunk,
+} from '../core/replay';
 import { declutter, halfZoomBreaks } from '../map/declutter';
 import {
   CELL_HEIGHT,
@@ -163,6 +179,21 @@ export interface Vehicle {
   position: [number, number, number];
   settled: boolean;
   groundVersion: number;
+  /** Relecture : indice du véhicule dans le tronçon, et s'il existe à l'instant affiché (absent : toujours là). */
+  ro?: number;
+  here?: boolean;
+}
+
+/** Ce qui s'ajoute aux données quand la couche relit l'enregistrement. */
+export interface TransitReplay {
+  key: string;
+  chunk: DecodedChunk | null;
+  absence: string | null;
+  /** Tous les véhicules et tous les réseaux du tronçon (présents ou non). */
+  all: Vehicle[];
+  allNetworks: Network[];
+  /** Pas de temps de la dernière mise à jour, pour ne pas la refaire à chaque image. */
+  stamp: number;
 }
 
 export interface TransitData {
@@ -173,6 +204,7 @@ export interface TransitData {
   collectedAt: number;
   /** Incrémenté quand au moins un véhicule a bougé : déclenche le recalcul des positions par deck.gl. */
   motion: number;
+  replay?: TransitReplay;
 }
 
 export type TransitSelection = { type: 'vehicle'; key: string } | { type: 'network'; name: string };
@@ -205,7 +237,6 @@ const MAX_SPAN_MS = 40_000;
 const MAX_GLIDE_DEG = 0.03;
 /** Une position plus vieille que cela (secondes) est affichée estompée. */
 const DIM_AFTER_S = 120;
-const LIVE_TOLERANCE_MS = 60_000;
 /** Au-delà de cet écart (ms) entre l'horloge du serveur et celle du navigateur, on ne se fie pas à l'heure du serveur pour lire les trajectoires. */
 const MAX_CLOCK_SKEW_MS = 60_000;
 /** Un retard de moins que cela (secondes) se dit « à l'heure ». */
@@ -255,13 +286,13 @@ function footprints(): TransitAtlas {
   return footprintCache;
 }
 
-let kindCache: { data: TransitData; byKind: Record<Kind, Vehicle[]>; estimated: Vehicle[] } | undefined;
-/** Les véhicules de chaque mode (une couche de maquettes par mode), recalculés à chaque chargement seulement. */
+let kindCache: { vehicles: Vehicle[]; byKind: Record<Kind, Vehicle[]>; estimated: Vehicle[] } | undefined;
+/** Les véhicules de chaque mode (une couche de maquettes par mode), recalculés quand la liste des véhicules change (chargement, ou pas de relecture). */
 function byKind(data: TransitData): { byKind: Record<Kind, Vehicle[]>; estimated: Vehicle[] } {
-  if (kindCache?.data !== data) {
+  if (kindCache?.vehicles !== data.vehicles) {
     const byKind: Record<Kind, Vehicle[]> = { bus: [], tram: [], metro: [], other: [] };
     for (const v of data.vehicles) byKind[v.line.kind].push(v);
-    kindCache = { data, byKind, estimated: data.vehicles.filter((v) => v.estimate) };
+    kindCache = { vehicles: data.vehicles, byKind, estimated: data.vehicles.filter((v) => v.estimate) };
   }
   return kindCache;
 }
@@ -462,9 +493,191 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
   return data;
 }
 
-/** Vrai quand l'instant affiché est le présent : les positions n'ont pas d'historique. */
-function isLive(time: number): boolean {
-  return Math.abs(time - Date.now()) <= LIVE_TOLERANCE_MS;
+// --- Relecture ---
+
+let replayCache: { chunk: DecodedChunk; data: TransitData } | undefined;
+const scratch = newSample();
+
+async function loadTransitReplay(time: number): Promise<TransitData> {
+  const state = await loadReplay('transports', time);
+  const { chunk } = state;
+  if (!chunk) {
+    return {
+      vehicles: [],
+      byKey: new Map(),
+      networks: [],
+      lineCount: 0,
+      collectedAt: 0,
+      motion: 0,
+      replay: { key: state.key, chunk: null, absence: state.absence, all: [], allNetworks: [], stamp: NaN },
+    };
+  }
+  if (replayCache?.chunk === chunk) {
+    replayCache.data.replay!.key = state.key; // mêmes véhicules : on garde les objets (et la sélection)
+    return replayCache.data;
+  }
+  const { all, networks, lineCount } = replayVehicles(chunk);
+  const data: TransitData = {
+    vehicles: [],
+    byKey: new Map(all.map((v) => [v.key, v])),
+    networks: [],
+    lineCount,
+    collectedAt: chunk.fetchedAt,
+    motion: 0,
+    replay: { key: state.key, chunk, absence: null, all, allNetworks: networks, stamp: NaN },
+  };
+  replayCache = { chunk, data };
+  return data;
+}
+
+/**
+ * Les lignes, les réseaux et les véhicules d'un tronçon. Table 0 : une ligne par entrée, « réseau, licence, id, nom, nom
+ * long, couleur, mode » séparés par des tabulations ; identité d'un véhicule : [terminus], [ligne + 1, nature] avec
+ * nature 1 = position relevée, 2 = estimée d'après le temps réel, 3 = estimée d'après l'horaire théorique.
+ */
+function replayVehicles(chunk: DecodedChunk): { all: Vehicle[]; networks: Network[]; lineCount: number } {
+  const networks = new Map<string, Network>();
+  const network = (name: string, licence: string): Network => {
+    let n = networks.get(name);
+    if (!n) {
+      n = { index: networks.size, name, licence, count: 0, estimated: 0, lon: 0, lat: 0, radius: 0 };
+      networks.set(name, n);
+    }
+    return n;
+  };
+  const lines: Line[] = chunk.tables[0]!.map((descriptor) => {
+    const [net = '', licence = '', id, name, longName, color, mode] = descriptor.split('\t');
+    const m = (mode || undefined) as ApiLine['mode'];
+    return {
+      network: network(net, licence),
+      id: id || undefined,
+      name: name || undefined,
+      longName: longName || undefined,
+      officialColor: color ? `#${color}` : undefined,
+      mode: m,
+      kind: kindOf(m),
+    };
+  });
+  const unknown: Line = { network: network('Réseau inconnu', ''), kind: 'bus' };
+  const all: Vehicle[] = [];
+  for (let o = 0; o < chunk.count; o++) {
+    const [lineNumber = 0, nature = 1] = chunk.numbers[o]!;
+    const line = lines[lineNumber - 1] ?? unknown;
+    const id = chunk.ids[o]!;
+    const { fill, halo } = colorsOf(line, false);
+    all.push({
+      key: `${line.network.name}|${id}`,
+      id,
+      line,
+      lon: 0,
+      lat: 0,
+      fromLon: 0,
+      fromLat: 0,
+      arrivedAt: 0,
+      spanMs: MIN_SPAN_MS,
+      bearing: 0,
+      ts: 0,
+      fill,
+      halo,
+      estimate:
+        nature >= 2
+          ? { theoretical: nature === 3, to: chunk.strings[o]![0] || undefined, t0: 0, stepMs: 1, xy: new Float64Array(0) }
+          : undefined,
+      position: [0, 0, 0],
+      settled: true,
+      groundVersion: -1,
+      ro: o,
+      here: false,
+    });
+  }
+  return { all, networks: [...networks.values()], lineCount: lines.length };
+}
+
+/** Place le véhicule à l'instant `time` ; faux (et marqué absent) s'il n'existe pas à cet instant. */
+function placeReplayVehicle(chunk: DecodedChunk, v: Vehicle, time: number): boolean {
+  if (!sample(chunk, v.ro!, time, scratch)) {
+    v.here = false;
+    return false;
+  }
+  // Mesures : cap (°), vitesse (km/h), retard (s), prochain arrêt (indice dans la table 1), heure d'arrivée à cet arrêt (s UTC).
+  const heading = measureAngle(chunk, scratch, 0);
+  const speed = measure(chunk, scratch, 1);
+  v.headingDeg = heading === undefined ? undefined : Math.round(heading);
+  v.speedKmh = speed === undefined ? undefined : Math.round(speed);
+  if (heading !== undefined) {
+    v.bearing = heading;
+  } else if (scratch.j >= 0 && !scratch.held) {
+    // Sans cap annoncé : le sens du mouvement entre les deux points enregistrés.
+    const dx = (chunk.lon[scratch.j]! - chunk.lon[scratch.i]!) * Math.cos((scratch.lat * Math.PI) / 180);
+    const dy = chunk.lat[scratch.j]! - chunk.lat[scratch.i]!;
+    v.bearing = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
+  }
+  v.lon = scratch.lon;
+  v.lat = scratch.lat;
+  v.position[0] = scratch.lon;
+  v.position[1] = scratch.lat;
+  v.ts = (chunk.start + chunk.t[scratch.i]!) * 1000;
+  const e = v.estimate;
+  if (e) {
+    e.delayS = measure(chunk, scratch, 2, true);
+    const stop = measure(chunk, scratch, 3, true);
+    e.next = stop === undefined ? undefined : chunk.tables[1]![stop];
+    const nextAt = measure(chunk, scratch, 4, true);
+    e.nextAt = nextAt === undefined ? undefined : nextAt * 1000;
+  }
+  v.here = true;
+  return true;
+}
+
+/** Replace un seul véhicule (fiche, caméra qui le suit). */
+function refreshReplayVehicle(data: TransitData, v: Vehicle, time: number): boolean {
+  return data.replay?.chunk ? placeReplayVehicle(data.replay.chunk, v, time) : false;
+}
+
+/**
+ * Place tous les véhicules à l'instant `time`, refait la liste de ceux qui existent et le rond de chaque réseau
+ * (nombre, centre). Au plus une fois par pas de temps.
+ */
+function updateReplay(data: TransitData, time: number): void {
+  const replay = data.replay!;
+  const chunk = replay.chunk;
+  if (!chunk) return;
+  const stamp = Math.floor(time / 200);
+  if (replay.stamp === stamp) return;
+  replay.stamp = stamp;
+  prefetchNear('transports', time);
+  for (const n of replay.allNetworks) {
+    n.count = 0;
+    n.estimated = 0;
+    n.lon = 0;
+    n.lat = 0;
+  }
+  const present: Vehicle[] = [];
+  for (const v of replay.all) {
+    if (!placeReplayVehicle(chunk, v, time)) continue;
+    present.push(v);
+    const n = v.line.network;
+    n.count++;
+    n.lon += v.lon;
+    n.lat += v.lat;
+    if (v.estimate) n.estimated++;
+  }
+  for (const n of replay.allNetworks) {
+    n.lon /= Math.max(n.count, 1);
+    n.lat /= Math.max(n.count, 1);
+    n.radius = Math.min(10 + 2.2 * Math.sqrt(n.count), 34);
+  }
+  data.vehicles = present;
+  data.networks = replay.allNetworks.filter((n) => n.count > 0);
+  data.motion++;
+}
+
+/**
+ * Faut-il montrer ces données à cet instant ? En direct, l'horloge doit être dans la fenêtre du direct (les deux dernières
+ * minutes, ou un peu plus tard) ; en relecture, plus de deux minutes dans le passé.
+ */
+function shows(data: TransitData, time: number): boolean {
+  return data.replay ? isReplayTime(time) && data.replay.chunk !== null : !isReplayTime(time) && time <= Date.now() + 60_000;
 }
 
 /** Place chaque véhicule à l'instant `time` ; renvoie vrai si au moins un a bougé. */
@@ -549,6 +762,11 @@ function describeEstimated(v: Vehicle, e: Estimate, line: Line, fields: Array<[s
   };
 }
 
+/** Pastille de relecture : l'instant rejoué, et que la position est estimée d'après les horaires, s'il y a lieu. */
+function replayState(time: number, estimated: boolean): InfoStatus {
+  return { tone: 'replay', text: `${replayLabel(time)}${estimated ? ' · position estimée' : ''}` };
+}
+
 /** « Bus · Tisséo » : le mode puis le réseau, au-dessus du titre de la fiche. */
 function kindLabel(line: Line): string {
   return `${line.mode ? MODE_LABELS[line.mode] : 'Transport en commun'} · ${line.network.name}`;
@@ -562,31 +780,36 @@ function lineTitle(line: Line): string {
   return 'Ligne inconnue';
 }
 
-let labelCache: { data: TransitData; band: number; vehicles: Vehicle[] } | undefined;
-let networkLabelCache: { data: TransitData; band: number; networks: Network[] } | undefined;
-let densityCache: { data: TransitData; byLabel: Vehicle[] } | undefined;
+let labelCache: { data: TransitData; band: number; bucket: number; vehicles: Vehicle[] } | undefined;
+let networkLabelCache: { data: TransitData; band: number; bucket: number; networks: Network[] } | undefined;
+let densityCache: { data: TransitData; bucket: number; byLabel: Vehicle[] } | undefined;
 
-/** Étiquettes de ligne dès le zoom 13, une par case : on préfère les véhicules en mouvement. */
-function labelled(data: TransitData, zoom: number): Vehicle[] {
+/**
+ * Étiquettes de ligne dès le zoom 13, une par case : on préfère les véhicules en mouvement.
+ * `bucket` : en relecture, les véhicules bougent et apparaissent, le choix est refait toutes les 5 s (0 en direct).
+ */
+function labelled(data: TransitData, zoom: number, bucket: number): Vehicle[] {
   const band = Math.floor(zoom * 2) / 2;
-  if (labelCache?.data !== data || labelCache.band !== band) {
-    if (densityCache?.data !== data) densityCache = { data, byLabel: data.vehicles.filter((v) => v.line.name) };
+  if (labelCache?.data !== data || labelCache.band !== band || labelCache.bucket !== bucket) {
+    if (densityCache?.data !== data || densityCache.bucket !== bucket) {
+      densityCache = { data, bucket, byLabel: data.vehicles.filter((v) => v.line.name) };
+    }
     const kept = declutter(densityCache.byLabel, zoom, {
       lon: (v) => v.lon,
       lat: (v) => v.lat,
       rank: (v) => -(v.speedKmh ?? 0),
       box: LABEL_BOX_PX,
     });
-    labelCache = { data, band, vehicles: kept };
+    labelCache = { data, band, bucket, vehicles: kept };
   }
   return labelCache.vehicles;
 }
 
-function labelledNetworks(data: TransitData, zoom: number): Network[] {
+function labelledNetworks(data: TransitData, zoom: number, bucket: number): Network[] {
   const band = Math.floor(zoom * 2) / 2;
-  if (networkLabelCache?.data !== data || networkLabelCache.band !== band) {
+  if (networkLabelCache?.data !== data || networkLabelCache.band !== band || networkLabelCache.bucket !== bucket) {
     const kept = declutter(data.networks, zoom, { lon: (n) => n.lon, lat: (n) => n.lat, rank: (n) => -n.count, box: NETWORK_LABEL_BOX_PX });
-    networkLabelCache = { data, band, networks: kept };
+    networkLabelCache = { data, band, bucket, networks: kept };
   }
   return networkLabelCache.networks;
 }
@@ -607,7 +830,7 @@ export const transit = defineModule<TransitData>({
   name: 'Bus, trams et métros',
   category: 'transport',
   description:
-    'Véhicules des transports urbains en temps réel : leur position quand le réseau la publie, sinon estimée d’après ses horaires en temps réel (contour pointillé). Un rond par réseau de loin, chaque véhicule de près. En direct seulement.',
+    'Véhicules des transports urbains : leur position quand le réseau la publie, sinon estimée d’après ses horaires en temps réel (contour pointillé). Un rond par réseau de loin, chaque véhicule de près. En direct, ou relus depuis l’enregistrement du serveur quand on remonte la frise.',
   attribution:
     'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche) ; Île-de-France : Île-de-France Mobilités, plateforme PRIM (ODbL). Positions estimées par la carte d’après ces horaires',
   refreshIntervalMs: 30_000,
@@ -635,22 +858,34 @@ export const transit = defineModule<TransitData>({
     ];
   },
 
-  load: ({ signal }) => loadTransit(signal),
+  load: ({ signal, time }) => (isReplayTime(time) ? loadTransitReplay(time) : loadTransit(signal)),
+
+  // Bascule entre le direct et la relecture, et d'un tronçon à l'autre.
+  needsReload: (data, time) => (isReplayTime(time) ? !data.replay || data.replay.key !== replayKey('transports', time) : !!data.replay),
 
   summary({ data, time }) {
-    if (!isLive(time)) return 'Hors direct : les véhicules ne sont affichés qu’en temps réel (pas d’historique). Revenez au direct.';
     if (!data) return null;
-    const stale = Math.round((Date.now() - data.collectedAt) / 1000) > STALE_AFTER_S ? ' · serveur sans nouvelles depuis plus de 2 minutes' : '';
-    if (data.vehicles.length === 0) return `Aucun véhicule en circulation dans les flux pour l’instant (la nuit, beaucoup de réseaux sont à l’arrêt).${stale}`;
+    if (data.replay && !isReplayTime(time)) return null;
+    if (data.replay?.chunk === null) return data.replay.absence;
+    if (!data.replay && !shows(data, time)) return null;
+    if (data.replay) updateReplay(data, time);
+    const prefix = data.replay ? replayLabel(time) : 'En direct';
+    const stale = !data.replay && Math.round((Date.now() - data.collectedAt) / 1000) > STALE_AFTER_S ? ' · serveur sans nouvelles depuis plus de 2 minutes' : '';
+    if (data.vehicles.length === 0) {
+      return data.replay
+        ? `${prefix} · aucun véhicule enregistré à cet instant (la nuit, beaucoup de réseaux sont à l’arrêt)`
+        : `${prefix} · aucun véhicule en circulation dans les flux pour l’instant (la nuit, beaucoup de réseaux sont à l’arrêt).${stale}`;
+    }
     const n = data.vehicles.length;
     const m = data.networks.length;
     const e = data.vehicles.filter((v) => v.estimate).length;
     const estimated = e > 0 ? `, dont ${nf(e)} position${e > 1 ? 's' : ''} estimée${e > 1 ? 's' : ''} d’après les horaires` : '';
-    return `${nf(n)} véhicule${n > 1 ? 's' : ''} sur ${nf(m)} réseau${m > 1 ? 'x' : ''}${estimated}${stale}`;
+    return `${prefix} · ${nf(n)} véhicule${n > 1 ? 's' : ''} sur ${nf(m)} réseau${m > 1 ? 'x' : ''}${estimated}${stale}`;
   },
 
   deckLayers({ data, time, terrain, selection, view, settings, night }) {
-    if (!data || !isLive(time)) return [];
+    if (!data || !shows(data, time)) return [];
+    if (data.replay) updateReplay(data, time);
     const parameters = OVER_MAP;
     const chosen = selection as TransitSelection | null;
     const fontFamily = 'system-ui, -apple-system, "Segoe UI", sans-serif';
@@ -711,7 +946,7 @@ export const transit = defineModule<TransitData>({
         view.zoom >= NETWORK_LABEL_FROM_ZOOM &&
           new TextLayer<Network>({
             id: 'transports/reseaux-noms',
-            data: labelledNetworks(data, view.zoom),
+            data: labelledNetworks(data, view.zoom, data.replay ? Math.floor(time / 5000) : 0),
             getPosition: (n) => [n.lon, n.lat, 0],
             getText: (n) => n.name,
             characterSet: 'auto',
@@ -733,9 +968,19 @@ export const transit = defineModule<TransitData>({
     }
 
     // De près : chaque véhicule, posé sur le relief et glissant vers sa nouvelle position.
-    if (place(data, time, terrain)) data.motion++;
+    if (data.replay) {
+      // Relecture : les positions sont déjà celles de l'instant ; reste à les poser sur le relief (une fois par version du relief).
+      for (const v of data.vehicles) {
+        if (v.groundVersion === terrain.version) continue;
+        v.position[2] = terrain.elevation(v.position[0], v.position[1]) + ICON_LIFT_M;
+        v.groundVersion = terrain.version;
+      }
+    } else if (place(data, time, terrain)) {
+      data.motion++;
+    }
     const icons = atlas();
-    const picked = chosen?.type === 'vehicle' ? data.byKey.get(chosen.key) : undefined;
+    const pickedVehicle = chosen?.type === 'vehicle' ? data.byKey.get(chosen.key) : undefined;
+    const picked = pickedVehicle?.here === false ? undefined : pickedVehicle; // en relecture, un véhicule absent n'a pas de position à cet instant
     const common = {
       data: data.vehicles,
       iconAtlas: icons.atlas,
@@ -860,7 +1105,7 @@ export const transit = defineModule<TransitData>({
       view.zoom >= LABELS_FROM_ZOOM &&
         new TextLayer<Vehicle>({
           id: 'transports/lignes',
-          data: labelled(data, view.zoom),
+          data: labelled(data, view.zoom, data.replay ? Math.floor(time / 5000) : 0),
           getPosition: (v) => v.position,
           getText: (v) => v.line.name ?? '',
           characterSet: 'auto',
@@ -892,7 +1137,7 @@ export const transit = defineModule<TransitData>({
   },
 
   describe(selection, { data, time }): InfoContent | null {
-    if (!data || !isLive(time)) return null;
+    if (!data || !shows(data, time)) return null;
     const sel = selection as TransitSelection;
     if (sel.type === 'network') {
       const net = data.networks.find((n) => n.name === sel.name);
@@ -902,10 +1147,11 @@ export const transit = defineModule<TransitData>({
         kind: 'Réseau de transport',
         title: net.name,
         // Tout estimé : le réseau ne publie aucune position. Sinon au moins une est reçue, la pastille le dit.
-        status:
-          net.estimated === net.count
+        status: data.replay
+          ? replayState(time, net.estimated === net.count)
+          : net.estimated === net.count
             ? estimatedStatus('Positions estimées d’après les horaires')
-            : measuredStatus(time, data.collectedAt),
+            : measuredStatus(Date.now(), data.collectedAt),
         figures: [
           { value: nf(net.count), label: 'véhicules en circulation' },
           { value: nf(lines), label: 'lignes en service' },
@@ -919,12 +1165,15 @@ export const transit = defineModule<TransitData>({
       };
     }
     const v = data.byKey.get(sel.key);
-    if (!v) return null;
+    if (!v || (data.replay && !refreshReplayVehicle(data, v, time))) return null;
     const line = v.line;
     // Le réseau et le mode sont dans `kind`, la direction dans le sous-titre : les champs gardent le reste.
     const fields: Array<[string, string]> = [];
     if (!line.name && !line.id) fields.push(['Ligne', 'inconnue (le flux ne la précise pas)']);
-    if (v.estimate) return describeEstimated(v, v.estimate, line, fields);
+    if (v.estimate) {
+      const card = describeEstimated(v, v.estimate, line, fields);
+      return data.replay ? { ...card, status: replayState(time, true) } : card;
+    }
     fields.push(['Véhicule', v.id]);
     fields.push(['Licence des données', LICENCES[line.network.licence] ?? line.network.licence]);
     const figures: InfoFigure[] = [];
@@ -934,21 +1183,24 @@ export const transit = defineModule<TransitData>({
       kind: kindLabel(line),
       title: lineTitle(line),
       subtitle: line.longName,
-      status: measuredStatus(time, v.ts),
+      status: data.replay ? replayState(time, false) : measuredStatus(Date.now(), v.ts),
       figures,
       fields,
-      note: 'Position GPS publiée par le réseau, relue toutes les 30 secondes ; le véhicule glisse d’une position à la suivante, avec un léger retard.',
+      note: data.replay
+        ? 'Position GPS publiée par le réseau et enregistrée par le serveur toutes les 30 secondes environ ; entre deux mesures, la position est interpolée.'
+        : 'Position GPS publiée par le réseau, relue toutes les 30 secondes ; le véhicule glisse d’une position à la suivante, avec un léger retard.',
     };
   },
 
   focus(selection, { data, time }) {
     const sel = selection as TransitSelection;
-    if (!data || !isLive(time)) return null;
+    if (!data || !shows(data, time)) return null;
     if (sel.type === 'network') {
       const net = data.networks.find((n) => n.name === sel.name);
       return net ? { lon: net.lon, lat: net.lat } : null;
     }
     const v = data.byKey.get(sel.key);
-    return v ? { lon: v.position[0], lat: v.position[1] } : null;
+    if (!v || (data.replay && !refreshReplayVehicle(data, v, time))) return null;
+    return { lon: v.position[0], lat: v.position[1] };
   },
 });

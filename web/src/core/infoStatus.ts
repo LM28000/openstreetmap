@@ -10,6 +10,7 @@
  */
 import type { InfoStatus } from './module';
 import { formatDateTime, formatRelative, formatTime } from '../ui/format';
+import { replayLabel } from './replay';
 
 /**
  * Écart toléré entre l'horloge de la carte et l'heure réelle pour parler de direct.
@@ -37,6 +38,11 @@ export function measuredStatus(time: number, measuredAt?: number): InfoStatus {
     return { tone: 'live', text: measuredAt === undefined ? 'En direct' : `En direct · ${formatRelative(measuredAt)}` };
   }
   return { tone: 'replay', text: `Rejoué · ${moment(time)}` };
+}
+
+/** Donnée relue dans l'historique enregistré par le serveur : « Relecture du 9 nov. à 18:05 ». */
+export function replayStatus(time: number): InfoStatus {
+  return { tone: 'replay', text: replayLabel(time) };
 }
 
 /** Valeur calculée plutôt que mesurée : « Position estimée d'après l'horaire ». */

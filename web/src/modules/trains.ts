@@ -16,8 +16,9 @@ import type { Color } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
 import { IconLayer, PathLayer, ScatterplotLayer, SolidPolygonLayer, TextLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { defineModule, type InfoAction, type InfoContent, type InfoFigure, type InfoTable, type TerrainSampler } from '../core/module';
+import { defineModule, type InfoAction, type InfoContent, type InfoFigure, type InfoStatus, type InfoTable, type TerrainSampler } from '../core/module';
 import { measuredStatus, plainStatus, scheduledStatus } from '../core/infoStatus';
+import { isReplayTime, loadAvailability, noRecordingText, replayLabel } from '../core/replay';
 import { formatTime } from '../ui/format';
 import {
   type ApiStation,
@@ -172,7 +173,13 @@ export interface TrainsData {
   to: number;
   /** Origine des horodatages de la traînée : la précision des flottants GPU l'exige. */
   base: number;
+  /** Instant (s UTC) de production du flux de retards utilisé. */
   realtimeAt: number | null;
+  /**
+   * Relecture du passé : instant (s UTC) pour lequel le serveur a retrouvé les retards annoncés (la dernière version
+   * archivée du flux de la SNCF qui ne le dépasse pas). `null` en direct.
+   */
+  replayAt: number | null;
   stations: Station[];
   /** Les gares moyennes et grandes, qui ont un point central. */
   centred: Station[];
@@ -271,13 +278,31 @@ function heading(lon1: number, my1: number, lon2: number, my2: number): number {
 
 // --- Chargement ---
 
+/** Dans le passé, la requête est arrondie à 5 minutes : la même plage revient d'un défilement à l'autre, le navigateur la garde. */
+const REPLAY_BUCKET_S = 300;
+/** En relecture, les retards sont ceux connus au chargement : on recharge au-delà de cet écart (s), pas plus d'une fois toutes les 8 s. */
+const REPLAY_REFRESH_S = 15 * 60;
+const REPLAY_MIN_INTERVAL_MS = 8_000;
+let lastReplayLoad = 0;
+
 async function loadTrains(signal: AbortSignal, time: number): Promise<TrainsData> {
   const t = Math.floor(time / 1000);
+  const replay = isReplayTime(time);
+  // Les trains de l'instant passé : les horaires, avec les retards que le flux de la SNCF annonçait alors (archive du serveur).
+  const at = replay ? Math.floor(t / REPLAY_BUCKET_S) * REPLAY_BUCKET_S : null;
+  const url =
+    at === null ? `/api/trains?from=${t - LOAD_BEFORE_S}&to=${t + LOAD_AFTER_S}` : `/api/historique/trains?from=${at - LOAD_BEFORE_S}&to=${at + LOAD_AFTER_S}&at=${at}`;
+  if (replay) {
+    lastReplayLoad = Date.now();
+    await loadAvailability(); // pour dire, dans le résumé, s'il n'y a pas de retards enregistrés à cet instant
+  }
   // Deux essais : le réseau peut changer de version entre les deux requêtes (nouveaux horaires, tracés prêts).
   for (let attempt = 0; ; attempt++) {
-    const json = await fetchJson<ApiResponse>(`/api/trains?from=${t - LOAD_BEFORE_S}&to=${t + LOAD_AFTER_S}`, signal);
+    const json = await fetchJson<ApiResponse>(url, signal);
     try {
-      return parse(json, await loadNetwork(json.network, signal));
+      const data = parse(json, await loadNetwork(json.network, signal));
+      data.replayAt = at;
+      return data;
     } catch (error) {
       if (attempt === 0 && error instanceof ServerError && error.status === 404) continue;
       throw error;
@@ -595,6 +620,7 @@ function parse(json: ApiResponse, net: RailNetwork): TrainsData {
     to: json.to,
     base,
     realtimeAt: json.realtime?.feedTimestamp ?? null,
+    replayAt: null,
     stations,
     centred: stations.filter((s) => s.size > 0),
     stationByKey: new Map(stations.map((s) => [s.key, s])),
@@ -781,6 +807,12 @@ function delayText(delay: number | null): string {
 }
 
 const hhmm = (seconds: number | undefined) => (seconds === undefined ? '?' : formatTime(seconds * 1000));
+
+/** Pastille des retards : reçus à l'instant en direct ; en relecture, ceux que la SNCF annonçait au moment du flux archivé. */
+function realtimeStatus(data: TrainsData, time: number): InfoStatus {
+  if (data.replayAt !== null) return { tone: 'replay', text: `${replayLabel(time)} · retards connus à ${hhmm(data.realtimeAt ?? undefined)}` };
+  return measuredStatus(time, data.realtimeAt === null ? undefined : data.realtimeAt * 1000);
+}
 const displayCategory = (category: string) => CATEGORY_NAMES[category] ?? category;
 
 // --- Taille des gares selon le trafic ---
@@ -1774,7 +1806,7 @@ function describeTrain(train: Train, t: number, data: TrainsData, time: number):
   const status = train.canceled
     ? plainStatus('Train supprimé')
     : train.realtime
-      ? measuredStatus(time, data.realtimeAt === null ? undefined : data.realtimeAt * 1000)
+      ? realtimeStatus(data, time)
       : scheduledStatus('Horaire prévu');
   const [lon, lat] = running ? head.position : [origin.lon, origin.lat];
 
@@ -1806,7 +1838,7 @@ function describeStation(station: Station, t: number, data: TrainsData, time: nu
     kind: 'Gare',
     title: station.name,
     subtitle: 'tableau d’affichage',
-    status: realtime ? measuredStatus(time, data.realtimeAt! * 1000) : scheduledStatus('Horaires prévus'),
+    status: realtime ? realtimeStatus(data, time) : scheduledStatus('Horaires prévus'),
     figures: [
       { value: String(soon.length), label: 'départs dans l’heure' },
       { value: known.length > 0 ? String(Math.round((onTime / known.length) * 100)) : '—', unit: known.length > 0 ? '%' : undefined, label: 'à l’heure' },
@@ -1940,15 +1972,24 @@ export const trains = defineModule<TrainsData>({
 
   needsReload(data, time) {
     const t = time / 1000;
-    return t < data.from + 5 * 60 || t > data.to - 30 * 60;
+    if (t < data.from + 5 * 60 || t > data.to - 30 * 60) return true;
+    // Passage du direct à la relecture (ou l'inverse), et dérive des retards connus quand on avance dans le passé.
+    if (isReplayTime(time) !== (data.replayAt !== null)) return true;
+    return data.replayAt !== null && Math.abs(t - data.replayAt) > REPLAY_REFRESH_S && Date.now() - lastReplayLoad > REPLAY_MIN_INTERVAL_MS;
   },
 
   summary({ data, time }) {
     if (!data) return null;
     const t = time / 1000;
     const running = data.trains.filter((train) => isRunning(train, t)).length;
+    const count = `${running.toLocaleString('fr-FR')} trains en circulation`;
+    if (data.replayAt !== null) {
+      if (data.realtimeAt) return `${replayLabel(time)} · ${count} · retards connus à ${hhmm(data.realtimeAt)}`;
+      const absence = noRecordingText('trains', time);
+      return `${replayLabel(time)} · ${count} · horaires théoriques${absence ? ` · ${absence}` : ''}`;
+    }
     const live = data.realtimeAt ? ` · temps réel de ${hhmm(data.realtimeAt)}` : ' · horaires théoriques';
-    return `${running.toLocaleString('fr-FR')} trains en circulation${live}`;
+    return `${count}${live}`;
   },
 
   deckLayers({ data, time, terrain, settings, selection, view }) {

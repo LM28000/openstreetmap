@@ -1,25 +1,61 @@
+/*
+ * Interface de la carte : neutres bleutés, la couleur est réservée aux données et le rouge
+ * seulement à « en direct ». Quatre zones fixes : recherche et couches en haut à gauche, fiche
+ * à droite, frise en bas, commandes de la carte en bas à droite. Sous 720 px, une feuille
+ * tirée du bas remplace la fiche, le catalogue et la frise.
+ *
+ * Trois polices (importées dans main.tsx, hébergées avec le site) :
+ *   Bricolage Grotesque : marque et titres · Instrument Sans : interface · JetBrains Mono : heures, numéros, mesures.
+ */
+
 :root {
-  --bg: #0b0d12;
-  --panel-bg: rgba(15, 18, 26, 0.84);
-  --panel-border: rgba(255, 255, 255, 0.09);
-  --panel-shadow: 0 12px 32px rgba(0, 0, 0, 0.35);
-  --text: #eef1f6;
-  --text-muted: #9ba4b4;
-  --text-faint: #6c7586;
-  --accent: #4f8cff;
-  --live: #ff453a;
-  --error: #ff6b6b;
-  --warn: #ffb020;
-  --control-bg: rgba(255, 255, 255, 0.07);
-  --control-bg-hover: rgba(255, 255, 255, 0.13);
-  --radius: 14px;
+  /* Jetons de l'interface (le chrome reste sombre quel que soit le thème de la carte). */
+  --ui-glass: rgba(14, 18, 27, 0.97);
+  --ui-glass-strong: rgba(11, 14, 21, 0.985);
+  --ui-ink: #f1f4f9;
+  --ui-muted: #9aa4b6;
+  /* Un peu plus clair que la maquette (#6b7588) : il sert aussi à du texte, qui doit passer 4,5:1. */
+  --ui-faint: #7a8498;
+  --ui-line: rgba(255, 255, 255, 0.09);
+  --ui-control: rgba(255, 255, 255, 0.07);
+  --ui-control-hover: rgba(255, 255, 255, 0.13);
+  --ui-selected: rgba(255, 255, 255, 0.14);
+  --ui-live: #ff453a;
+  --ui-live-soft: rgba(255, 69, 58, 0.16);
+  --ui-live-ink: #ffb3ad;
+  --ui-warn: #ffd29a;
+  --ui-shadow: 0 14px 34px rgba(0, 0, 0, 0.34);
+  --ui-radius: 14px;
+  --ui-edge: 24px;
+
+  --font-display: 'Bricolage Grotesque', 'Avenir Next', 'Segoe UI', system-ui, sans-serif;
+  --font-body: 'Instrument Sans', 'Helvetica Neue', 'Segoe UI', system-ui, sans-serif;
+  --font-data: 'JetBrains Mono', 'SF Mono', ui-monospace, Menlo, Consolas, monospace;
+
+  /* Noms historiques, pour le code qui s'en sert encore : ils pointent vers les jetons ci-dessus. */
+  --bg: #0e121b;
+  --panel-bg: var(--ui-glass);
+  --panel-border: var(--ui-line);
+  --panel-shadow: var(--ui-shadow);
+  --text: var(--ui-ink);
+  --text-muted: var(--ui-muted);
+  --text-faint: var(--ui-faint);
+  --accent: var(--ui-ink);
+  --live: var(--ui-live);
+  --error: var(--ui-warn);
+  --warn: var(--ui-warn);
+  --control-bg: var(--ui-control);
+  --control-bg-hover: var(--ui-control-hover);
+  --radius: var(--ui-radius);
   --gutter: 16px;
+
   color-scheme: dark;
-  font-family: system-ui, -apple-system, 'Segoe UI', Roboto, 'Helvetica Neue', sans-serif;
+  font-family: var(--font-body);
   font-size: 14px;
   line-height: 1.4;
-  color: var(--text);
+  color: var(--ui-ink);
   -webkit-font-smoothing: antialiased;
+  -webkit-text-size-adjust: 100%;
 }
 
 * {
@@ -38,14 +74,45 @@ body {
   overflow: hidden;
 }
 
-button {
+button,
+input,
+select {
   font: inherit;
   color: inherit;
+}
+
+h1,
+h2,
+h3,
+p {
+  margin: 0;
+}
+
+.mono {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+}
+
+.kicker {
+  margin: 0;
+  color: var(--ui-muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+  font-weight: 500;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+}
+
+/* Focus visible partout : anneau blanc, détaché de l'élément pour se lire sur clair comme sur sombre. */
+:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
 }
 
 .app {
   position: relative;
   height: 100%;
+  height: 100dvh;
 }
 
 .map {
@@ -53,17 +120,14 @@ button {
   inset: 0;
 }
 
-/* --- Panneaux --- */
+/* --- Panneaux : verre sombre. Pas de flou d'arrière-plan : à 97 % d'opacité il ne se verrait pas,
+   et il coûterait à chaque image de la carte animée. --- */
 
 .panel {
-  position: absolute;
-  z-index: 2;
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  border-radius: var(--radius);
-  box-shadow: var(--panel-shadow);
-  backdrop-filter: blur(14px) saturate(1.2);
-  -webkit-backdrop-filter: blur(14px) saturate(1.2);
+  background: var(--ui-glass);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  box-shadow: var(--ui-shadow);
 }
 
 .icon-button {
@@ -74,130 +138,498 @@ button {
   padding: 0;
   border: 0;
   border-radius: 8px;
-  background: var(--control-bg);
+  background: var(--ui-control);
   cursor: pointer;
   flex: none;
 }
 
 .icon-button:hover {
-  background: var(--control-bg-hover);
+  background: var(--ui-control-hover);
 }
 
-.icon-button--large {
-  width: 38px;
-  height: 38px;
-  border-radius: 50%;
-}
-
-:focus-visible {
-  outline: 2px solid var(--accent);
-  outline-offset: 2px;
-}
-
-/* --- Panneau des couches --- */
-
-.layers {
-  top: var(--gutter);
-  left: var(--gutter);
-  width: 310px;
-  max-height: calc(100% - 180px);
-  display: flex;
-  flex-direction: column;
-  overflow: hidden;
-}
-
-.layers__header {
-  display: flex;
+.btn {
+  display: inline-flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 12px;
-  padding: 14px 14px 12px 16px;
-}
-
-.layers__title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.layers__subtitle {
-  margin: 2px 0 0;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.layers__body {
-  overflow-y: auto;
-  padding: 0 8px 10px;
-  border-top: 1px solid var(--panel-border);
-}
-
-.layers__category {
-  margin: 14px 8px 6px;
-  color: var(--text-faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.layer {
-  border-radius: 10px;
-}
-
-.layer:hover {
-  background: rgba(255, 255, 255, 0.04);
-}
-
-.layer__main {
-  display: flex;
-  gap: 12px;
-  align-items: flex-start;
-  padding: 8px;
+  gap: 7px;
+  height: 34px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--ui-control);
+  color: var(--ui-ink);
+  font-size: 13px;
+  text-decoration: none;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.layer__summary {
-  color: var(--text);
-  font-size: 12.5px;
-  font-variant-numeric: tabular-nums;
+.btn:hover {
+  background: var(--ui-control-hover);
 }
 
-.layer__details {
+.btn--primary {
+  background: #f1f4f9;
+  color: #0e121b;
+  font-weight: 600;
+}
+
+.btn--primary:hover {
+  background: #fff;
+}
+
+/* « Suivi en cours » : le bouton blanc devient un contour, pour dire qu'il est enfoncé. */
+.btn--on {
+  background: transparent;
+  color: var(--ui-ink);
+  box-shadow: inset 0 0 0 1.5px var(--ui-ink);
+}
+
+.btn--on:hover {
+  background: var(--ui-control);
+}
+
+.btn--small {
+  height: 28px;
+  padding: 0 10px;
+  font-size: 12.5px;
+}
+
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+/* --- Zone en haut à gauche : recherche, pastilles, catalogue --- */
+
+.zone-tl {
+  position: absolute;
+  z-index: 6;
+  top: 20px;
+  left: var(--ui-edge);
+  bottom: 104px; /* au-dessus de la frise : le catalogue prend la hauteur qui reste */
+  width: 430px;
   display: flex;
   flex-direction: column;
+  gap: 8px;
+  min-height: 0;
+  pointer-events: none; /* la zone laisse passer les gestes sur la carte entre ses éléments */
+}
+
+.zone-tl > * {
+  pointer-events: auto;
+}
+
+/* La recherche passe devant le reste : sa liste de résultats recouvre pastilles et catalogue. */
+.zone-tl__search {
+  position: relative;
+  z-index: 2;
+  flex: none;
+}
+
+.search-box-placeholder {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  height: 50px;
+  padding: 0 14px 0 16px;
+  background: var(--ui-glass);
+  border: 1px solid var(--ui-line);
+  border-radius: var(--ui-radius);
+  box-shadow: var(--ui-shadow);
+}
+
+.search-box-placeholder input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  font-size: 15px;
+  outline: none;
+}
+
+.search-box-placeholder kbd {
+  padding: 2px 6px;
+  border: 1px solid var(--ui-line);
+  border-bottom-width: 2px;
+  border-radius: 6px;
+  color: var(--ui-muted);
+  font-family: var(--font-data);
+  font-size: 11px;
+}
+
+/* --- Pastilles des couches affichées --- */
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  pointer-events: none;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  height: 34px;
+  overflow: hidden;
+  background: var(--ui-glass);
+  border: 1px solid var(--ui-line);
+  border-radius: 999px;
+  box-shadow: var(--ui-shadow);
+  font-size: 13px;
+  pointer-events: auto;
+}
+
+.chip__main {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 100%;
+  padding: 0 4px 0 12px;
+  border: 0;
+  background: none;
+  cursor: pointer;
+  white-space: nowrap;
+}
+
+.chip__main:hover .chip__name {
+  text-decoration: underline;
+  text-underline-offset: 3px;
+}
+
+.chip__swatch {
+  flex: none;
+  width: 14px;
+  height: 4px;
+  border-radius: 2px;
+}
+
+.chip__count {
+  color: var(--ui-muted);
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
+  font-size: 12px;
+}
+
+.chip__remove {
+  display: grid;
+  place-items: center;
+  align-self: stretch;
+  width: 30px;
+  padding: 0 4px 0 0;
+  border: 0;
+  background: none;
+  color: var(--ui-faint);
+  cursor: pointer;
+}
+
+.chip__remove:hover {
+  color: var(--ui-ink);
+}
+
+.chip__main:focus-visible,
+.chip__remove:focus-visible {
+  outline-offset: -3px;
+}
+
+/* Bouton « Couches » : le seul élément clair de l'interface au repos. */
+.chip--add {
+  gap: 7px;
+  padding: 0 13px 0 11px;
+  border: 0;
+  background: rgba(255, 255, 255, 0.92);
+  color: #10141c;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.chip--add:hover {
+  background: #fff;
+}
+
+.chip--add:focus-visible {
+  box-shadow: 0 0 0 2px #0e121b;
+}
+
+/* --- Catalogue des couches (tiroir sur ordinateur, feuille sur téléphone) --- */
+
+.drawer {
+  display: flex;
+  flex: 0 1 auto;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  background: var(--ui-glass-strong);
+}
+
+.drawer__header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 14px 14px 8px 18px;
+}
+
+.drawer__header h2 {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.catalog {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  min-height: 0;
+}
+
+.catalog__filter {
+  display: flex;
+  align-items: center;
+  flex: none;
   gap: 10px;
-  padding: 0 8px 10px 54px; /* aligné sur le texte, après l'interrupteur */
+  height: 38px;
+  margin: 0 14px 12px;
+  padding: 0 12px;
+  border-radius: 10px;
+  background: var(--ui-control);
+  color: var(--ui-muted);
+}
+
+.catalog__filter:focus-within {
+  outline: 2px solid #fff;
+  outline-offset: 2px;
+}
+
+.catalog__filter input {
+  flex: 1;
+  min-width: 0;
+  border: 0;
+  background: transparent;
+  color: var(--ui-ink);
+  font-size: 14px;
+  outline: none;
+}
+
+.catalog__filter input::placeholder {
+  color: var(--ui-muted);
+}
+
+.catalog__scroll {
+  flex: 1;
+  min-height: 0;
+  padding: 0 6px 10px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.catalog__scenes {
+  display: grid;
+  gap: 8px;
+  padding: 0 8px 8px;
+}
+
+.scenes {
+  display: grid;
+  grid-template-columns: repeat(2, 1fr);
+  gap: 8px;
+}
+
+.scene {
+  display: grid;
+  gap: 1px;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: var(--ui-control);
+  text-align: left;
+  cursor: pointer;
+}
+
+.scene:hover {
+  background: var(--ui-control-hover);
+}
+
+.scene b {
+  font-weight: 600;
+}
+
+.scene span {
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+
+/* Scène en cours : le contour dit « choisi », sans teinte. */
+.scene--on {
+  background: rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 0 0 1.5px var(--ui-ink);
+}
+
+.catalog__group {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+}
+
+.catalog__group > .kicker {
+  padding: 14px 12px 6px;
+}
+
+.catalog__empty {
+  padding: 20px 12px;
+  color: var(--ui-muted);
+}
+
+.layer {
+  margin: 0 2px;
+  border-radius: 12px;
+}
+
+.layer--open {
+  background: rgba(255, 255, 255, 0.05);
+}
+
+.layer__line {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 8px;
+  padding-right: 12px;
+}
+
+.layer__main {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr);
+  align-items: center;
+  gap: 10px;
+  padding: 9px 0 9px 12px;
+  border: 0;
+  border-radius: 12px;
+  background: none;
+  text-align: left;
+  cursor: pointer;
+}
+
+.layer__main:hover {
+  background: rgba(255, 255, 255, 0.04);
+}
+
+.layer__icon {
+  color: var(--ui-faint);
+}
+
+.layer--on .layer__icon {
+  color: var(--ui-ink);
+}
+
+.layer__text {
+  display: grid;
+  min-width: 0;
+}
+
+.layer__name {
+  color: var(--ui-muted);
+}
+
+.layer--on .layer__name {
+  color: var(--ui-ink);
+  font-weight: 560;
+}
+
+.layer__fresh {
+  overflow: hidden;
+  color: var(--ui-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer__fresh--warn {
+  color: var(--ui-warn);
+}
+
+.layer__detail {
+  display: grid;
+  gap: 10px;
+  padding: 0 14px 12px 44px; /* aligné sur le nom, après l'icône */
+}
+
+.layer__description {
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  line-height: 1.45;
+}
+
+.layer__source {
+  color: var(--ui-faint);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* Interrupteur : clair quand la couche est affichée, la couleur n'y est pour rien. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  padding: 0;
+  border: 0;
+  border-radius: 11px;
+  background: var(--ui-control-hover);
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.switch__knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ui-faint);
+  transition: transform 0.15s, background 0.15s;
+}
+
+.switch[aria-checked='true'] {
+  background: #f1f4f9;
+}
+
+.switch[aria-checked='true'] .switch__knob {
+  background: #0e121b;
+  transform: translateX(14px);
 }
 
 /* Choix exclusifs (ex. « Par type / Par retard ») */
 .segmented {
   display: inline-flex;
   align-self: flex-start;
+  flex-wrap: wrap;
   gap: 2px;
+  width: fit-content;
+  max-width: 100%;
   padding: 3px;
   border-radius: 9px;
-  background: var(--control-bg);
+  background: var(--ui-control);
 }
 
 .segmented__option {
-  padding: 4px 10px;
+  padding: 5px 12px;
   border: 0;
-  border-radius: 6px;
+  border-radius: 7px;
   background: transparent;
-  color: var(--text-muted);
+  color: var(--ui-muted);
   font-size: 12.5px;
   cursor: pointer;
 }
 
 .segmented__option:hover {
-  color: var(--text);
+  color: var(--ui-ink);
 }
 
 .segmented__option[aria-checked='true'] {
-  background: rgba(255, 255, 255, 0.16);
-  color: var(--text);
+  background: var(--ui-selected);
+  color: var(--ui-ink);
 }
 
 .legend {
@@ -206,7 +638,7 @@ button {
   margin: 0;
   padding: 0;
   list-style: none;
-  color: var(--text-muted);
+  color: var(--ui-muted);
   font-size: 12.5px;
 }
 
@@ -249,148 +681,189 @@ button {
   object-position: left center;
 }
 
-.layer__text {
+/* --- Fiche unifiée --- */
+
+.info {
+  position: absolute;
+  z-index: 4;
+  top: 20px;
+  right: var(--ui-edge);
+  width: 372px;
+  /* Laisse la place aux commandes de la carte (en bas à droite, au-dessus de la frise). */
+  max-height: calc(100% - 20px - 352px);
+  display: grid;
+  align-content: start;
+  gap: 14px;
+  padding: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+/* Les actions restent visibles en bas de la fiche, même quand le contenu défile. */
+.info .actions {
+  position: sticky;
+  bottom: -18px;
+  margin: 0 -18px -18px;
+  padding: 10px 18px 18px;
+  background: var(--ui-glass-strong);
+}
+
+.info__head {
   display: flex;
-  flex-direction: column;
-  gap: 2px;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.info__titles {
+  display: grid;
+  gap: 4px;
   min-width: 0;
 }
 
-.layer__name {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: baseline;
-  gap: 8px;
-  font-weight: 560;
+.info__title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  line-height: 1.15;
+  letter-spacing: -0.01em;
+  text-wrap: balance;
 }
 
-.layer__description {
-  color: var(--text-muted);
-  font-size: 12.5px;
+.info__subtitle {
+  color: var(--ui-muted);
+  font-size: 13.5px;
 }
 
-.layer__meta {
-  color: var(--text-faint);
-  font-size: 11.5px;
+/* Statut de la donnée : seul « en direct » prend la couleur (le rouge). Les autres se lisent à la forme du point. */
+.badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  width: fit-content;
+  max-width: 100%;
+  padding: 3px 10px;
+  border-radius: 999px;
+  background: var(--ui-control);
+  font-size: 12px;
 }
 
-.status {
-  font-size: 11.5px;
-  font-weight: 500;
-}
-
-.status--loading {
-  color: var(--text-muted);
-}
-
-.status--error {
-  color: var(--error);
-}
-
-/* Interrupteur */
-.switch {
-  appearance: none;
-  position: relative;
+.badge__dot {
   flex: none;
-  width: 34px;
-  height: 20px;
-  margin: 1px 0 0;
-  border-radius: 999px;
-  background: rgba(255, 255, 255, 0.16);
-  cursor: pointer;
-  transition: background 0.15s;
-}
-
-.switch::after {
-  content: '';
-  position: absolute;
-  top: 2px;
-  left: 2px;
-  width: 16px;
-  height: 16px;
+  width: 7px;
+  height: 7px;
   border-radius: 50%;
-  background: #fff;
-  box-shadow: 0 1px 2px rgba(0, 0, 0, 0.3);
-  transition: transform 0.15s;
+  background: var(--ui-faint);
 }
 
-.switch:checked {
-  background: var(--accent);
+.badge--live {
+  background: var(--ui-live-soft);
+  color: var(--ui-live-ink);
 }
 
-.switch:checked::after {
-  transform: translateX(14px);
+.badge--live .badge__dot {
+  background: var(--ui-live);
 }
 
-/* --- Fiche d'information --- */
-
-.info {
-  top: var(--gutter);
-  right: 60px; /* laisse la place aux boutons de la carte */
-  width: 370px;
-  max-height: calc(100% - 190px); /* au-dessus de la frise temporelle */
-  overflow-y: auto;
-  padding: 14px 16px 16px;
+.badge--replay .badge__dot {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--ui-ink);
 }
 
-.info__header {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  margin-bottom: 6px;
+.badge--estimated .badge__dot {
+  background: transparent;
+  border: 1.5px dashed var(--ui-muted);
 }
 
-.info__actions {
-  display: flex;
-  align-items: center;
-  gap: 8px;
+/* Chiffres clés : trois cases égales, chiffres à chasse fixe. */
+.figures {
+  display: grid;
+  grid-auto-flow: column;
+  grid-auto-columns: minmax(0, 1fr);
+  gap: 1px;
+  margin: 0;
+  overflow: hidden;
+  border-radius: 10px;
+  background: var(--ui-line);
 }
 
-.follow-button {
-  height: 30px;
-  padding: 0 12px;
-  border: 0;
-  border-radius: 999px;
-  background: var(--control-bg);
-  font-size: 12.5px;
-  font-weight: 560;
-  cursor: pointer;
+.figures__cell {
+  display: grid;
+  gap: 2px;
+  padding: 10px 12px;
+  background: rgba(255, 255, 255, 0.035);
 }
 
-.follow-button:hover {
-  background: var(--control-bg-hover);
-}
-
-.follow-button--on {
-  background: var(--accent);
-  color: #fff;
-}
-
-.info__table {
-  margin-top: 16px;
-}
-
-.info__table-title {
-  margin: 0 0 6px;
-  color: var(--text-faint);
-  font-size: 11px;
+.figures__value {
+  order: -1;
+  margin: 0;
+  font-family: var(--font-data);
+  font-size: 19px;
   font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font-variant-numeric: tabular-nums;
+  overflow-wrap: anywhere;
+}
+
+.figures__unit {
+  color: var(--ui-muted);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.figures__label {
+  color: var(--ui-muted);
+  font-size: 11.5px;
+}
+
+.info__fields {
+  display: grid;
+  gap: 6px;
+  margin: 0;
+}
+
+.info__field {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.info__field dt {
+  color: var(--ui-muted);
+}
+
+.info__field dd {
+  margin: 0;
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+
+.info__note {
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.info__empty {
+  color: var(--ui-muted);
+  font-size: 12.5px;
+}
+
+.info__table > .kicker {
+  margin-bottom: 6px;
 }
 
 .info__table table {
   width: 100%;
   border-collapse: collapse;
-  font-size: 12.5px;
+  font-size: 13px;
 }
 
 .info__table th {
   padding: 4px 6px;
-  color: var(--text-faint);
+  border-bottom: 1px solid var(--ui-line);
+  color: var(--ui-faint);
   font-weight: 500;
   text-align: left;
-  border-bottom: 1px solid var(--panel-border);
 }
 
 .info__table td {
@@ -398,6 +871,11 @@ button {
   border-bottom: 1px solid rgba(255, 255, 255, 0.04);
   font-variant-numeric: tabular-nums;
   vertical-align: top;
+}
+
+.info__table td.num {
+  font-family: var(--font-data);
+  font-size: 12.5px;
 }
 
 .info__table td:first-child,
@@ -414,21 +892,21 @@ button {
 }
 
 .row--muted td {
-  color: var(--text-faint);
+  color: var(--ui-faint);
 }
 
 .row--current td {
-  color: var(--text);
+  color: var(--ui-ink);
   font-weight: 600;
 }
 
 .row--current td:first-child {
-  box-shadow: inset 3px 0 0 var(--accent);
+  box-shadow: inset 3px 0 0 var(--ui-ink);
   padding-left: 8px;
 }
 
 .row--alert td {
-  color: var(--error);
+  color: var(--ui-warn);
 }
 
 .row--link {
@@ -440,151 +918,63 @@ button {
 }
 
 .row--link:focus-visible {
-  outline: 2px solid var(--accent);
   outline-offset: -2px;
 }
 
-.info__note {
-  margin: 12px 0 0;
-  color: var(--text-muted);
-  font-size: 12.5px;
-  line-height: 1.5;
-}
-
-.info__empty {
-  margin: 0;
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.info__kicker {
-  color: var(--text-faint);
-  font-size: 11px;
-  font-weight: 600;
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
-}
-
-.info__title {
-  margin: 0;
-  font-size: 17px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.info__subtitle {
-  margin: 2px 0 0;
-  color: var(--text-muted);
-}
-
-.info__fields {
-  display: grid;
-  gap: 6px;
-  margin: 14px 0 0;
-}
-
-.info__field {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.info__field dt {
-  color: var(--text-muted);
-}
-
-.info__field dd {
-  margin: 0;
-  text-align: right;
-  font-variant-numeric: tabular-nums;
-}
-
-.info__link {
-  display: inline-block;
-  margin-top: 14px;
-  color: var(--accent);
-  text-decoration: none;
-  font-size: 13px;
-}
-
-.info__link:hover {
-  text-decoration: underline;
-}
-
-/* --- Frise temporelle --- */
+/* --- Frise --- */
 
 .timebar {
-  left: 50%;
-  bottom: 28px;
-  transform: translateX(-50%);
-  width: min(780px, calc(100% - 2 * var(--gutter)));
-  padding: 12px 16px 10px;
-}
-
-.timebar__row {
-  display: flex;
-  flex-wrap: wrap;
+  display: grid;
+  grid-template-columns: auto auto auto minmax(0, 1fr) auto;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
 }
 
-.timebar__time {
-  display: flex;
-  flex-direction: column;
-  flex: 1;
-  min-width: 170px;
+.panel.timebar {
+  position: absolute;
+  z-index: 5;
+  left: var(--ui-edge);
+  right: var(--ui-edge);
+  bottom: 20px;
+  height: 64px;
+  padding: 0 16px;
 }
 
-.timebar__clock {
-  font-size: 22px;
-  font-weight: 600;
-  font-variant-numeric: tabular-nums;
-  letter-spacing: -0.01em;
-}
-
-.timebar__date {
-  color: var(--text-muted);
-  font-size: 12.5px;
-}
-
-.timebar__offset {
-  color: var(--warn);
-  font-variant-numeric: tabular-nums;
-}
-
-.live-button {
+.live {
   display: inline-flex;
   align-items: center;
   gap: 8px;
-  height: 32px;
-  padding: 0 12px;
+  height: 34px;
+  padding: 0 13px;
   border: 0;
   border-radius: 999px;
-  background: var(--control-bg);
+  background: var(--ui-control);
+  color: var(--ui-ink);
   font-size: 13px;
-  font-weight: 560;
-  cursor: pointer;
+  font-weight: 600;
   white-space: nowrap;
+  cursor: pointer;
 }
 
-.live-button:hover {
-  background: var(--control-bg-hover);
+.live:hover {
+  background: var(--ui-control-hover);
 }
 
-.live-button__dot {
+.live__dot {
   width: 8px;
   height: 8px;
   border-radius: 50%;
-  background: var(--text-faint);
+  background: var(--ui-faint);
 }
 
-.live-button--on {
-  background: rgba(255, 69, 58, 0.16);
-  color: #ffd2cf;
+/* Le rouge ne sert qu'à « en direct » ; hors du direct, la pastille devient grise. */
+.live--on {
+  background: var(--ui-live-soft);
+  color: var(--ui-live-ink);
 }
 
-.live-button--on .live-button__dot {
-  background: var(--live);
+.live--on .live__dot {
+  background: var(--ui-live);
   animation: pulse 1.6s ease-out infinite;
 }
 
@@ -597,98 +987,683 @@ button {
   }
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .live-button--on .live-button__dot {
-    animation: none;
-  }
+.timebar__time {
+  display: grid;
+  width: 176px;
+  line-height: 1.15;
 }
 
-.speeds {
-  display: flex;
-  gap: 2px;
-  padding: 3px;
-  border-radius: 10px;
-  background: var(--control-bg);
-}
-
-.speed {
-  padding: 5px 9px;
-  border: 0;
-  border-radius: 7px;
-  background: transparent;
-  color: var(--text-muted);
-  font-size: 12.5px;
+.timebar__clock {
+  font-family: var(--font-data);
+  font-size: 20px;
+  font-weight: 600;
   font-variant-numeric: tabular-nums;
-  cursor: pointer;
+}
+
+.timebar__date {
+  overflow: hidden;
+  color: var(--ui-muted);
+  font-size: 12px;
+  text-overflow: ellipsis;
   white-space: nowrap;
 }
 
-.speed:hover {
-  color: var(--text);
+.timebar__offset {
+  font-family: var(--font-data);
+  font-variant-numeric: tabular-nums;
 }
 
-.speed[aria-checked='true'] {
-  background: rgba(255, 255, 255, 0.16);
-  color: var(--text);
+/* Piste : bandes jour et nuit (canvas), repères de jour, « maintenant » et curseur. */
+.track {
+  position: relative;
+  height: 44px;
+  min-width: 0;
 }
 
-.timebar__slider {
+.track__bands {
+  position: absolute;
+  top: 6px;
+  left: 0;
+  border-radius: 6px;
+}
+
+.track__future {
+  position: absolute;
+  top: 6px;
+  right: 0;
+  height: 24px;
+  border-radius: 0 6px 6px 0;
+  background: repeating-linear-gradient(135deg, rgba(255, 255, 255, 0.09) 0 3px, transparent 3px 7px);
+}
+
+.track__tick {
+  position: absolute;
+  top: 6px;
+  width: 1px;
+  height: 24px;
+  background: rgba(255, 255, 255, 0.14);
+}
+
+.track__now {
+  position: absolute;
+  top: 2px;
+  width: 2px;
+  height: 32px;
+  margin-left: -1px;
+  border-radius: 1px;
+  background: #fff;
+}
+
+.track__head {
+  position: absolute;
+  top: 3px;
+  width: 14px;
+  height: 30px;
+  margin-left: -7px;
+  border-radius: 7px;
+  background: #f1f4f9;
+  box-shadow: 0 0 0 2px #0e121b;
+  pointer-events: none;
+}
+
+.track:has(.track__input:focus-visible) .track__head {
+  outline: 2px solid #fff;
+  outline-offset: 4px;
+}
+
+.track__label {
+  position: absolute;
+  top: 31px;
+  color: var(--ui-faint);
+  font-family: var(--font-data);
+  font-size: 10px;
+  white-space: nowrap;
+  transform: translateX(-50%);
+  pointer-events: none;
+}
+
+.track__label--now {
+  color: var(--ui-ink);
+}
+
+/* Le vrai champ « curseur » recouvre la piste, invisible : il donne la souris, le doigt et le clavier. */
+.track__input {
+  position: absolute;
+  inset: 0;
   width: 100%;
-  margin: 12px 0 2px;
-  accent-color: var(--accent);
+  height: 100%;
+  margin: 0;
+  opacity: 0;
+  cursor: pointer;
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+}
+
+.track__input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  width: 2px;
+  height: 36px;
+}
+
+.track__input::-moz-range-thumb {
+  width: 2px;
+  height: 36px;
+  border: 0;
+}
+
+/* Menu de vitesse et de sauts */
+.speed-menu {
+  position: relative;
+}
+
+.speed {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 10px 0 12px;
+  border: 0;
+  border-radius: 9px;
+  background: var(--ui-control);
+  font-family: var(--font-data);
+  font-size: 13px;
+  white-space: nowrap;
   cursor: pointer;
 }
 
-.timebar__scale {
-  display: flex;
-  justify-content: space-between;
-  color: var(--text-faint);
-  font-size: 11px;
+.speed:hover {
+  background: var(--ui-control-hover);
 }
 
-/* --- Contrôles MapLibre --- */
+.popover {
+  position: absolute;
+  z-index: 20;
+  right: 0;
+  bottom: calc(100% + 16px);
+  display: grid;
+  gap: 4px;
+  width: 340px;
+  max-width: calc(100vw - 24px);
+  padding: 10px;
+  background: var(--ui-glass-strong);
+}
+
+.popover > .kicker {
+  padding: 4px 8px;
+}
+
+.popover > .kicker:not(:first-child) {
+  padding-top: 8px;
+}
+
+.popover__speeds {
+  display: grid;
+  grid-template-columns: repeat(5, 1fr);
+  gap: 4px;
+}
+
+.popover__speed {
+  padding: 7px 0;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  font-family: var(--font-data);
+  font-size: 12px;
+  text-align: center;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.popover__speed:hover {
+  background: var(--ui-control);
+}
+
+.popover__speed[aria-checked='true'] {
+  background: var(--ui-selected);
+}
+
+.popover__jumps {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  padding: 0 4px 4px;
+}
+
+.popover__date {
+  display: flex;
+  gap: 8px;
+  padding: 0 4px 4px;
+}
+
+.popover__date input {
+  flex: 1;
+  min-width: 0;
+  height: 28px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 8px;
+  background: var(--ui-control);
+  font-family: var(--font-data);
+  font-size: 12px;
+  color-scheme: dark;
+}
+
+/* --- Accueil de la première visite --- */
+
+.welcome {
+  position: absolute;
+  z-index: 10;
+  top: 42%;
+  left: 50%;
+  display: grid;
+  gap: 14px;
+  width: min(400px, calc(100% - 32px));
+  padding: 18px;
+  background: var(--ui-glass-strong);
+  transform: translate(-50%, -50%);
+}
+
+.welcome__head {
+  display: grid;
+  gap: 4px;
+}
+
+.welcome__title {
+  font-family: var(--font-display);
+  font-size: 22px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+}
+
+.welcome__lines {
+  display: grid;
+  gap: 10px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.welcome__line {
+  display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 10px;
+}
+
+.welcome__line--wait {
+  display: block;
+  color: var(--ui-muted);
+}
+
+.welcome__count {
+  font-family: var(--font-data);
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.welcome__hint {
+  color: var(--ui-muted);
+  font-size: 12.5px;
+}
+
+/* --- Commandes de la carte (MapLibre) : en bas à droite, avec l'échelle ; crédits sous la frise --- */
+
+.maplibregl-ctrl-bottom-right {
+  right: var(--ui-edge);
+  bottom: 104px;
+}
+
+.maplibregl-ctrl-bottom-right .maplibregl-ctrl {
+  margin: 8px 0 0;
+}
 
 .maplibregl-ctrl-group {
-  background: var(--panel-bg);
-  border: 1px solid var(--panel-border);
-  box-shadow: var(--panel-shadow);
+  overflow: hidden;
+  background: var(--ui-glass);
+  border: 1px solid var(--ui-line);
+  border-radius: 12px;
+  box-shadow: var(--ui-shadow);
+}
+
+.maplibregl-ctrl-group button {
+  width: 40px;
+  height: 40px;
 }
 
 .maplibregl-ctrl-group button + button {
-  border-top-color: var(--panel-border);
+  border-top: 1px solid var(--ui-line);
 }
 
+.maplibregl-ctrl-group button:hover {
+  background: var(--ui-control-hover);
+}
+
+/* Icônes sombres de MapLibre, passées en clair ; celles des états actifs (bleues) deviennent blanches. */
 .maplibregl-ctrl-group button .maplibregl-ctrl-icon {
   filter: invert(1);
 }
 
-.maplibregl-ctrl-top-right {
-  top: 6px;
-  right: 6px;
+.maplibregl-ctrl-group .maplibregl-ctrl-globe-enabled .maplibregl-ctrl-icon,
+.maplibregl-ctrl-group .maplibregl-ctrl-terrain-enabled .maplibregl-ctrl-icon {
+  filter: brightness(0) invert(1);
 }
 
-/* --- Petits écrans --- */
+.maplibregl-ctrl-group .maplibregl-ctrl-globe-enabled,
+.maplibregl-ctrl-group .maplibregl-ctrl-terrain-enabled {
+  background: var(--ui-selected);
+}
 
-@media (max-width: 720px) {
-  .layers {
-    right: 60px;
-    width: auto;
-    max-height: 45%;
+/* Globe et relief ne forment qu'un seul groupe, comme dans la maquette. */
+.maplibregl-ctrl-group:has(.maplibregl-ctrl-globe, .maplibregl-ctrl-globe-enabled) {
+  border-bottom-left-radius: 0;
+  border-bottom-right-radius: 0;
+}
+
+.maplibregl-ctrl-group:has(.maplibregl-ctrl-globe, .maplibregl-ctrl-globe-enabled) + .maplibregl-ctrl-group:has(.maplibregl-ctrl-terrain, .maplibregl-ctrl-terrain-enabled) {
+  margin-top: -1px;
+  border-top-left-radius: 0;
+  border-top-right-radius: 0;
+}
+
+/* Le focus bleu de MapLibre laisse la place à l'anneau blanc de l'interface. */
+.maplibregl-ctrl-group button:focus,
+.maplibregl-ctrl-group button:focus-visible,
+.maplibregl-ctrl-attrib-button:focus,
+.maplibregl-ctrl-attrib-button:focus-visible {
+  box-shadow: none;
+}
+
+.maplibregl-ctrl-group button:focus-visible {
+  outline: 2px solid #fff;
+  outline-offset: -3px;
+}
+
+.maplibregl-ctrl-scale {
+  position: absolute;
+  right: 52px;
+  bottom: 0;
+  margin: 0 !important;
+  padding: 1px 7px 0;
+  border: 1.5px solid var(--ui-muted);
+  border-top: 0;
+  border-radius: 0 0 4px 4px;
+  background: var(--ui-glass);
+  color: var(--ui-ink);
+  font-family: var(--font-data);
+  font-size: 10.5px;
+  line-height: 14px;
+}
+
+/* Crédits : au ras du bas de l'écran, sous la frise (leur place dans la maquette).
+   Le sélecteur est doublé pour passer devant la règle `.maplibregl-compact` de MapLibre. */
+.maplibregl-ctrl.maplibregl-ctrl-attrib.maplibregl-ctrl-attrib {
+  position: fixed;
+  right: var(--ui-edge);
+  bottom: 2px;
+  margin: 0 !important;
+  font-family: var(--font-body);
+  font-size: 10.5px;
+  z-index: 1;
+}
+
+/* --- Feuille du téléphone --- */
+
+.sheet {
+  position: absolute;
+  z-index: 8;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  display: flex;
+  flex-direction: column;
+  border-bottom: 0;
+  border-radius: 22px 22px 0 0;
+  background: var(--ui-glass-strong);
+  transition: height 0.22s ease;
+  overflow: hidden;
+}
+
+.sheet--dragging {
+  transition: none;
+}
+
+.sheet__grip {
+  flex: none;
+  padding: 8px 16px 6px;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.sheet__handle {
+  position: relative;
+  display: block;
+  width: 40px;
+  height: 5px;
+  margin: 0 auto 10px;
+  padding: 0;
+  border: 0;
+  border-radius: 3px;
+  background: rgba(255, 255, 255, 0.3);
+  cursor: grab;
+}
+
+/* Zone de toucher plus large que le trait visible. */
+.sheet__handle::after {
+  content: '';
+  position: absolute;
+  inset: -14px -40px;
+}
+
+.sheet__peek {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 40px;
+}
+
+.sheet__clock {
+  display: grid;
+  margin-right: auto;
+  font-family: var(--font-data);
+  font-size: 20px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+
+.sheet__clock small {
+  color: var(--ui-muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+.sheet__tabs {
+  display: flex;
+  gap: 2px;
+  width: fit-content;
+  padding: 3px;
+  border-radius: 9px;
+  background: var(--ui-control);
+}
+
+.sheet__tab {
+  padding: 5px 14px;
+  border: 0;
+  border-radius: 7px;
+  background: none;
+  color: var(--ui-muted);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.sheet__tab[aria-selected='true'] {
+  background: var(--ui-selected);
+  color: var(--ui-ink);
+}
+
+.sheet__title {
+  font-family: var(--font-display);
+  font-size: 20px;
+  font-weight: 700;
+}
+
+.sheet__body {
+  flex: 1;
+  min-height: 0;
+  padding: 4px 8px 8px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.sheet__fiche {
+  display: grid;
+  gap: 14px;
+  padding: 4px 10px 12px;
+}
+
+.sheet__time {
+  flex: none;
+  padding: 10px 14px calc(10px + env(safe-area-inset-bottom, 0px));
+  border-top: 1px solid var(--ui-line);
+}
+
+.summary {
+  display: flex;
+  flex: 1;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-width: 0;
+}
+
+.summary__text {
+  display: grid;
+  min-width: 0;
+}
+
+.summary__title {
+  overflow: hidden;
+  font-family: var(--font-display);
+  font-size: 18px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary__status {
+  overflow: hidden;
+  color: var(--ui-muted);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.summary__figure {
+  flex: none;
+  font-family: var(--font-data);
+  font-size: 22px;
+  font-weight: 600;
+  font-variant-numeric: tabular-nums;
+}
+
+.summary__figure small {
+  color: var(--ui-muted);
+  font-family: var(--font-body);
+  font-size: 12px;
+  font-weight: 400;
+}
+
+/* Frise compacte de la feuille : commandes sur une ligne, piste dessous. */
+.timebar--compact {
+  grid-template-areas:
+    'live play time speed'
+    'track track track track';
+  grid-template-columns: auto auto 1fr auto;
+  gap: 8px 10px;
+}
+
+.timebar--compact .live {
+  grid-area: live;
+}
+
+.timebar--compact .timebar__play {
+  grid-area: play;
+}
+
+.timebar--compact .timebar__time {
+  grid-area: time;
+  width: auto;
+}
+
+.timebar--compact .speed-menu {
+  grid-area: speed;
+}
+
+.timebar--compact .track {
+  grid-area: track;
+  height: 36px;
+}
+
+.timebar--compact .track__bands,
+.timebar--compact .track__tick,
+.timebar--compact .track__future {
+  top: 4px;
+}
+
+.timebar--compact .track__now {
+  top: 0;
+}
+
+.timebar--compact .track__head {
+  top: 1px;
+}
+
+@media (max-width: 960px) {
+  .zone-tl {
+    width: 340px;
   }
 
   .info {
-    top: auto;
-    left: var(--gutter);
-    right: var(--gutter);
-    bottom: 200px;
+    width: 320px;
+  }
+}
+
+/* --- Téléphone : la recherche reste en haut, le reste vit dans la feuille --- */
+
+@media (max-width: 719.98px) {
+  :root {
+    --ui-edge: 12px;
+  }
+
+  .zone-tl {
+    top: calc(12px + env(safe-area-inset-top, 0px));
+    right: var(--ui-edge);
+    bottom: auto;
     width: auto;
   }
 
-  .timebar {
-    bottom: 36px;
+  .search-box-placeholder {
+    height: 46px;
   }
 
-  .speed {
-    padding: 5px 7px;
+  /* Une seule rangée qu'on fait défiler ; « Couches » reste en tête, toujours à portée du pouce. */
+  .chips {
+    flex-wrap: nowrap;
+    padding-bottom: 2px;
+    overflow-x: auto;
+    pointer-events: auto;
+    scrollbar-width: none;
+  }
+
+  .chips::-webkit-scrollbar {
+    display: none;
+  }
+
+  .chip {
+    flex: none;
+    height: 30px;
+    font-size: 12px;
+  }
+
+  .chip--add {
+    order: -1;
+  }
+
+  /* Les commandes et les crédits montent avec la feuille, et disparaissent quand elle couvre tout. */
+  .maplibregl-ctrl-bottom-right {
+    right: var(--ui-edge);
+    bottom: calc(var(--sheet-h, 68px) + 12px);
+    transition: bottom 0.22s ease;
+  }
+
+  .maplibregl-ctrl.maplibregl-ctrl-attrib.maplibregl-ctrl-attrib {
+    right: auto;
+    left: 8px;
+    bottom: calc(var(--sheet-h, 68px) + 6px);
+  }
+
+  .app[data-sheet='full'] .maplibregl-ctrl-bottom-right,
+  .app[data-sheet='full'] .maplibregl-ctrl-attrib {
+    display: none;
+  }
+
+  .welcome {
+    top: 40%;
+  }
+
+  .popover {
+    right: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
   }
 }

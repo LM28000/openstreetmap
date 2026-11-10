@@ -20,6 +20,15 @@ importers:
       '@deck.gl/mapbox':
         specifier: ~9.4.1
         version: 9.4.1(@deck.gl/core@9.4.1(@luma.gl/webgpu@9.4.2(@luma.gl/core@9.4.2)(@luma.gl/shadertools@9.4.2(@luma.gl/core@9.4.2))))(@luma.gl/core@9.4.2)(@math.gl/web-mercator@4.1.0)
+      '@fontsource/bricolage-grotesque':
+        specifier: ~5.3.0
+        version: 5.3.0
+      '@fontsource/instrument-sans':
+        specifier: ~5.3.0
+        version: 5.3.0
+      '@fontsource/jetbrains-mono':
+        specifier: ~5.3.0
+        version: 5.3.0
       maplibre-gl:
         specifier: ~5.24.0
         version: 5.24.0
@@ -95,6 +104,15 @@ packages:
       '@luma.gl/engine': ~9.4.0
       '@luma.gl/gltf': ~9.4.0
       '@luma.gl/shadertools': ~9.4.0
+
+  '@fontsource/bricolage-grotesque@5.3.0':
+    resolution: {integrity: sha512-MdOVb/5in11IfN/IQJOExMuu6AroCIQbirl0yX7NUvKk+h0HYIKfGaVAXRS/gCPil4aFxWhjZnOw28tUwv7tFw==}
+
+  '@fontsource/instrument-sans@5.3.0':
+    resolution: {integrity: sha512-QwXc4hb/px3XvSPS2CPAOgey8nyrQFxgxrmXQQ+pN+P51hKdAcchxpg8rSbjANFfPu6VKXhDqkVDucXMZ9CM5g==}
+
+  '@fontsource/jetbrains-mono@5.3.0':
+    resolution: {integrity: sha512-fqDfB5I9f1p1TV486aUgB9t8zP84P0O1FtQR5Ol9vjwPy+S+EIGlVYm1cvj2W5shcZMTg2nZFdVMoH5wFu8a1A==}
 
   '@loaders.gl/3d-tiles@4.5.4':
     resolution: {integrity: sha512-hkrOU3EC+jOgpgORb9OP9sETRiMGNEpukuBHQNppULcFnbhXjBsYtrVg2s/FEW7mdW5uERgaNtfRTyDxLF++uA==}
@@ -1147,6 +1165,12 @@ snapshots:
     transitivePeerDependencies:
       - '@loaders.gl/core'
       - texture-compressor
+
+  '@fontsource/bricolage-grotesque@5.3.0': {}
+
+  '@fontsource/instrument-sans@5.3.0': {}
+
+  '@fontsource/jetbrains-mono@5.3.0': {}
 
   '@loaders.gl/3d-tiles@4.5.4(@loaders.gl/core@4.5.4)(texture-compressor@1.0.2)':
     dependencies:

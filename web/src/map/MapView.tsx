@@ -4,6 +4,7 @@ import {
   GlobeControl,
   Map as MapLibreMap,
   NavigationControl,
+  ScaleControl,
   TerrainControl,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -26,6 +27,19 @@ const PICKING_RADIUS = 5;
 /** Au plus une notification « la vue a changé » par seconde (la caméra qui suit un train bouge sans arrêt). */
 const VIEW_NOTIFY_INTERVAL_MS = 1_000;
 
+/** Libellés des commandes de la carte (lecteurs d'écran et info-bulles). */
+const FRENCH_LABELS = {
+  'AttributionControl.ToggleAttribution': 'Afficher les crédits',
+  'AttributionControl.MapFeedback': 'Signaler une erreur sur la carte',
+  'NavigationControl.ResetBearing': 'Remettre le nord en haut (glisser pour tourner)',
+  'NavigationControl.ZoomIn': 'Zoom avant',
+  'NavigationControl.ZoomOut': 'Zoom arrière',
+  'GlobeControl.Enable': 'Afficher le globe',
+  'GlobeControl.Disable': 'Revenir à la carte plane',
+  'TerrainControl.Enable': 'Activer le relief',
+  'TerrainControl.Disable': 'Désactiver le relief',
+};
+
 export function MapView({ manager }: { manager: ModuleManager }) {
   const containerRef = useRef<HTMLDivElement>(null);
 
@@ -38,13 +52,19 @@ export function MapView({ manager }: { manager: ModuleManager }) {
       style: BASE_STYLE_URL,
       ...INITIAL_VIEW,
       maxPitch: 80,
-      hash: 'vue', // la vue est gardée dans l'adresse : on peut la partager ou recharger
+      // La vue est gardée dans l'adresse (paramètre `vue`), à côté des couches, de l'instant et de la
+      // sélection que gère `core/shareState.ts` : on peut partager ou recharger.
+      hash: 'vue',
       attributionControl: false,
+      locale: FRENCH_LABELS,
     });
-    map.addControl(new AttributionControl({ compact: true }), 'bottom-right');
-    map.addControl(new NavigationControl({ visualizePitch: true }), 'top-right');
-    map.addControl(new GlobeControl(), 'top-right');
-    map.addControl(new TerrainControl({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION }), 'top-right');
+    // Commandes regroupées en bas à droite, loin de la fiche (voir styles.css). Pour les coins du bas,
+    // MapLibre empile du bas vers le haut : le dernier contrôle ajouté est le plus haut.
+    map.addControl(new AttributionControl(), 'bottom-right'); // placé en bas de l'écran par le CSS
+    map.addControl(new ScaleControl({ maxWidth: 110 }), 'bottom-right');
+    map.addControl(new TerrainControl({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION }), 'bottom-right');
+    map.addControl(new GlobeControl(), 'bottom-right');
+    map.addControl(new NavigationControl({ visualizePitch: true }), 'bottom-right');
     keepGlobeAndTerrainApart(map);
     ignoreMissingIcons(map);
 
@@ -112,6 +132,12 @@ export function MapView({ manager }: { manager: ModuleManager }) {
 
     map.on('style.load', () => setupBaseMap(map));
     map.once('load', () => {
+      // Sur téléphone les crédits démarrent repliés (le bouton (i) les déroule) : dépliés, ils couvrent la carte.
+      if (window.matchMedia('(max-width: 719.98px)').matches) {
+        const attribution = container.querySelector('.maplibregl-ctrl-attrib');
+        attribution?.classList.remove('maplibregl-compact-show');
+        attribution?.removeAttribute('open');
+      }
       map.addControl(overlay);
       manager.attachMap(map);
       frameRequest = requestAnimationFrame(tick);

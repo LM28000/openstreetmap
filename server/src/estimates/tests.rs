@@ -221,3 +221,23 @@ fn le_cache_ne_garde_que_les_gtfs_du_catalogue() {
     assert_eq!(left, ["res-1.zip"], "les anciennes versions et les restes de téléchargement sont effacés");
     assert_eq!(cache_path(Path::new("/d"), "a/../b").file_name().and_then(|n| n.to_str()), Some("a____b.zip"), "nom de fichier sûr");
 }
+
+#[test]
+fn les_vehicules_d_ile_de_france_suivent_le_siri_et_le_retard_n_est_donne_que_s_il_est_exact() {
+    let schedule = idf::tests::schedule("estimation");
+    let now = fixture::paris("2026-11-10T12:15:00");
+    let body = serde_json::to_vec(&json!({"Siri": {"ServiceDelivery": {"EstimatedTimetableDelivery": [{"EstimatedJourneyVersionFrame": [{"EstimatedVehicleJourney": [
+        {"LineRef": {"value": "STIF:Line::C01742:"}, "DatedVehicleJourneyRef": {"value": "SNCF_MAGENTA_PRD:VehicleJourney::3e64b3cc-46a7-4968-8df2-6316175a9553:LOC"},
+         "EstimatedCalls": {"EstimatedCall": [
+            {"StopPointRef": {"value": "STIF:StopArea:SP:200:"}, "AimedDepartureTime": "2026-11-10T11:10:00Z", "ExpectedDepartureTime": "2026-11-10T11:12:00Z"},
+            {"StopPointRef": {"value": "STIF:StopArea:SP:201:"}, "AimedArrivalTime": "2026-11-10T11:20:00Z", "ExpectedArrivalTime": "2026-11-10T11:23:00Z"}]}}
+    ]}]}]}}}))
+    .unwrap();
+    let journeys = idf::parse_siri(&body, &|_| true).unwrap();
+    let (realtime, _) = idf::match_journeys(&schedule, &journeys, now);
+    let vehicles = estimate(&schedule, Some(&realtime), now);
+    let rer = vehicles.iter().find(|v| v.out.id.starts_with("IDFM:TN:SNCF")).expect("le RER est en circulation à 12:15");
+    let est = rer.out.est.as_ref().unwrap();
+    assert!(!est.theoretical, "le SIRI donne des heures pour ce train");
+    assert_eq!((est.delay, est.to.as_deref(), est.next.as_deref()), (Some(180), Some("Nanterre"), Some("Nanterre")));
+}

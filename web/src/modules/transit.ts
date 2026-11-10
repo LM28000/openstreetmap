@@ -279,6 +279,7 @@ function kindOf(mode: ApiLine['mode']): Kind {
     case 'metro':
       return 'metro';
     case 'train':
+      return 'metro'; // RER, Transilien : rame de voitures accouplées (la maquette du métro), pas un bus articulé
     case 'ferry':
     case 'cable':
       return 'other';
@@ -302,7 +303,8 @@ function luminance([r, g, b]: [number, number, number]): number {
 }
 
 function colorsOf(line: Line, dim: boolean): { fill: Color; halo: Color; hex: string } {
-  const hex = line.officialColor ?? (line.mode ? MODE_COLORS[line.kind] : UNKNOWN_MODE_COLOR);
+  // Un train sans couleur de ligne reste gris : il a la maquette du métro, pas sa couleur.
+  const hex = line.officialColor ?? (line.mode === 'train' ? MODE_COLORS.other : line.mode ? MODE_COLORS[line.kind] : UNKNOWN_MODE_COLOR);
   const base = rgb(hex);
   const alpha = dim ? 110 : 255;
   return { fill: [...base, alpha], halo: [...(luminance(base) > 0.35 ? OUTLINE_DARK : OUTLINE_LIGHT), dim ? 90 : 235], hex };
@@ -553,6 +555,8 @@ function kindLabel(line: Line): string {
 }
 
 function lineTitle(line: Line): string {
+  // « RER A », « Transilien H » (donnés par le serveur) disent mieux que « Ligne A ».
+  if (line.mode === 'train' && line.longName && line.longName.length <= 16) return line.longName;
   if (line.name) return `Ligne ${line.name}`;
   if (line.id) return `Ligne ${line.id}`;
   return 'Ligne inconnue';
@@ -605,7 +609,7 @@ export const transit = defineModule<TransitData>({
   description:
     'Véhicules des transports urbains en temps réel : leur position quand le réseau la publie, sinon estimée d’après ses horaires en temps réel (contour pointillé). Un rond par réseau de loin, chaque véhicule de près. En direct seulement.',
   attribution:
-    'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche). Positions estimées par la carte d’après ces horaires',
+    'Réseaux de transport (positions, horaires et horaires en temps réel), via transport.data.gouv.fr (Licence Ouverte 2.0 ou ODbL selon le réseau, citée dans la fiche) ; Île-de-France : Île-de-France Mobilités, plateforme PRIM (ODbL). Positions estimées par la carte d’après ces horaires',
   refreshIntervalMs: 30_000,
   timeStepMs: (view) => glideStepMs(view.zoom),
   zoomBreaks: [...halfZoomBreaks(NETWORK_LABEL_FROM_ZOOM, VEHICLES_FROM_ZOOM), 11, ...halfZoomBreaks(LABELS_FROM_ZOOM), ...quarterZoomBreaks(MESH_FROM_ZOOM)].sort((a, b) => a - b),
@@ -616,8 +620,8 @@ export const transit = defineModule<TransitData>({
     return [
       { color: MODE_COLORS.bus, icon: legendIcon('bus', MODE_COLORS.bus), label: 'Bus (une caisse)' },
       { color: MODE_COLORS.tram, icon: legendIcon('tram', MODE_COLORS.tram), label: 'Tramway (rame articulée de trois éléments)' },
-      { color: MODE_COLORS.metro, icon: legendIcon('metro', MODE_COLORS.metro), label: 'Métro (voitures accouplées)' },
-      { color: MODE_COLORS.other, icon: legendIcon('other', MODE_COLORS.other), label: 'Train, bateau, câble (deux éléments, gris)' },
+      { color: MODE_COLORS.metro, icon: legendIcon('metro', MODE_COLORS.metro), label: 'Métro, RER et Transilien (voitures accouplées)' },
+      { color: MODE_COLORS.other, icon: legendIcon('other', MODE_COLORS.other), label: 'Bateau, câble (deux éléments, gris)' },
       { color: UNKNOWN_MODE_COLOR, icon: legendIcon('bus', UNKNOWN_MODE_COLOR), label: 'Mode inconnu (bus gris)' },
       {
         color: 'transparent',

@@ -13,6 +13,7 @@ import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { formatDateTime } from '../ui/format';
+import { STATUS_COLORS, addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
 const URL = 'https://www.vigicrues.gouv.fr/services/InfoVigiCru.geojson';
 const SOURCE_ID = 'vigicrues';
@@ -22,20 +23,20 @@ const SELECTED_ID = 'vigicrues-choisi';
 
 /** Niveaux officiels, avec la couleur de statut (fixe, jamais réutilisée ailleurs) et le libellé Vigicrues. */
 const LEVELS: Record<number, { name: string; color: string; text: string }> = {
-  1: { name: 'Vert', color: '#0ca30c', text: 'Pas de vigilance particulière requise.' },
+  1: { name: 'Vert', color: STATUS_COLORS.vert, text: 'Pas de vigilance particulière requise.' },
   2: {
     name: 'Jaune',
-    color: '#fab219',
+    color: STATUS_COLORS.jaune,
     text: 'Risque de crue ou de montée rapide des eaux n’entraînant pas de dommages significatifs, mais nécessitant une vigilance particulière dans le cas d’activités saisonnières ou exposées.',
   },
   3: {
     name: 'Orange',
-    color: '#ec835a',
+    color: STATUS_COLORS.orange,
     text: 'Risque de crue génératrice de débordements importants susceptibles d’avoir un impact significatif sur la vie collective et la sécurité des biens et des personnes.',
   },
   4: {
     name: 'Rouge',
-    color: '#d03b3b',
+    color: STATUS_COLORS.rouge,
     text: 'Risque de crue majeure. Menace directe et généralisée de la sécurité des personnes et des biens.',
   },
 };
@@ -148,17 +149,8 @@ export const floods = defineModule<FloodData>({
         },
         before,
       );
-      map.addLayer(
-        {
-          id: SELECTED_ID,
-          type: 'line',
-          source: SOURCE_ID,
-          filter: ['==', ['get', 'id'], ''],
-          layout: { 'line-cap': 'round', 'line-join': 'round' },
-          paint: { 'line-color': '#4f8cff', 'line-width': ['interpolate', ['linear'], ['zoom'], 5, 3, 10, 7], 'line-gap-width': 3 },
-        },
-        before,
-      );
+      // Le tronçon choisi est entouré d'un anneau blanc cerné de sombre, sans teinte.
+      addSelectionRing(map, selectionRingLayers(SELECTED_ID, SOURCE_ID, ['==', ['get', 'id'], ''], [[5, 2], [10, 4]], 3), before);
     },
     update(map, { data, selection }) {
       if (data && data !== shownData) {
@@ -166,10 +158,10 @@ export const floods = defineModule<FloodData>({
         shownData = data;
       }
       const id = (selection as { id: string } | null)?.id ?? '';
-      if (map.getLayer(SELECTED_ID)) map.setFilter(SELECTED_ID, ['==', ['get', 'id'], id]);
+      setSelectionRingFilter(map, SELECTED_ID, ['==', ['get', 'id'], id]);
     },
     remove(map) {
-      for (const id of [SELECTED_ID, LINE_ID, CASING_ID]) if (map.getLayer(id)) map.removeLayer(id);
+      for (const id of [...selectionRingIds(SELECTED_ID), LINE_ID, CASING_ID]) if (map.getLayer(id)) map.removeLayer(id);
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
       shownData = undefined;
     },

@@ -89,6 +89,7 @@ server/                le serveur (Rust : tokio, axum)
   src/tracks.rs        tracé réel de chaque tronçon entre deux gares, avec altitude
   src/network.rs       le réseau (gares et tracés) tel que l'envoie l'API, sous une version
   src/api.rs           l'API HTTP
+  src/transit.rs       bus, trams et métros en direct (flux GTFS-RT de transport.data.gouv.fr, noms de lignes lus dans routes.txt des GTFS)
   src/bikes.rs …       collecteurs des autres couches (vélos, feux…)
 data/                  données téléchargées (jamais versionnées)
 ```
@@ -111,7 +112,7 @@ export const maCouche = defineModule<MesDonnees>({
   description: 'Ce que montre la couche.',
   attribution: 'Nom de la source',      // obligatoire : chaque source a sa licence
   refreshIntervalMs: 5 * 60_000,         // recharger toutes les 5 minutes
-  timeStepMs: 60_000,                    // redessiner une fois par minute simulée (0 = à chaque image)
+  timeStepMs: 60_000,                    // redessiner une fois par minute simulée (0 = à chaque image ; une fonction du zoom est admise)
   async load({ signal, time }) { /* fetch… */ },
   deckLayers({ data, time, terrain, settings }) { /* couches deck.gl pour l'instant t */ },
   describe(objet) { /* contenu de la fiche au clic */ },
@@ -155,6 +156,7 @@ La vitesse affichée est donc une **estimation**. La SNCF ne publie pas la posit
 | Voies ferrées | Les lignes empruntées par les trains de voyageurs, telles que le serveur les a calculées sur les voies OSM. Trait discret, ou nuances de gris selon la vitesse maximale de la ligne (épaisseur comprise). Fiche au clic : gares du tronçon, longueur, répartition des vitesses, lien vers OpenRailwayMap. | OpenStreetMap |
 | Avions | Les avions au-dessus de la France et autour, en direct, à leur altitude réelle (couleur selon l'altitude), avec leur indicatif ; anneau rouge pour une urgence déclarée (squawk 7500, 7600, 7700). Fiche au clic, caméra qui suit. En direct seulement. | [adsb.lol](https://adsb.lol) |
 | Bateaux | Les navires autour de la France et sur les fleuves, d'après leurs émissions AIS : couleur par famille (marchandises, passagers, pêche et plaisance), proue pointue en route, coque arrondie à l'arrêt, taille réelle de près. Fiche au clic (destination, dimensions…), caméra qui suit. En direct seulement ; demande une clé aisstream.io sur le serveur. | [aisstream.io](https://aisstream.io) |
+| Bus, trams et métros | Les véhicules des transports urbains en direct, dans les ~140 réseaux français qui publient leurs positions (GTFS-RT, relues toutes les 30 s). Couleur et nom de la ligne quand le réseau les donne ; le mode se lit à la forme (rond, carré, losange, triangle). De loin, un rond par réseau ; de près, chaque véhicule, qui glisse d'une position à la suivante. Fiche au clic. En direct seulement. | réseaux de transport via [transport.data.gouv.fr](https://transport.data.gouv.fr) (Licence Ouverte 2.0 ou ODbL) |
 | Vélos en libre-service | Les 5 800 stations des 84 réseaux de France (Vélib', Vélo'v, VélôToulouse…), relues chaque minute. Mode « Vélos » pour en trouver un, « Places » pour le rendre ; vu de près, le nombre disponible sur chaque station. Une station hors service est un simple anneau gris. | réseaux GBFS via [transport.data.gouv.fr](https://transport.data.gouv.fr) |
 | Vigilance crues | Niveau de vigilance des 337 tronçons de rivières surveillés, de vert à rouge (épaisseur du trait selon le niveau). Couche MapLibre drapée sur le relief. | [Vigicrues](https://www.vigicrues.gouv.fr) |
 | Feux | Points chauds détectés par satellite sur 7 jours (incendies, brûlages agricoles, sites industriels). La couleur dit l'âge à l'instant affiché, la taille la puissance du feu : on les voit apparaître en rejouant la semaine. | [NASA FIRMS](https://firms.modaps.eosdis.nasa.gov) (VIIRS) |

@@ -16,5 +16,6 @@ import { railways } from './railways';
 import { satellites } from './satellites';
 import { ships } from './ships';
 import { trains } from './trains';
+import { transit } from './transit';
 
-export const MODULES: LayerModule[] = [trains, railways, planes, ships, bikes, floods, fires, earthquakes, power, fuel, dayNight, satellites];
+export const MODULES: LayerModule[] = [trains, railways, planes, ships, transit, bikes, floods, fires, earthquakes, power, fuel, dayNight, satellites];

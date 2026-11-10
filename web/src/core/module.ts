@@ -167,8 +167,10 @@ export interface LayerModule<TData = unknown> {
    * - `0` : couche animée, redessinée à chaque image.
    * - sinon : redessinée seulement quand t change de « case »
    *   (par exemple 60 000 = une fois par minute simulée).
+   * Peut dépendre de la vue (une fonction du zoom, par exemple) : redessiner toute la carte coûte
+   * cher, et un objet lent n'a pas besoin de 60 images par seconde quand il se déplace de moins d'un pixel.
    */
-  timeStepMs: number;
+  timeStepMs: number | ((view: RenderContext<TData>['view']) => number);
   /**
    * Vrai si les objets sont posés sur le relief (via `ctx.terrain`) : le module est
    * alors redessiné quand des tuiles de relief plus précises arrivent.

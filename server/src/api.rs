@@ -48,6 +48,7 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
         .route("/api/velos", get(|State(state): State<AppState>| async move { prepared(state.bikes(), "vélos") }))
         .route("/api/feux", get(|State(state): State<AppState>| async move { prepared(state.fires(), "feux") }))
         .route("/api/avions", get(|State(state): State<AppState>| async move { prepared(state.planes(), "avions") }))
+        .route("/api/transports", get(|State(state): State<AppState>| async move { prepared(state.transit(), "transports") }))
         .route("/api/bateaux", get(|State(state): State<AppState>| async move { prepared(state.ships(), "bateaux") }))
         .route("/api/satellites", get(|State(state): State<AppState>| async move { prepared(state.satellites(), "satellites") }))
         .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))

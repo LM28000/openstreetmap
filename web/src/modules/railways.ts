@@ -126,7 +126,10 @@ export const railways = defineModule<RailsData>({
   description: 'Les lignes empruntées par les trains de voyageurs, et leur vitesse maximale.',
   attribution: 'voies et vitesses © OpenStreetMap — ODbL',
   visibleByDefault: true,
-  refreshIntervalMs: 30 * 60_000, // le réseau change au plus une fois par jour
+  // Le réseau change au plus une fois par jour, mais juste après un redémarrage du serveur les
+  // tracés ne sont pas encore prêts : on revérifie souvent (une petite requête, rien n'est
+  // redessiné tant que la version ne change pas).
+  refreshIntervalMs: 2 * 60_000,
   timeStepMs: 3_600_000, // ne dépend pas de l'instant affiché
   followsTerrain: true,
   // Sous les trains, quelle que soit sa place dans le panneau.

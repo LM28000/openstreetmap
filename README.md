@@ -154,7 +154,7 @@ server/                le serveur (Rust : tokio, axum)
   src/multimodal.rs    isochrones multimodales : arrêts supplémentaires (cars, métro, RER), rattachement aux gares, ressource /api/arrets
   src/multimodal/      lecture en flux des GTFS (feed.rs), Île-de-France (idfm.rs), cars régionaux (regional.rs), chargement de fond (load.rs)
   src/api.rs           l'API HTTP
-  src/tiles/           moteur de tuiles vectorielles : mvt.rs, pmtiles.rs, geom.rs, proj.rs, builder.rs, serve.rs ; jeux population.rs et couverture.rs (ARCEP), grille des isochrones popgrid.rs
+  src/tiles/           moteur de tuiles vectorielles : mvt.rs, pmtiles.rs, geom.rs, proj.rs, builder.rs, serve.rs ; jeux population.rs, couverture.rs (ARCEP) et dvf.rs (prix de l'immobilier, source dvf_source.rs), grille des isochrones popgrid.rs
   src/transit.rs       bus, trams et métros en direct (flux GTFS-RT de transport.data.gouv.fr, noms de lignes lus dans routes.txt des GTFS)
   src/estimates.rs     positions estimées d'après les horaires en temps réel (GTFS compact dans gtfs_compact.rs)
   src/idf.rs           Île-de-France : SIRI global de PRIM rapproché du GTFS d'IDFM (voir « Bus, trams et métros »)
@@ -279,6 +279,16 @@ Couche « Couverture mobile » : où l'on capte, opérateur par opérateur (Oran
 
 Côté site (`web/src/modules/couverture.ts`) : à plat, technologie (4G, voix) et vue (nombre d'opérateurs, ou un opérateur). Une seule teinte (vert olive, ni les couleurs des opérateurs ni celles des autres couches), la **carence la plus visible** : zéro opérateur ou aucune couverture est le cran le plus foncé de jour, le plus clair de nuit ; palette validée (`validate_palette.js --ordinal`, jour et nuit). Fiche : opérateurs en 4G et en voix, niveau de chacun, date des cartes, rappel « simulations, pas mesures ». Scène « Réseau mobile ».
 
+## Prix de l'immobilier (DVF)
+
+Couche « Prix de l'immobilier » : prix de vente au m² des logements, France métropolitaine (Alsace-Moselle absente du fichier, DOM écartés), 5 dernières années complètes (2021-2025 ; l'année courante s'ajoute si Etalab la publie). Source : DVF géolocalisées d'Etalab (`files.data.gouv.fr/geo-dvf/latest/csv/<année>/full.csv.gz`, ~110 Mo par an), licence ouverte 2.0, mention « DGFiP, DVF ; Etalab ». Jeu `dvf` du moteur de tuiles (`server/src/tiles/dvf.rs`, source et nettoyage dans `dvf_source.rs`, tout y est commenté).
+
+- **Carte** : de loin (zoom < 14), des carreaux de 32 km à 100 m (~10 pixels d'écran à chaque zoom) colorés par la **médiane** du prix au m², palette divergente autour de la médiane nationale du type choisi (bleu moins cher, gris autour de la médiane, rose plus cher ; validée jour et nuit) ; de près (zoom ≥ 14), une vente par point. Réglages : biens (tous, appartements, maisons), période (5 ans, 12 derniers mois jusqu'au dernier mois publié), affichage à plat ou en relief (hauteur = densité de ventes). Fiche d'un carreau : médiane, quartiles, nombre de ventes, période, répartition appartements/maisons ; fiche d'une vente : prix, surface, pièces, mois, écart à la médiane nationale ; lien vers l'explorateur officiel (`explore.data.gouv.fr/fr/immobilier`).
+- **Une médiane ne s'additionne pas** : un carreau de zoom bas rassemble des centaines de carreaux plus fins. Chaque carreau porte donc un *histogramme* de 128 classes de prix au m² espacées en logarithme (300 à 30 000 €/m², précision de la médiane ~2 %), par type et par période ; les histogrammes se fusionnent en s'additionnant, et la médiane et les quartiles ne sont lus qu'à la fin (`finalize`). En mémoire, ils sont creux (triplets carreau/classe/décompte de 12 octets, fusionnés sur place).
+- **Nettoyage** (règles complètes en tête de `dvf_source.rs`) : une vente s'étale sur plusieurs lignes (parcelles, lots) au même prix, on regroupe les lignes consécutives d'une mutation ; on garde les « Vente » à une disposition, avec **un seul** logement (maison ou appartement), sans local commercial, prix ≥ 10 000 €, surface bâtie de 9 à 400 m² (appartement) ou 20 à 600 m² (maison, au plus 1 ha de terrain), prix au m² de 300 à 30 000 €, avec coordonnées. Comptes par année dans la fiche du jeu (`/api/tuiles/dvf`) : en 2021, 1,73 M de mutations lues, 885 707 ventes gardées (417 590 appartements, 468 117 maisons) ; 3 753 107 ventes pour 2021-2025.
+- **Conditions de réutilisation de la DGFiP** (art. R112 A-3 du LPF) : pas de ré-identification des personnes, pas d'indexation par les moteurs de recherche. Mesures : aucune adresse, aucun identifiant de mutation ou de parcelle ; date réduite au **mois** ; position des ventes **arrondie à ~20 m** ; ventes de plusieurs biens écartées ; données servies seulement en tuiles binaires avec l'en-tête `X-Robots-Tag: noindex, nofollow, noarchive` (sur toutes les tuiles).
+- **Fabrication** : les fichiers bruts sont téléchargés un à un, nettoyés en flux puis supprimés (au plus ~120 Mo bruts sur le disque) ; il reste ~25 Mo par année dans `DATA_DIR/sources-tuiles/dvf/`. Etalab publie en avril et en octobre environ : l'archive est refaite chaque semestre (`source_id`), les fichiers ne sont retéléchargés que si leur date de modification a changé. Archive : 180 Mo, 175 622 tuiles (aucune au plafond de 500 Ko).
+
 ## Couches disponibles
 
 | Couche | Ce qu'elle montre | Source |
@@ -301,6 +311,7 @@ Côté site (`web/src/modules/couverture.ts`) : à plat, technologie (4G, voix) 
 | Séismes | Les 7 derniers jours : tous autour de la France, magnitude 4,5 et plus dans le monde. Ceux de moins de 3 h pulsent. | [EMSC](https://www.seismicportal.eu) |
 | Électricité | Sur chaque région, une colonne 3D empile la production par filière, et un anneau blanc marque la consommation. Au quart d'heure, et suit la frise temporelle. | RTE éCO2mix via [ODRÉ](https://odre.opendatasoft.com) |
 | Carburants | Prix actuels dans les 9 800 stations-service, colorés par rapport au reste de la France (bleu moins cher, rouge plus cher), au choix du carburant. Vu de près, une étiquette de prix ; la moins chère l'emporte quand deux étiquettes se gêneraient. | [prix-carburants.gouv.fr](https://www.prix-carburants.gouv.fr) |
+| Prix de l'immobilier | Prix de vente au m² des logements (DVF 2021-2025) : médiane par carreau (32 km à 100 m selon le zoom, histogrammes fusionnés), ventes une à une de près ; biens, période (12 mois / 5 ans), relief. Fiche : médiane, quartiles, nombre de ventes, lien vers l'explorateur officiel. | DGFiP, DVF ; Etalab (licence ouverte 2.0) |
 | Satellites | Stations spatiales (ISS, Tiangong), satellites de navigation, météo et les plus brillants, en silhouettes neutres, à leur position calculée pour l'instant affiché (replay compris) ; Starlink en option. Altitude figurée par une tige (échelle non respectée), trace au sol de l'orbite au clic, visibilité de l'ISS depuis le centre de la carte. | [CelesTrak](https://celestrak.org) |
 | Jour et nuit | Le fond de carte passe à sa palette sombre la nuit (soleil au centre de la vue), l'ombre de la nuit et des crépuscules se voit de loin. Les bâtiments 3D sont éclairés depuis la vraie position du soleil. | calcul astronomique |
 | Radar de pluie | Les précipitations mesurées par radar, des deux dernières heures, drapées sur le relief. | [RainViewer](https://www.rainviewer.com) |
@@ -342,6 +353,7 @@ MapLibre ne sait pas découper une couche à l'écran, et avec le relief 3D ses 
 | Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
 | Population | INSEE, Filosofi 2019, revenus, pauvreté et niveau de vie, données carroyées de 200 m | licence ouverte Etalab 2.0, citer « INSEE, Filosofi 2019 » |
 | Couverture mobile | ARCEP, Mon réseau mobile, cartes de couverture théorique 2026 T2 (data.arcep.fr) ; contours des départements Etalab / IGN Admin Express (masque de terre) | Licence Ouverte, citer « ARCEP, Mon réseau mobile » |
+| Prix de l'immobilier | DGFiP, DVF géolocalisées par Etalab (ventes de logements) | licence ouverte 2.0, citer « DGFiP, DVF ; Etalab » ; ni ré-identification ni indexation par les moteurs de recherche |
 | Satellites | CelesTrak (éléments orbitaux GP) | libre ; au plus un téléchargement par groupe toutes les 2 h |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.

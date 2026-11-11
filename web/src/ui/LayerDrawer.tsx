@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type Ref } from 'react';
-import { CATEGORY_LABELS, CATEGORY_ORDER, type LayerModule, type LegendItem, type ModuleSetting } from '../core/module';
+import { CATEGORY_LABELS, CATEGORY_ORDER, settingOptions, type LayerModule, type LegendItem, type ModuleSetting } from '../core/module';
 import type { ModuleManager, ModuleRuntimeState } from '../core/moduleManager';
 import { SCENES, activeScene, applyScene } from '../core/scenes';
 import { formatDateTime, formatRelative } from './format';
@@ -168,7 +168,7 @@ function LayerRow({ module, state, now, manager, open, onToggleOpen, rowRef }: L
       {open && (
         <div className="layer__detail" id={detailId}>
           <p className="layer__description">{module.description}</p>
-          {module.settings?.map((setting) =>
+          {module.settings?.filter((setting) => setting.visibleWhen?.(state.settings) ?? true).map((setting) =>
             setting.range ? (
               <RangeSetting
                 key={setting.id}
@@ -181,7 +181,7 @@ function LayerRow({ module, state, now, manager, open, onToggleOpen, rowRef }: L
             <div key={setting.id} className="setting">
             <span className="setting__label" aria-hidden="true">{setting.label}</span>
             <div className="segmented" role="radiogroup" aria-label={`${module.name} : ${setting.label}`}>
-              {setting.options.map((option) => (
+              {settingOptions(setting, state.settings).map((option) => (
                 <button
                   key={option.value}
                   type="button"

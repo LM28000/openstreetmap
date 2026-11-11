@@ -71,6 +71,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['immobilier'],
   },
   {
+    // Une couche de polygones pleins, avec ses propres couleurs (familles politiques) : seule, pour ne rien mêler.
+    id: 'elections',
+    label: 'Élections',
+    description: 'résultats par bureau de vote',
+    modules: ['elections'],
+  },
+  {
     id: 'ville',
     label: 'Ma ville',
     description: 'bus, vélos, trafic, bornes',

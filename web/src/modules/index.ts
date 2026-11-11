@@ -13,6 +13,7 @@ import { chargers } from './chargers';
 import { couverture } from './couverture';
 import { dayNight } from './dayNight';
 import { earthquakes } from './earthquakes';
+import { elections } from './elections';
 import { fires } from './fires';
 import { floods } from './floods';
 import { fuel } from './fuel';
@@ -35,7 +36,7 @@ import { wind } from './wind';
 export const MODULES: LayerModule[] = [
   trains, railways, isochrones, traffic, planes, ships, transit, bikes,
   floods, weatherAlerts, air, fires, earthquakes,
-  power, chargers, fuel, population, couverture, immobilier,
+  power, chargers, fuel, population, couverture, immobilier, elections,
   dayNight, buildingShadows, satellites, rain, wind,
   aerialPhotos, monuments, accidents,
 ];

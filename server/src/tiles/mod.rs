@@ -72,6 +72,8 @@ pub mod builder;
 pub mod couverture;
 pub mod dvf;
 pub mod dvf_source;
+pub mod elections;
+pub mod elections_geo;
 pub mod geom;
 pub mod mvt;
 pub mod pmtiles;

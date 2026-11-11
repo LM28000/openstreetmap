@@ -32,6 +32,7 @@ const SYNONYMS: Record<string, string> = {
   satellites: 'espace iss orbite',
   pluie: 'meteo radar precipitations averse',
   vent: 'rafales meteo',
+  elections: 'vote scrutin presidentielle europeennes legislatives resultats bureau de vote participation',
 };
 
 interface LayerIndex {

@@ -6,8 +6,8 @@
  *
  * | zoom   | niveau       | ce qu'on voit                                  |
  * |--------|--------------|------------------------------------------------|
- * | 4 à 6  | département  | ~100 polygones                                  |
- * | 7 à 9  | commune      | ~35 000 polygones                               |
+ * | 4 à 7  | département  | ~100 polygones                                  |
+ * | 8 à 9  | commune      | ~35 000 polygones                               |
  * | 10 à 12| bureau       | ~68 000 polygones (au-delà : tuiles agrandies)  |
  *
  * Les totaux d'un niveau sont les **sommes** des bureaux (inscrits, votants, exprimés, voix de chaque candidat) : tous les
@@ -344,7 +344,7 @@ function colorExpression(def: ScrutinDef, sheet: ElectionsSheet, affichage: Affi
 function heightExpression(): unknown[] {
   const stops: unknown[] = [];
   for (let zoom = 4; zoom <= 12; zoom++) {
-    const factor = zoom <= 6 ? 240 * 2 ** (4 - zoom) : zoom <= 9 ? 150 * 2 ** (7 - zoom) : 20 * 2 ** (10 - zoom);
+    const factor = zoom <= 7 ? 240 * 2 ** (4 - zoom) : zoom <= 9 ? 100 * 2 ** (8 - zoom) : 20 * 2 ** (10 - zoom);
     stops.push(zoom, ['*', factor, ['sqrt', ['get', 'v']]]);
   }
   return ['interpolate', ['linear'], ['zoom'], ...stops];
@@ -498,7 +498,7 @@ export const elections = defineModule<ElectionsData>({
             'source-layer': layer,
             layout: { 'line-join': 'round' },
             // Plus fin à l'intérieur d'un niveau dense (communes, bureaux) qu'à celui des départements, un peu plus épais en gros plan.
-            paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 6.9, 1.1, 7, 0.5, 9.9, 0.7, 10, 0.4, 13, 0.9, 16, 1.4] },
+            paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 7.9, 1.1, 8, 0.5, 9.9, 0.7, 10, 0.4, 13, 0.9, 16, 1.4] },
           } as never,
           before,
         );

@@ -37,8 +37,8 @@
 //!
 //! | zooms  | niveau (`niv`) | objets   | pourquoi                                                              |
 //! |--------|----------------|----------|-----------------------------------------------------------------------|
-//! | 4 à 6  | 0 département  | ~100     | à l'échelle de la France, une commune fait moins de deux pixels       |
-//! | 7 à 9  | 1 commune      | ~35 000  | une commune de 15 km² fait ~10 px au zoom 7 ; le détail des bureaux serait du bruit |
+//! | 4 à 7  | 0 département  | ~100     | à l'échelle de la France, une commune fait moins de deux pixels       |
+//! | 8 à 9  | 1 commune      | ~35 000  | une commune de 15 km² fait ~20 px au zoom 8 ; le détail des bureaux serait du bruit |
 //! | 10 à 12| 2 bureau       | ~68 000  | un bureau urbain (~0,3 km) fait ~6 px au zoom 10 et ~25 px au zoom 12 |
 //!
 //! Les propriétés du département et de la commune sont les **sommes** des bureaux (inscrits, votants, exprimés, voix de chaque
@@ -83,8 +83,8 @@ use super::{Dataset, Feature, FeatureSet, Generalizer, Geometry, Value};
 /// Premier et dernier zoom des tuiles.
 const MIN_ZOOM: u8 = 4;
 const MAX_ZOOM: u8 = 12;
-/// Zooms où chaque niveau est dessiné : départements jusqu'au 6, communes de 7 à 9, bureaux à partir du 10.
-const DEPARTMENT_MAX_ZOOM: u8 = 6;
+/// Zooms où chaque niveau est dessiné : départements jusqu'au 7, communes de 8 à 9, bureaux à partir du 10.
+const DEPARTMENT_MAX_ZOOM: u8 = 7;
 const COMMUNE_MAX_ZOOM: u8 = 9;
 
 /// Niveaux, tels que le site les lit dans `niv`.
@@ -421,7 +421,9 @@ struct LevelFilter {
 impl LevelFilter {
     fn new(zoom: u8) -> LevelFilter {
         // Une demi-unité de tuile (4096 par tuile) : invisible, mais ~10 fois moins de sommets qu'à la source aux zooms bas.
-        let tolerance = if zoom < 8 { 0.5 * 360.0 / (f64::from(1u32 << zoom) * 4096.0) } else { 0.0 };
+        // À tous les zooms : la copie que garde le généralisateur (avec `worlds` de l'étape des tuiles) pèse alors 2 à 3 fois moins aux zooms hauts,
+        // où un seau dense (Paris) tient en mémoire avec toutes ses formes pleine résolution (mesure : 238 Mo de pic avant, voir `spool_zoom`).
+        let tolerance = 0.5 * 360.0 / (f64::from(1u32 << zoom) * 4096.0);
         LevelFilter { levels: levels_at(zoom), tolerance, features: Vec::new() }
     }
 }
@@ -511,7 +513,7 @@ impl Dataset for Elections {
         (MIN_ZOOM, MAX_ZOOM)
     }
     fn schema_version(&self) -> u32 {
-        1
+        2
     }
     fn source_id(&self) -> String {
         // Résultats définitifs de scrutins passés : la source ne bouge plus. Les contours d'Etalab, eux, sont refaits de temps en temps :
@@ -645,6 +647,12 @@ impl Dataset for Elections {
 
     fn generalizer(&self, zoom: u8) -> Box<dyn Generalizer> {
         Box::new(LevelFilter::new(zoom))
+    }
+
+    /// Seaux de zoom 8 (~100 km) : les communes (35 000 objets) ne passent que par le dernier zoom de seaux, jamais par un passage global
+    /// qui les garderait toutes en mémoire (mesuré : 180 Mo de pic avec un passage global à 35 000 communes, contre ~100 Mo sans).
+    fn spool_zoom(&self) -> u8 {
+        8
     }
 
     fn metadata(&self) -> serde_json::Value {

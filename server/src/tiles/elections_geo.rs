@@ -42,11 +42,11 @@ const BUREAUX_URL: &str = "https://data-pipeline-open.s3.sbg.io.cloud.ovh.net/re
 const WFS_URL: &str = "https://data.geopf.fr/wfs/ows?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&sortBy=cleabs&propertyName=code_insee,nom_officiel,geometrie";
 
 /// Tolérance de simplification du fichier de travail, en degrés, selon le niveau. Elle se règle sur l'usage de la forme :
-/// - bureaux (~1,7 m) : dessinés jusqu'au zoom 12, où une unité de tuile fait ~1,6 m à 48 °N ;
+/// - bureaux (~3,3 m) : dessinés jusqu'au zoom 12, où une unité de tuile fait ~1,6 m à 48 °N et où le moteur simplifie à 4 unités (6 m) ; moins de sommets, c'est aussi moins de mémoire par seau à la fabrication ;
 /// - communes (~4,4 m) : dessinées aux zooms 7 à 9 (une unité = 19 m au 9) ; au-delà, elles ne servent que de fond de repli sous les bureaux ;
 /// - départements (~33 m) : dessinés aux zooms 4 à 6 seulement (une unité = 150 m au 6).
 /// Sans cette simplification, les communes de l'IGN (200 sommets en moyenne) pèseraient ~100 Mo compressées ; elles en pèsent le tiers.
-const TOLERANCE_BUREAUX: f64 = 0.000_015;
+const TOLERANCE_BUREAUX: f64 = 0.000_03;
 const TOLERANCE_COMMUNES: f64 = 0.000_04;
 const TOLERANCE_DEPARTEMENTS: f64 = 0.000_3;
 

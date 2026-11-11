@@ -68,6 +68,8 @@
 //! objets de plus faible `weight` sont retirés et un avertissement est journalisé.
 
 pub mod builder;
+pub mod elections;
+pub mod elections_geo;
 pub mod geom;
 pub mod mvt;
 pub mod pmtiles;

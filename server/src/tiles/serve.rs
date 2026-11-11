@@ -77,7 +77,9 @@ pub struct Registry(Arc<Inner>);
 /// Les jeux de données du serveur : **c'est ici qu'on en ajoute un**.
 fn datasets() -> (Vec<Arc<dyn Dataset>>, Arc<Population>) {
     let population = Arc::new(Population::new());
-    (vec![population.clone() as Arc<dyn Dataset>], population)
+    let mut sets = vec![population.clone() as Arc<dyn Dataset>];
+    sets.extend(super::elections::datasets()); // un jeu par scrutin (voir `elections.rs`)
+    (sets, population)
 }
 
 #[derive(Serialize, Deserialize)]

@@ -19,6 +19,7 @@
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `TUILES_EFFACER_SOURCES` (aucune) : si définie, la source d'un jeu de tuiles est effacée après sa fabrication ;
+//! - `TUILES_JEUX` (tous) : liste des jeux de tuiles à mettre en service, séparés par des virgules (ex. « population ») ;
 //! - `INSEE_CARREAUX_URL` (millésime 2019 de l'INSEE) : adresse du zip des carreaux de population ;
 //! - `ATMO_USERNAME` et `ATMO_PASSWORD` (aucun) : compte Atmo Data pour la qualité de l'air ; sans eux, la couche est désactivée.
 

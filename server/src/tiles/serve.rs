@@ -127,8 +127,19 @@ impl Registry {
     }
 
     /// Lance, pour chaque jeu, la mise en service de l'archive (et sa fabrication si elle manque).
+    ///
+    /// `TUILES_JEUX` (facultatif, ex. « population,dvf ») limite les jeux mis en service : utile pour un serveur de
+    /// test qui n'a pas besoin de fabriquer tous les autres. Sans lui, tous les jeux le sont.
     pub fn spawn(&self, http: reqwest::Client, data_dir: PathBuf) {
+        let only: Option<Vec<String>> = std::env::var("TUILES_JEUX")
+            .ok()
+            .map(|v| v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect());
         for index in 0..self.0.sets.len() {
+            let id = self.0.sets[index].dataset.id();
+            if only.as_ref().is_some_and(|only| !only.iter().any(|o| o == id)) {
+                info!(jeu = id, "tuiles : jeu ignoré (absent de TUILES_JEUX)");
+                continue;
+            }
             let registry = self.clone();
             let (http, data_dir) = (http.clone(), data_dir.clone());
             tokio::spawn(async move { registry.maintain(index, http, data_dir).await });

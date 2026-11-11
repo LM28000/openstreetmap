@@ -213,7 +213,9 @@ const SCRUTINS: ScrutinDef[] = [
 ];
 
 const BY_ID = new Map<string, ScrutinDef>(SCRUTINS.map((s) => [s.id, s]));
-const DEFAULT_SCRUTIN: ScrutinId = 'eu24';
+/** Du plus récent au plus ancien : par défaut, le scrutin le plus récent dont le serveur a fini les tuiles. */
+const RECENCY: ScrutinId[] = ['l24t2', 'l24t1', 'eu24', 'p22t2', 'p22t1'];
+const DEFAULT_SCRUTIN: ScrutinId = RECENCY[0]!;
 
 function scrutinOf(id: string | undefined): ScrutinDef {
   return BY_ID.get(id ?? '') ?? BY_ID.get(DEFAULT_SCRUTIN)!;
@@ -237,7 +239,10 @@ interface ElectionsSheet {
 }
 
 interface ElectionsData {
+  /** Scrutin dont les tuiles sont affichées. */
   scrutin: ScrutinId;
+  /** Scrutin demandé : différent de `scrutin` quand ses tuiles ne sont pas encore prêtes sur le serveur. */
+  requested: ScrutinId;
   sheet: TileSheet<ElectionsSheet>;
 }
 
@@ -391,7 +396,7 @@ export const elections = defineModule<ElectionsData>({
     {
       id: 'liste',
       label: 'Candidat ou liste',
-      defaultValue: '5',
+      defaultValue: 'RN',
       options: [],
       // Les candidats du scrutin choisi (le premier est le plus voté au niveau national).
       optionsFor: (settings) => scrutinOf(settings.scrutin).columns.filter((c) => c.key !== 'autres').map((c) => ({ value: c.key, label: c.name })),
@@ -409,12 +414,24 @@ export const elections = defineModule<ElectionsData>({
   ],
 
   async load({ signal, settings }) {
-    const def = scrutinOf(settings.scrutin);
-    return { scrutin: def.id, sheet: await loadTileSheet<ElectionsSheet>(def.jeu, signal) };
+    const wanted = scrutinOf(settings.scrutin).id;
+    // Le scrutin demandé si ses tuiles sont prêtes ; sinon le plus récent qui l'est (le serveur les fabrique l'une après l'autre).
+    for (const id of [wanted, ...RECENCY.filter((r) => r !== wanted)]) {
+      try {
+        return { scrutin: id, requested: wanted, sheet: await loadTileSheet<ElectionsSheet>(scrutinOf(id).jeu, signal) };
+      } catch (error) {
+        if (!(error instanceof Error) || !error.message.includes('préparation')) throw error;
+      }
+    }
+    throw new Error('résultats en préparation sur le serveur (quelques minutes au premier démarrage)');
   },
 
-  // Un autre scrutin, c'est un autre jeu de tuiles : on recharge sa fiche.
-  needsReload: (data, _time, settings) => data.scrutin !== scrutinOf(settings.scrutin).id,
+  // Un autre scrutin, c'est un autre jeu de tuiles : on recharge sa fiche. Un scrutin en préparation est redemandé de temps en temps.
+  refreshIntervalMs: 120_000,
+  needsReload: (data, _time, settings) => {
+    const wanted = scrutinOf(settings.scrutin).id;
+    return data.scrutin !== wanted && data.requested !== wanted;
+  },
 
   legend(settings, data) {
     if (!data) return [];
@@ -441,7 +458,8 @@ export const elections = defineModule<ElectionsData>({
     if (!data) return null;
     const def = scrutinOf(data.scrutin);
     const { national } = data.sheet.donnees;
-    const base = `${def.label} · participation ${pct(national.votants, national.inscrits)} (${(national.inscrits / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} millions d’inscrits en France, hors Français de l’étranger)`;
+    const pending = data.requested !== data.scrutin ? `« ${scrutinOf(data.requested).label} » en préparation sur le serveur · ` : '';
+    const base = `${pending}${def.label} · participation ${pct(national.votants, national.inscrits)} (${(national.inscrits / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 1 })} millions d’inscrits en France, hors Français de l’étranger)`;
     const affichage = (settings.affichage ?? 'tete') as Affichage;
     if (affichage === 'part') {
       const index = columnIndex(def, settings.liste ?? '');

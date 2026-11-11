@@ -17,6 +17,7 @@
 //! - `proj` : les projections des jeux de données (LAEA, UTM) ;
 //! - `builder` : la fabrication (ce fichier-ci dit les types, `builder` fait le travail) ;
 //! - `serve` : la publication (`/api/tuiles/…`) et la fabrication en tâche de fond ;
+//! - `dvf`, `dvf_source` : les prix de l'immobilier (médianes par histogrammes fusionnés) ;
 //! - `population` : le premier jeu de données, les carreaux de 200 m de l'INSEE (exemple à suivre).
 //!
 //! # La fabrication, en trois temps (mémoire bornée)
@@ -68,6 +69,8 @@
 //! objets de plus faible `weight` sont retirés et un avertissement est journalisé.
 
 pub mod builder;
+pub mod dvf;
+pub mod dvf_source;
 pub mod geom;
 pub mod mvt;
 pub mod pmtiles;

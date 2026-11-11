@@ -37,7 +37,7 @@ use std::time::Duration;
 use anyhow::{Context, Result, bail};
 use axum::Router;
 use axum::extract::{Path as UrlPath, State};
-use axum::http::{HeaderValue, StatusCode, header};
+use axum::http::{HeaderName, HeaderValue, StatusCode, header};
 use axum::response::{IntoResponse, Response};
 use axum::routing::get;
 use serde::{Deserialize, Serialize};
@@ -45,6 +45,7 @@ use tracing::{info, warn};
 
 use super::builder::{self, Options};
 use super::pmtiles::Reader;
+use super::dvf::Dvf;
 use super::population::Population;
 use super::Dataset;
 
@@ -77,7 +78,7 @@ pub struct Registry(Arc<Inner>);
 /// Les jeux de données du serveur : **c'est ici qu'on en ajoute un**.
 fn datasets() -> (Vec<Arc<dyn Dataset>>, Arc<Population>) {
     let population = Arc::new(Population::new());
-    (vec![population.clone() as Arc<dyn Dataset>], population)
+    (vec![population.clone() as Arc<dyn Dataset>, Arc::new(Dvf::new())], population)
 }
 
 #[derive(Serialize, Deserialize)]
@@ -330,6 +331,12 @@ pub fn router<S: Clone + Send + Sync + 'static>(registry: Registry) -> Router<S>
     Router::<Registry>::new()
         .route("/api/tuiles/{jeu}", get(sheet))
         .route("/api/tuiles/{jeu}/{version}/{z}/{x}/{y}", get(tile))
+        // Les données DVF ne doivent pas être indexées par les moteurs de recherche (conditions de réutilisation de la DGFiP) :
+        // on le dit pour toutes les tuiles, c'est sans coût.
+        .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
+            HeaderName::from_static("x-robots-tag"),
+            HeaderValue::from_static("noindex, nofollow, noarchive"),
+        ))
         .with_state(registry)
 }
 

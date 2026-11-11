@@ -57,6 +57,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['population', 'isochrones'],
   },
   {
+    // Une seule couche, en vert olive : aucune autre scène ne l'emploie (les opérateurs n'ont pas leurs couleurs de marque).
+    id: 'reseau-mobile',
+    label: 'Réseau mobile',
+    description: 'couverture 4G et voix, zones blanches',
+    modules: ['couverture-mobile'],
+  },
+  {
     id: 'ville',
     label: 'Ma ville',
     description: 'bus, vélos, trafic, bornes',

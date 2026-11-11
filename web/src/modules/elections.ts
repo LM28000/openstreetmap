@@ -7,8 +7,8 @@
  * | zoom   | niveau       | ce qu'on voit                                  |
  * |--------|--------------|------------------------------------------------|
  * | 4 à 7  | département  | ~100 polygones                                  |
- * | 8 à 9  | commune      | ~35 000 polygones                               |
- * | 10 à 12| bureau       | ~68 000 polygones (au-delà : tuiles agrandies)  |
+ * | 8 à 10 | commune      | ~35 000 polygones                               |
+ * | 11 à 12| bureau       | ~68 000 polygones (au-delà : tuiles agrandies)  |
  *
  * Les totaux d'un niveau sont les **sommes** des bureaux (inscrits, votants, exprimés, voix de chaque candidat) : tous les
  * pourcentages se calculent ici, à partir de ces sommes, jamais en moyennant des pourcentages.
@@ -188,7 +188,7 @@ const SCRUTINS: ScrutinDef[] = [
       col('15', 'Liste Asselineau – Frexit', 'autres'),
       col('autres', 'Autres listes', 'autres'),
     ],
-    note: 'Les 12 listes qui ont dépassé 1 % des exprimés au niveau national sont détaillées ; les 26 autres sont regroupées.',
+    note: 'Listes à plus de 1 % au niveau national ; les 26 autres sont regroupées.',
   },
   {
     id: 'l24t1',
@@ -198,7 +198,7 @@ const SCRUTINS: ScrutinDef[] = [
     page: 'https://www.data.gouv.fr/fr/datasets/elections-legislatives-des-30-juin-et-7-juillet-2024-resultats-definitifs-du-1er-tour/',
     what: 'nuance',
     columns: LEGISLATIVES,
-    note: 'Résultats par nuance du ministère de l’Intérieur : les candidats d’une même nuance sont additionnés (une commune ou un département compte plusieurs circonscriptions).',
+    note: 'Par nuance du ministère : les candidats d’une même nuance sont additionnés.',
   },
   {
     id: 'l24t2',
@@ -208,7 +208,7 @@ const SCRUTINS: ScrutinDef[] = [
     page: 'https://www.data.gouv.fr/fr/datasets/elections-legislatives-des-30-juin-et-7-juillet-2024-resultats-definitifs-du-2nd-tour/',
     what: 'nuance',
     columns: LEGISLATIVES,
-    note: 'Résultats par nuance du ministère de l’Intérieur. Les circonscriptions où un candidat a été élu au 1er tour n’ont pas de 2nd tour : leurs bureaux n’ont pas de résultat.',
+    note: 'Par nuance du ministère. Sans 2nd tour là où un candidat a été élu dès le 1er.',
   },
 ];
 
@@ -263,6 +263,8 @@ interface Picked {
 // Formats
 // ---------------------------------------------------------------------------------------------
 
+/** Chiffre clé : « 1,38 M » à partir du million (« 1 378 896 » ne tient pas dans la case). */
+const compact = (n: number) => (n >= 1e6 ? `${(n / 1e6).toLocaleString('fr-FR', { maximumFractionDigits: 2 })} M` : fmt(n));
 const fmt = (n: number) => Math.round(n).toLocaleString('fr-FR');
 const pct = (part: number, whole: number, digits = 1) =>
   whole > 0 ? `${((100 * part) / whole).toLocaleString('fr-FR', { minimumFractionDigits: digits, maximumFractionDigits: digits })} %` : '—';
@@ -344,8 +346,9 @@ function colorExpression(def: ScrutinDef, sheet: ElectionsSheet, affichage: Affi
 function heightExpression(): unknown[] {
   const stops: unknown[] = [];
   for (let zoom = 4; zoom <= 12; zoom++) {
-    const factor = zoom <= 7 ? 240 * 2 ** (4 - zoom) : zoom <= 9 ? 100 * 2 ** (8 - zoom) : 20 * 2 ** (10 - zoom);
-    stops.push(zoom, ['*', factor, ['sqrt', ['get', 'v']]]);
+    const factor = zoom <= 7 ? 240 * 2 ** (4 - zoom) : zoom <= 10 ? 100 * 2 ** (8 - zoom) : 10 * 2 ** (11 - zoom);
+    // La commune de repli (niveau 3) reste à plat : elle n'est là que pour combler les bureaux sans contour.
+    stops.push(zoom, ['case', ['==', ['get', 'niv'], 3], 0, ['*', factor, ['sqrt', ['get', 'v']]]]);
   }
   return ['interpolate', ['linear'], ['zoom'], ...stops];
 }
@@ -498,7 +501,7 @@ export const elections = defineModule<ElectionsData>({
             'source-layer': layer,
             layout: { 'line-join': 'round' },
             // Plus fin à l'intérieur d'un niveau dense (communes, bureaux) qu'à celui des départements, un peu plus épais en gros plan.
-            paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 7.9, 1.1, 8, 0.5, 9.9, 0.7, 10, 0.4, 13, 0.9, 16, 1.4] },
+            paint: { 'line-width': ['interpolate', ['linear'], ['zoom'], 4, 0.9, 7.9, 1.1, 8, 0.5, 10.9, 0.7, 11, 0.4, 13, 0.9, 16, 1.4] },
           } as never,
           before,
         );
@@ -576,26 +579,23 @@ export const elections = defineModule<ElectionsData>({
       cells: [column.key === 'autres' ? '' : String(rank + 1), column.detail && def.what === 'nuance' ? `${column.detail} · ${column.name}` : column.name, fmt(votes), pct(votes, p.x)],
       badge: { text: BLOCS[column.bloc].short, color: BLOCS[column.bloc].day.slice(1) },
     }));
+    // Une phrase par chose à savoir : la fiche doit montrer le tableau des candidats sans défiler.
     const notes: string[] = [];
-    if (p.niv === 0 || p.niv === 1 || p.niv === 3) {
-      notes.push('Totaux : sommes des résultats des bureaux de vote ; les pourcentages sont recalculés à partir de ces sommes.');
-    } else {
-      notes.push('Contour approximatif, tracé par Etalab à partir des adresses du répertoire électoral unique : il n’a pas valeur officielle.');
-    }
-    if (p.niv === 3) notes.push('Certains bureaux de cette commune n’ont pas de contour : la commune est montrée entière.');
-    if (def.note) notes.push(def.note);
-    notes.push('Pourcentages sur les suffrages exprimés. Couleurs : familles politiques, regroupement indicatif.');
+    if (p.niv === 2) notes.push('Contour approximatif d’Etalab, sans valeur officielle.');
+    else notes.push('Totaux : sommes des bureaux de vote.');
+    if (p.niv === 3) notes.push('Des bureaux de cette commune n’ont pas de contour : elle est montrée entière.');
+    if (def.what === 'nuance') notes.push('Candidats d’une même nuance additionnés.');
+    notes.push('Pourcentages sur les exprimés.');
     return {
       ...base,
       figures: [
-        { value: fmt(p.i), label: 'inscrits' },
-        { value: fmt(p.v), label: 'votants' },
+        { value: compact(p.i), label: 'inscrits' },
+        { value: compact(p.v), label: 'votants' },
         { value: pct(p.v, p.i), label: 'participation' },
       ],
-      tables: [{ title: def.what === 'candidat' ? 'Candidats' : def.what === 'liste' ? 'Listes' : 'Nuances', columns: ['', def.what === 'candidat' ? 'Candidat' : def.what === 'liste' ? 'Liste' : 'Nuance', 'Voix', '%'], rows }],
+      tables: [{ title: def.what === 'candidat' ? 'Candidats' : def.what === 'liste' ? 'Listes (celles à plus de 1 % en France, et « autres »)' : 'Nuances', columns: ['', def.what === 'candidat' ? 'Candidat' : def.what === 'liste' ? 'Liste' : 'Nuance', 'Voix', '%'], rows }],
       fields: [
-        ['Exprimés', fmt(p.x)],
-        ['Blancs et nuls', fmt(p.v - p.x)],
+        ['Exprimés', `${fmt(p.x)} · blancs et nuls ${fmt(p.v - p.x)}`],
         ['Abstentions', fmt(p.i - p.v)],
       ],
       note: notes.join(' '),

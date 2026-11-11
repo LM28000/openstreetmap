@@ -38,8 +38,8 @@
 //! | zooms  | niveau (`niv`) | objets   | pourquoi                                                              |
 //! |--------|----------------|----------|-----------------------------------------------------------------------|
 //! | 4 à 7  | 0 département  | ~100     | à l'échelle de la France, une commune fait moins de deux pixels       |
-//! | 8 à 9  | 1 commune      | ~35 000  | une commune de 15 km² fait ~20 px au zoom 8 ; le détail des bureaux serait du bruit |
-//! | 10 à 12| 2 bureau       | ~68 000  | un bureau urbain (~0,3 km) fait ~6 px au zoom 10 et ~25 px au zoom 12 |
+//! | 8 à 10 | 1 commune      | ~35 000  | une commune de 15 km² fait ~20 px au zoom 8 ; le détail des bureaux serait du bruit |
+//! | 11 à 12| 2 bureau       | ~68 000  | un bureau urbain (~0,3 km) fait ~12 px au zoom 11 et ~25 px au zoom 12 |
 //!
 //! Les propriétés du département et de la commune sont les **sommes** des bureaux (inscrits, votants, exprimés, voix de chaque
 //! candidat ou liste) : on ne moyenne jamais des pourcentages, le site les recalcule à partir des sommes. Les sommes viennent
@@ -83,9 +83,9 @@ use super::{Dataset, Feature, FeatureSet, Generalizer, Geometry, Value};
 /// Premier et dernier zoom des tuiles.
 const MIN_ZOOM: u8 = 4;
 const MAX_ZOOM: u8 = 12;
-/// Zooms où chaque niveau est dessiné : départements jusqu'au 7, communes de 8 à 9, bureaux à partir du 10.
+/// Zooms où chaque niveau est dessiné : départements jusqu'au 7, communes de 8 à 10, bureaux à partir du 11 (au 10, la tuile de Paris dépassait 500 Ko : ~1 100 bureaux retirés).
 const DEPARTMENT_MAX_ZOOM: u8 = 7;
-const COMMUNE_MAX_ZOOM: u8 = 9;
+const COMMUNE_MAX_ZOOM: u8 = 10;
 
 /// Niveaux, tels que le site les lit dans `niv`.
 const LEVEL_DEPARTMENT: i64 = 0;
@@ -513,7 +513,7 @@ impl Dataset for Elections {
         (MIN_ZOOM, MAX_ZOOM)
     }
     fn schema_version(&self) -> u32 {
-        2
+        4
     }
     fn source_id(&self) -> String {
         // Résultats définitifs de scrutins passés : la source ne bouge plus. Les contours d'Etalab, eux, sont refaits de temps en temps :
@@ -639,6 +639,11 @@ impl Dataset for Elections {
         info!(scrutin = scrutin.id, communes = communes_with_results, sur = results.communes.len(), "élections : communes avec contour");
         geo::read_shapes(&shared.join(geo::BUREAUX_FILE), |shape| {
             let row = results.bureaux.get(&shape.c);
+            // Un contour sans résultat dans une commune de repli (bureau renuméroté ou fusionné depuis juin 2022 : Paris Centre en 2024) :
+            // on le laisse de côté pour que la commune, dessous, se voie, plutôt qu'un trou gris.
+            if row.is_none() && fallback.contains(&shape.c[..5]) {
+                return Ok(());
+            }
             let name = bureau_name(&shape.c, &shape.n);
             self.emit_shape(emit, LEVEL_BUREAU, shape, &name, row)
         })?;

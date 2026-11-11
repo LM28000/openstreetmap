@@ -30,6 +30,8 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 # Lecture en flux des GTFS des réseaux (mêmes versions et fonctionnalités que gtfs-structures, déjà compilé).
 zip = { version = "8.6.0", default-features = false, features = ["deflate"] }
 sevenz-rust2 = { version = "0.22.2", default-features = false }
+# Cartes de couverture mobile de l'ARCEP : des GeoPackage (des bases SQLite). SQLite est compilée avec le serveur.
+rusqlite = { version = "0.40.2", features = ["bundled"] }
 
 [profile.release]
 lto = "thin"

@@ -41,8 +41,14 @@ const BUREAUX_URL: &str = "https://data-pipeline-open.s3.sbg.io.cloud.ovh.net/re
 /// Service WFS de la Géoplateforme de l'IGN : ADMIN EXPRESS COG CARTO, millésime courant.
 const WFS_URL: &str = "https://data.geopf.fr/wfs/ows?service=WFS&version=2.0.0&request=GetFeature&outputFormat=application/json&srsName=EPSG:4326&sortBy=cleabs&propertyName=code_insee,nom_officiel,geometrie";
 
-/// Tolérance de simplification du fichier de travail, en degrés (~1,7 m) : bien en dessous de la résolution de la dernière tuile (~1,6 m à 48 °N au zoom 12).
-const TOLERANCE_DEG: f64 = 0.000_015;
+/// Tolérance de simplification du fichier de travail, en degrés, selon le niveau. Elle se règle sur l'usage de la forme :
+/// - bureaux (~1,7 m) : dessinés jusqu'au zoom 12, où une unité de tuile fait ~1,6 m à 48 °N ;
+/// - communes (~4,4 m) : dessinées aux zooms 7 à 9 (une unité = 19 m au 9) ; au-delà, elles ne servent que de fond de repli sous les bureaux ;
+/// - départements (~33 m) : dessinés aux zooms 4 à 6 seulement (une unité = 150 m au 6).
+/// Sans cette simplification, les communes de l'IGN (200 sommets en moyenne) pèseraient ~100 Mo compressées ; elles en pèsent le tiers.
+const TOLERANCE_BUREAUX: f64 = 0.000_015;
+const TOLERANCE_COMMUNES: f64 = 0.000_04;
+const TOLERANCE_DEPARTEMENTS: f64 = 0.000_3;
 
 /// Un objet du fichier de travail.
 #[derive(Serialize, Deserialize, Clone, Debug, PartialEq)]
@@ -99,13 +105,13 @@ struct RawFeature {
 }
 
 /// Arrondit à 5 décimales, simplifie, et ferme l'anneau. `None` s'il n'en reste pas un polygone.
-fn compact_ring(ring: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
+fn compact_ring(ring: &[[f64; 2]], tolerance: f64) -> Option<Vec<[f64; 2]>> {
     let mut points: Vec<[f64; 2]> = ring.iter().map(|p| [(p[0] * 1e5).round() / 1e5, (p[1] * 1e5).round() / 1e5]).collect();
     points.dedup();
     if points.len() > 1 && points.first() != points.last() {
         points.push(points[0]);
     }
-    let mut out = simplify_ring(&points, TOLERANCE_DEG);
+    let mut out = simplify_ring(&points, tolerance);
     // `simplify_ring` rend l'anneau sans répéter le premier point (sauf quand il n'y a rien à simplifier) : on le referme.
     if out.first() != out.last() {
         out.push(out[0]);
@@ -113,7 +119,7 @@ fn compact_ring(ring: &[[f64; 2]]) -> Option<Vec<[f64; 2]>> {
     if out.len() < 4 { None } else { Some(out) }
 }
 
-fn compact_polygons(geo: Geo) -> Vec<Vec<Vec<[f64; 2]>>> {
+fn compact_polygons(geo: Geo, tolerance: f64) -> Vec<Vec<Vec<[f64; 2]>>> {
     let polygons = match geo {
         Geo::Polygon { coordinates } => vec![coordinates],
         Geo::MultiPolygon { coordinates } => coordinates,
@@ -123,27 +129,27 @@ fn compact_polygons(geo: Geo) -> Vec<Vec<Vec<[f64; 2]>>> {
         .filter_map(|rings| {
             let mut rings = rings.iter();
             // Sans anneau extérieur, les trous n'ont plus de sens ; un trou dégénéré, lui, s'ignore.
-            let outer = compact_ring(rings.next()?)?;
+            let outer = compact_ring(rings.next()?, tolerance)?;
             let mut out = vec![outer];
-            out.extend(rings.filter_map(|r| compact_ring(r)));
+            out.extend(rings.filter_map(|r| compact_ring(r, tolerance)));
             Some(out)
         })
         .collect()
 }
 
 /// Convertit un objet GeoJSON brut en ligne de travail. `None` pour ce qui n'est pas un bureau / une commune / un département.
-fn shape_from_feature(bytes: &[u8]) -> Result<Option<Shape>> {
-    shape_from_raw(serde_json::from_slice(bytes).context("objet GeoJSON illisible")?)
+fn shape_from_feature(bytes: &[u8], tolerance: f64) -> Result<Option<Shape>> {
+    shape_from_raw(serde_json::from_slice(bytes).context("objet GeoJSON illisible")?, tolerance)
 }
 
-fn shape_from_raw(raw: RawFeature) -> Result<Option<Shape>> {
+fn shape_from_raw(raw: RawFeature, tolerance: f64) -> Result<Option<Shape>> {
     let Some(geometry) = raw.geometry else { return Ok(None) };
     let (code, name) = match (raw.properties.code_bureau, raw.properties.code_insee) {
         (Some(code), _) => (code, raw.properties.nom_commune.unwrap_or_default()),
         (None, Some(code)) => (code, raw.properties.nom_officiel.unwrap_or_default()),
         _ => return Ok(None),
     };
-    let parts = compact_polygons(geometry);
+    let parts = compact_polygons(geometry, tolerance);
     if parts.is_empty() {
         return Ok(None);
     }
@@ -258,12 +264,12 @@ impl FeatureSplitter {
 pub async fn acquire_shapes(http: &reqwest::Client, dir: &Path) -> Result<()> {
     if !dir.join(DEPARTEMENTS_FILE).exists() {
         info!("élections : téléchargement des départements (IGN, ADMIN EXPRESS)");
-        let n = download_wfs(http, "departement", 10, &dir.join(DEPARTEMENTS_FILE)).await?;
+        let n = download_wfs(http, "departement", 10, TOLERANCE_DEPARTEMENTS, &dir.join(DEPARTEMENTS_FILE)).await?;
         info!(departements = n, "élections : départements prêts");
     }
     if !dir.join(COMMUNES_FILE).exists() {
         info!("élections : téléchargement des communes (IGN, ADMIN EXPRESS), 70 pages");
-        let n = download_wfs(http, "commune", 500, &dir.join(COMMUNES_FILE)).await?;
+        let n = download_wfs(http, "commune", 500, TOLERANCE_COMMUNES, &dir.join(COMMUNES_FILE)).await?;
         info!(communes = n, "élections : communes prêtes");
     }
     if !dir.join(BUREAUX_FILE).exists() {
@@ -281,7 +287,7 @@ async fn download_bureaux(http: &reqwest::Client, target: &Path) -> Result<u64> 
     let mut splitter = FeatureSplitter::default();
     while let Some(chunk) = response.chunk().await? {
         splitter.push(&chunk, |feature| {
-            if let Some(shape) = shape_from_feature(feature)? {
+            if let Some(shape) = shape_from_feature(feature, TOLERANCE_BUREAUX)? {
                 writer.write(&shape)?;
             }
             Ok(())
@@ -296,7 +302,7 @@ async fn download_bureaux(http: &reqwest::Client, target: &Path) -> Result<u64> 
 }
 
 /// Une couche de l'IGN, page par page (`count` objets à la fois : une page se lit en mémoire, d'où le petit `count` pour les communes).
-async fn download_wfs(http: &reqwest::Client, layer: &str, count: usize, target: &Path) -> Result<u64> {
+async fn download_wfs(http: &reqwest::Client, layer: &str, count: usize, tolerance: f64, target: &Path) -> Result<u64> {
     let mut writer = ShapeWriter::create(target)?;
     let mut start = 0usize;
     loop {
@@ -325,7 +331,7 @@ async fn download_wfs(http: &reqwest::Client, layer: &str, count: usize, target:
         let page: Page = serde_json::from_slice(&body).context("page WFS illisible")?;
         let n = page.features.len();
         for feature in page.features {
-            if let Some(shape) = shape_from_raw(feature)? {
+            if let Some(shape) = shape_from_raw(feature, tolerance)? {
                 writer.write(&shape)?;
             }
         }
@@ -394,13 +400,13 @@ mod tests {
         let feature = br#"{"type":"Feature","properties":{"codeBureauVote":"01001_0001","nomCommune":"L'Abergement"},"geometry":{"type":"MultiPolygon","coordinates":[
             [[[4.9581212345,46.153159],[4.96,46.153159],[4.96,46.16],[4.9581212345,46.16],[4.9581212345,46.153159]]],
             [[[5.0,46.0],[5.1,46.0],[5.1,46.1],[5.0,46.0]]]]}}"#;
-        let shape = shape_from_feature(feature).unwrap().expect("un bureau");
+        let shape = shape_from_feature(feature, TOLERANCE_BUREAUX).unwrap().expect("un bureau");
         assert_eq!((shape.c.as_str(), shape.n.as_str()), ("01001_0001", "L'Abergement"));
         assert_eq!(shape.p.len(), 2, "deux parties");
         let ring = &shape.p[0][0];
         assert_eq!(ring.first(), ring.last(), "anneau fermé");
         assert_eq!(ring[0], [4.95812, 46.15316], "5 décimales");
         // L'en-tête `crs` (sans géométrie ni code) est écarté.
-        assert!(shape_from_feature(br#"{"type":"name","properties":{"name":"urn:ogc"}}"#).unwrap().is_none());
+        assert!(shape_from_feature(br#"{"type":"name","properties":{"name":"urn:ogc"}}"#, TOLERANCE_BUREAUX).unwrap().is_none());
     }
 }

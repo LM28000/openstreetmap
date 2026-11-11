@@ -21,6 +21,7 @@ const KEYWORDS: Record<string, string> = {
   air: 'pollution ozone particules smog atmo',
   energie: 'courant electrique',
   ville: 'quartier urbain',
+  elections: 'vote presidentielle europeennes legislatives resultats bureau de vote scrutin',
 };
 
 export const SCENES: readonly SceneDefinition[] = CORE_SCENES.map((scene) => ({

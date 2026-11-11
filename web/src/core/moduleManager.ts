@@ -7,7 +7,7 @@
  */
 import type { Layer, LayersList } from '@deck.gl/core';
 import type { MapGeoJSONFeature, Map as MapLibreMap } from 'maplibre-gl';
-import { acceptsSetting, type FocusTarget, type InfoContent, type LayerModule, type LegendItem, type RenderContext, type TerrainSampler } from './module';
+import { acceptsSetting, settingOptions, type FocusTarget, type InfoContent, type LayerModule, type LegendItem, type ModuleSetting, type RenderContext, type TerrainSampler } from './module';
 import { currentNight } from '../map/baseMap';
 import { clock } from './clock';
 
@@ -212,10 +212,12 @@ export class ModuleManager {
     const state = this.snapshot[id];
     if (!entry || !state || state.settings[settingId] === value) return;
     const setting = entry.module.settings?.find((s) => s.id === settingId);
-    if (!setting || !acceptsSetting(setting, value)) return; // valeur inconnue (adresse périmée)
-    this.patch(id, { settings: { ...state.settings, [settingId]: value } });
+    if (!setting || !acceptsSetting(setting, value, state.settings)) return; // valeur inconnue (adresse périmée)
+    this.patch(id, { settings: fixDependentSettings(entry.module, { ...state.settings, [settingId]: value }) });
     if (persist) writeStorage(SETTINGS_KEY, mapValues(this.snapshot, (s) => s.settings));
     entry.version++;
+    // Un chargement qui avait échoué avec les anciens réglages (le scrutin choisi n'avait pas ses tuiles) : on réessaie avec les nouveaux.
+    if (state.visible && state.status === 'error' && entry.data === undefined && entry.module.load) void this.load(entry, { showLoading: true });
   }
 
   /**
@@ -424,9 +426,24 @@ function initialSettings(module: LayerModule, saved: Record<string, string> | un
   const settings: Record<string, string> = {};
   for (const setting of module.settings ?? []) {
     const value = saved?.[setting.id];
-    settings[setting.id] = acceptsSetting(setting, value) ? value : setting.defaultValue;
+    settings[setting.id] = acceptsSetting(setting, value, settings) ? value : fallbackValue(setting, settings);
   }
   return settings;
+}
+
+/** Valeur par défaut d'un réglage, ou son premier choix si les autres réglages ne permettent pas la valeur par défaut. */
+function fallbackValue(setting: ModuleSetting, settings: Readonly<Record<string, string>>): string {
+  if (acceptsSetting(setting, setting.defaultValue, settings)) return setting.defaultValue;
+  return settingOptions(setting, settings)[0]?.value ?? setting.defaultValue;
+}
+
+/** Après un changement de réglage : les réglages qui en dépendent (`optionsFor`) reviennent à un choix permis. */
+function fixDependentSettings(module: LayerModule, settings: Record<string, string>): Record<string, string> {
+  const fixed = { ...settings };
+  for (const setting of module.settings ?? []) {
+    if (setting.optionsFor && !acceptsSetting(setting, fixed[setting.id], fixed)) fixed[setting.id] = fallbackValue(setting, fixed);
+  }
+  return fixed;
 }
 
 function mapValues<T, U>(record: Readonly<Record<string, T>>, fn: (value: T) => U): Record<string, U> {

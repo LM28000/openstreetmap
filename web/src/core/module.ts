@@ -73,12 +73,25 @@ export interface ModuleSetting {
   defaultValue: string;
   /** Curseur de `min` à `max` par pas de `step` (valeurs numériques) ; `format` donne le texte affiché. */
   range?: { min: number; max: number; step: number; format(value: number): string };
+  /**
+   * Choix qui dépendent des autres réglages du module (les candidats du scrutin choisi, par exemple) : quand il est présent,
+   * il remplace `options`. Les réglages sont lus dans l'ordre de `settings` : un réglage ne dépend que de ceux qui le précèdent.
+   * Quand un autre réglage change et que la valeur n'est plus permise, elle passe au premier choix.
+   */
+  optionsFor?(settings: Readonly<Record<string, string>>): ReadonlyArray<{ value: string; label: string }>;
+  /** Faux : le réglage n'est pas montré dans le panneau (il ne sert à rien avec les autres réglages choisis). Montré par défaut. */
+  visibleWhen?(settings: Readonly<Record<string, string>>): boolean;
+}
+
+/** Les choix du réglage, compte tenu des autres réglages (`settings`). */
+export function settingOptions(setting: ModuleSetting, settings: Readonly<Record<string, string>> = {}): ModuleSetting['options'] {
+  return setting.optionsFor?.(settings) ?? setting.options;
 }
 
 /** Vrai si `value` est une valeur permise du réglage (un choix proposé, ou un cran du curseur). */
-export function acceptsSetting(setting: ModuleSetting, value: string | undefined): value is string {
+export function acceptsSetting(setting: ModuleSetting, value: string | undefined, settings: Readonly<Record<string, string>> = {}): value is string {
   if (!value) return false;
-  if (setting.options.some((option) => option.value === value)) return true;
+  if (settingOptions(setting, settings).some((option) => option.value === value)) return true;
   const range = setting.range;
   if (!range) return false;
   const n = Number(value);

@@ -135,11 +135,12 @@ impl Scrutin {
     }
 }
 
-/// Les 12 candidats de la présidentielle 2022, dans l'ordre des panneaux.
+/// Les 12 candidats de la présidentielle 2022, du plus au moins voté au 1er tour (l'ordre des colonnes ne compte pas pour le moteur :
+/// le site range les candidats comme il l'entend, mais le classement national donne au choix « part d'un candidat » un bon premier choix).
 const PRESIDENTIELLE_T1: &[&str] =
-    &["ARTHAUD", "ROUSSEL", "MACRON", "LASSALLE", "LE PEN", "ZEMMOUR", "MÉLENCHON", "HIDALGO", "JADOT", "PÉCRESSE", "POUTOU", "DUPONT-AIGNAN"];
-/// Nuances du ministère aux législatives 2024 (celles qui pèsent plus de 0,7 % des exprimés au 1er tour), de la gauche vers la droite.
-const LEGISLATIVES: &[&str] = &["EXG", "UG", "DVG", "ENS", "HOR", "DVC", "LR", "DVD", "UXD", "RN", "REC", "REG"];
+    &["MACRON", "LE PEN", "MÉLENCHON", "ZEMMOUR", "PÉCRESSE", "JADOT", "LASSALLE", "ROUSSEL", "DUPONT-AIGNAN", "HIDALGO", "POUTOU", "ARTHAUD"];
+/// Nuances du ministère aux législatives 2024 qui pèsent plus de 0,7 % des exprimés au 1er tour, de la plus à la moins votée.
+const LEGISLATIVES: &[&str] = &["RN", "UG", "ENS", "LR", "UXD", "DVD", "DVG", "DVC", "EXG", "REG", "REC", "HOR"];
 /// Numéros de panneau des 12 listes qui ont dépassé 1 % des exprimés aux européennes 2024 (les 26 autres vont dans « autres »).
 const EUROPEENNES: &[&str] = &["5", "11", "27", "4", "18", "6", "3", "33", "29", "8", "35", "15"];
 

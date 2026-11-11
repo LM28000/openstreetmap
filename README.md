@@ -154,7 +154,7 @@ server/                le serveur (Rust : tokio, axum)
   src/multimodal.rs    isochrones multimodales : arrêts supplémentaires (cars, métro, RER), rattachement aux gares, ressource /api/arrets
   src/multimodal/      lecture en flux des GTFS (feed.rs), Île-de-France (idfm.rs), cars régionaux (regional.rs), chargement de fond (load.rs)
   src/api.rs           l'API HTTP
-  src/tiles/           moteur de tuiles vectorielles : mvt.rs, pmtiles.rs, geom.rs, proj.rs, builder.rs, serve.rs ; jeu population.rs, grille des isochrones popgrid.rs
+  src/tiles/           moteur de tuiles vectorielles : mvt.rs, pmtiles.rs, geom.rs, proj.rs, builder.rs, serve.rs ; jeu population.rs, grille des isochrones popgrid.rs ; jeu élections (polygones) elections.rs et ses formes elections_geo.rs
   src/transit.rs       bus, trams et métros en direct (flux GTFS-RT de transport.data.gouv.fr, noms de lignes lus dans routes.txt des GTFS)
   src/estimates.rs     positions estimées d'après les horaires en temps réel (GTFS compact dans gtfs_compact.rs)
   src/idf.rs           Île-de-France : SIRI global de PRIM rapproché du GTFS d'IDFM (voir « Bus, trams et métros »)
@@ -267,6 +267,12 @@ Couche « Population » : les habitants au carreau de 200 m (Filosofi 2019, INSE
 
 La source (zip de 58 Mo qui contient un 7z qui contient trois CSV) est lue en flux : l'identifiant d'un carreau (`CRS3035RES200mN2029800E4252400`) donne sa position dans le repère LAEA (EPSG:3035) ; la Martinique et La Réunion sont en UTM (`tiles/proj.rs`, projections écrites à la main). **Secret statistique** : sous 11 ménages fiscaux, l'INSEE publie une valeur *imputée* (approchée), signalée par `i_est_200` ; c'est le cas de 79 % des carreaux (mais de 20 % des habitants : les carreaux ruraux). La fiche donne la part d'habitants concernée. Variables d'environnement : `INSEE_CARREAUX_URL` (millésime par défaut : 2019), `TUILES_EFFACER_SOURCES` (effacer la source après la fabrication), `TUILES_JEUX` (ne mettre en service que certains jeux, ex. `population,dvf`). Les fabrications passent une par une, tous jeux confondus.
 
+## Élections (polygones par bureau de vote)
+
+Couche « Élections » : présidentielle 2022 (1er et 2nd tour), européennes 2024, législatives 2024 (1er et 2nd tour), par bureau de vote. **Un jeu de tuiles par scrutin** (`elec-p22t1`, `elec-p22t2`, `elec-eu24`, `elec-l24t1`, `elec-l24t2`), pour garder les tuiles légères. Généralisation par niveau administratif, sans dissolution : départements (zooms 4-6), communes (7-9), bureaux (10-12) ; les totaux de chaque niveau sont les **sommes** des bureaux, les pourcentages sont recalculés dans le navigateur. Affichages : participation, « en tête » (familles politiques, légende et nom dans la fiche), part d'un candidat ; relief optionnel (hauteur = votants).
+
+Sources : résultats définitifs par bureau (ministère de l'Intérieur, data.gouv.fr), contours des bureaux (Etalab, Licence Ouverte, approximation à partir du répertoire électoral unique, **sans valeur officielle**, datés de juin 2022), communes et départements (IGN, ADMIN EXPRESS COG CARTO, service WFS de la Géoplateforme, Licence Ouverte 2.0). Les fichiers de travail (~150 Mo) sont rangés dans `DATA_DIR/sources-tuiles/elections-sources/` ; les effacer force un nouveau téléchargement. Jointure sur `commune_bureau` (`01001_0001`) : pour la présidentielle 2nd tour, 98,8 % des bureaux et 98,7 % des inscrits (hors Français de l'étranger, sans contour). Les communes dont un bureau n'a pas de contour sont dessinées entières sous les bureaux. Pour ne fabriquer que ces jeux : `TUILES_JEUX=elec-p22t1,elec-p22t2,elec-eu24,elec-l24t1,elec-l24t2`.
+
 ## Couches disponibles
 
 | Couche | Ce qu'elle montre | Source |
@@ -328,6 +334,7 @@ MapLibre ne sait pas découper une couche à l'écran, et avec le relief 3D ses 
 | Avions | adsb.lol (récepteurs ADS-B de la communauté) | ODbL |
 | Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
 | Population | INSEE, Filosofi 2019, revenus, pauvreté et niveau de vie, données carroyées de 200 m | licence ouverte Etalab 2.0, citer « INSEE, Filosofi 2019 » |
+| Élections | Ministère de l'Intérieur (résultats par bureau de vote) ; Etalab (contours des bureaux de vote) ; IGN (ADMIN EXPRESS COG CARTO) | Licence Ouverte 2.0 ; la présidentielle 2022 n'a pas de licence déclarée sur data.gouv.fr |
 | Satellites | CelesTrak (éléments orbitaux GP) | libre ; au plus un téléchargement par groupe toutes les 2 h |
 
 Le crédit de chaque module s'affiche dans le panneau des couches, et ceux du fond de carte en bas à droite.

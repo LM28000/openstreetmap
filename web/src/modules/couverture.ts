@@ -76,7 +76,6 @@ interface CoverageData {
 /** Ce qu'on retient d'un carreau cliqué. */
 interface Cell {
   props: Record<string, number>;
-  zoom: number;
   /** Contour du carreau (lon, lat), pour l'entourer. */
   ring: Array<[number, number]>;
 }
@@ -94,9 +93,21 @@ function qualityLevel(q: number): number {
   return QUALITY_CUTS.filter((cut) => q >= cut).length;
 }
 
-function sizeAt(sheet: CoverageSheet, zoom: number): number {
-  const z = Math.min(11, Math.max(4, Math.floor(zoom)));
-  return sheet.tailles.find(([tileZoom]) => tileZoom === z)?.[1] ?? 250;
+/**
+ * Côté du carreau cliqué : on le déduit de son contour (le zoom de la carte au moment du clic ne dit pas à quelle
+ * échelle la tuile a été agrégée), en prenant la taille publiée par le serveur la plus proche (échelle logarithmique).
+ */
+function cellSize(sheet: CoverageSheet, ring: Array<[number, number]>): number {
+  if (ring.length < 3) return 250;
+  const lons = ring.map((p) => p[0]);
+  const lats = ring.map((p) => p[1]);
+  const lat = (Math.min(...lats) + Math.max(...lats)) / 2;
+  const span = Math.max(
+    (Math.max(...lons) - Math.min(...lons)) * 111_320 * Math.cos((lat * Math.PI) / 180),
+    (Math.max(...lats) - Math.min(...lats)) * 110_950,
+  );
+  const sizes = sheet.tailles.map(([, size]) => size);
+  return sizes.reduce((best, size) => (Math.abs(Math.log(size / span)) < Math.abs(Math.log(best / span)) ? size : best), sizes[0] ?? 250);
 }
 
 /** Couleur d'un carreau : le nombre d'opérateurs, ou la qualité d'un opérateur. */
@@ -124,7 +135,6 @@ function readSettings(settings: Readonly<Record<string, string>>): { tech: Tech;
 }
 
 let shownKey = '';
-let viewZoom = 6;
 
 const frDate = (iso: string) => new Date(`${iso}T12:00:00Z`).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' });
 
@@ -190,8 +200,7 @@ export const couverture = defineModule<CoverageData>({
       shownKey = '';
       void map;
     },
-    update(map, { data, settings, night, view, selection }) {
-      viewZoom = view.zoom;
+    update(map, { data, settings, night, selection }) {
       if (!data) return;
       const sheet = data.sheet;
       if (!map.getSource(SOURCE_ID)) {
@@ -235,7 +244,6 @@ export const couverture = defineModule<CoverageData>({
       layerIds: [FILL_ID],
       toObject: (feature) => ({
         props: feature.properties as Record<string, number>,
-        zoom: viewZoom,
         ring: ((feature.geometry as { coordinates?: number[][][] }).coordinates?.[0] ?? []) as Array<[number, number]>,
       }),
     },
@@ -250,7 +258,7 @@ export const couverture = defineModule<CoverageData>({
     const cell = selection as Cell;
     if (!data) return null;
     const { donnees } = data.sheet;
-    const size = sizeAt(donnees, cell.zoom);
+    const size = cellSize(donnees, cell.ring);
     const aggregated = size > 250;
     const p = cell.props;
     const date = frDate(donnees.date);
@@ -278,15 +286,12 @@ export const couverture = defineModule<CoverageData>({
     });
 
     const white4 = p.gz ?? 0;
+    // Court : la fiche défile mal quand la note est longue et pousse le tableau hors de vue.
     const note = [
-      'Cartes de couverture théoriques : des simulations réalisées par les opérateurs et publiées sous le contrôle de l’ARCEP. Ce ne sont pas des mesures : la couverture réelle dépend du terrain, des bâtiments (très bonne : à l’extérieur et, le plus souvent, à l’intérieur ; limitée : plutôt à l’extérieur) et du téléphone.',
-      aggregated
-        ? `Carreau agrégé à cette échelle (${fmtSize(size)}) : parts de la surface couverte par chaque opérateur, ${white4} % de la surface sans aucun opérateur en 4G. Zoomez pour le détail.`
-        : '',
-      'Free Mobile n’a pas de carte 2G ; la voix combine 2G et 3G. La 5G n’est pas publiée.',
-    ]
-      .filter(Boolean)
-      .join(' ');
+      'Cartes théoriques : des simulations des opérateurs, publiées sous le contrôle de l’ARCEP, pas des mesures.',
+      aggregated ? `Carreau agrégé (${fmtSize(size)}) : ${white4} % de sa surface sans opérateur en 4G.` : 'Très bonne : dedans comme dehors ; limitée : plutôt dehors.',
+      'Voix = 2G et 3G ; pas de 5G publiée.',
+    ].join(' ');
 
     return {
       kind: `Couverture mobile · carreau de ${fmtSize(size)}`,

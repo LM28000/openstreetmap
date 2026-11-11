@@ -493,8 +493,11 @@ fn extract_gpkg(archive: &Path, out: &Path) -> Result<()> {
     Ok(())
 }
 
+/// Des anneaux de sommets `(est, nord)`.
+type Rings = Vec<Vec<(f64, f64)>>;
+
 /// Les contours des départements de métropole : des anneaux (extérieurs et trous mêlés) en mètres LAEA. Rend aussi le nombre de départements.
-fn read_land(geojson: &Path, filters: &Filters) -> Result<(Vec<Vec<(f64, f64)>>, u64)> {
+fn read_land(geojson: &Path, filters: &Filters) -> Result<(Rings, u64)> {
     let text = std::fs::read_to_string(geojson).context("contours des départements absents")?;
     let json: serde_json::Value = serde_json::from_str(&text).context("contours des départements illisibles")?;
     let mut rings = Vec::new();
@@ -582,10 +585,10 @@ fn rasterize_gpkg(gpkg: &Path, grid: &mut Grid, tech: usize, op: usize, converte
                 previous = Some(p);
             }
             // Un anneau bien formé est fermé ; sinon on le ferme (les croisements doivent être en nombre pair).
-            if let (Some(a), Some(b)) = (previous, first) {
-                if a != b {
-                    crossings.edge(a, b, grid.h);
-                }
+            if let (Some(a), Some(b)) = (previous, first)
+                && a != b
+            {
+                crossings.edge(a, b, grid.h);
             }
         }
         polygons += 1;

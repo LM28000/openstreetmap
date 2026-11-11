@@ -1,0 +1,399 @@
+/**
+ * Module « Prix de l'immobilier » : les prix de vente des logements au m², France métropolitaine (DGFiP, DVF ; Etalab).
+ *
+ * Le serveur a préparé les ventes en tuiles vectorielles (`server/src/tiles/dvf.rs`) :
+ * - **de loin (zoom < 14)** : des carreaux de 32 km à 100 m selon le zoom, qui portent, pour chaque type de bien
+ *   (appartements, maisons, tous) et chaque période (12 mois, 5 ans), le nombre de ventes, la **médiane** du prix au m²
+ *   et les quartiles. Une médiane ne s'additionne pas : le serveur fusionne des histogrammes logarithmiques (voir `dvf.rs`) ;
+ * - **de près (zoom ≥ 14)** : une vente par point (mois, prix, surface, pièces), sans adresse.
+ *
+ * Les propriétés d'un carreau se nomment `<grandeur><type><période>` : `pa5` = médiane (p), appartements (a), 5 ans (5) ;
+ * `nm1` = nombre de ventes (n), maisons (m), 12 mois (1) ; `l…` et `h…` : premier et troisième quartiles.
+ *
+ * Couleur : palette **divergente autour de la médiane nationale** du type choisi (bleu = moins cher, rose = plus cher,
+ * gris = au niveau de la médiane). Le relief (option) donne le nombre de ventes.
+ */
+import type { Map as MapLibreMap } from 'maplibre-gl';
+import { plainStatus } from '../core/infoStatus';
+import { defineModule, type InfoContent, type LegendItem } from '../core/module';
+import { firstSymbolLayerId } from '../map/baseMap';
+import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
+import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
+
+const SOURCE_ID = 'immobilier';
+const FILL_ID = 'immobilier-carreaux';
+const EXTRUSION_ID = 'immobilier-relief';
+const POINTS_ID = 'immobilier-ventes';
+const SELECTED_ID = 'immobilier-choisi';
+const SELECTED_POINT_ID = 'immobilier-vente-choisie';
+/** Zone des isochrones (module `isochrones`) : les couches de tuiles passent dessous. */
+const UNDER = 'isochrones-zone';
+
+/**
+ * Divergente, sept classes autour de la médiane nationale : bleu (moins cher) → gris (autour de la médiane) → rose
+ * (plus cher). Ni brun ni orange (population, accidents, TGV). Jour : les extrêmes sont les plus foncés ; nuit : les plus
+ * clairs. Chaque demi-palette est validée avec `validate_palette.js --ordinal` (une teinte, luminosité monotone, écarts nets,
+ * bout clair au-dessus de 2:1 sur le fond), le gris central à 2,5:1 (jour) ; l'ordre des classes se lit aussi par la teinte.
+ */
+const DAY_RAMP = ['#1b5a94', '#3f84bf', '#86b3dc', '#a3a3a3', '#d889b0', '#bb3d78', '#821a54'];
+const NIGHT_RAMP = ['#9fd0f7', '#6aaee8', '#3f86c4', '#7d7d7d', '#c04a85', '#e07aa6', '#f7b5cf'];
+/** Bornes des classes, en multiples de la médiane nationale : moins de la moitié, 50-70 %, 70-90 %, autour de la médiane (90-115 %), 115-170 %, 170-280 %, plus de 2,8 fois. */
+const RATIOS = [0.5, 0.7, 0.9, 1.15, 1.7, 2.8];
+
+type Kind = 'a' | 'm' | 't';
+type Period = '1' | '5';
+
+interface Stats {
+  n: number;
+  mediane: number;
+  q1: number;
+  q3: number;
+}
+
+interface YearReport {
+  annee: number;
+  mutations: number;
+  gardees: number;
+}
+
+interface ImmobilierSheet {
+  moisReference: string;
+  debut12mois: string;
+  debut5ans: string;
+  pointsDepuis: number;
+  ventes: number;
+  national: Record<`${Kind}${Period}`, Stats>;
+  annees: YearReport[];
+  tailles: Array<[number, number]>;
+  explorateur: string;
+}
+
+interface ImmobilierData {
+  sheet: TileSheet<ImmobilierSheet>;
+}
+
+/** Propriétés d'un objet de tuile : une vente (`mo`, `ty`, `pc`, `sf`, `pr`, `em`) ou un carreau (`n…`, `p…`, `l…`, `h…`). */
+type Props = Record<'mo' | 'ty' | 'pc' | 'sf' | 'pr' | 'em', number> & Record<string, number | undefined>;
+
+const fmt = (n: number) => Math.round(n).toLocaleString('fr-FR');
+const fmtSize = (m: number) => (m >= 1000 ? `${(m / 1000).toLocaleString('fr-FR')} km` : `${m} m`);
+const KIND_LABEL: Record<Kind, string> = { a: 'Appartements', m: 'Maisons', t: 'Tous logements' };
+const KIND_LABEL_LOWER: Record<Kind, string> = { a: 'd’appartements', m: 'de maisons', t: 'de logements' };
+
+/** Mois « 2025-12 » → « décembre 2025 ». */
+function monthName(label: string): string {
+  const [year, month] = label.split('-').map(Number) as [number, number];
+  return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+}
+
+/** Mois « 2025-12 » → nombre de mois depuis janvier 2000 (comme la propriété `mo` des ventes). */
+function monthIndex(label: string): number {
+  const [year, month] = label.split('-').map(Number) as [number, number];
+  return (year - 2000) * 12 + month - 1;
+}
+
+function periodLabel(sheet: ImmobilierSheet, period: Period): string {
+  const start = period === '1' ? sheet.debut12mois : sheet.debut5ans;
+  return `${monthName(start)} à ${monthName(sheet.moisReference)}`;
+}
+
+/** Bornes des sept classes, en €/m², pour un type de bien : multiples de la médiane nationale (5 ans), arrondis à 50 €. */
+function thresholds(kind: Kind, sheet: ImmobilierSheet): number[] {
+  const reference = sheet.national[`${kind}5`].mediane;
+  return RATIOS.map((ratio) => Math.round((reference * ratio) / 50) * 50);
+}
+
+/** Couleur par classes (`step`) : la légende dit exactement ce qu'on voit. */
+function colorExpression(property: unknown[], cuts: number[], night: number): unknown[] {
+  const ramp = night >= 0.5 ? NIGHT_RAMP : DAY_RAMP;
+  const expression: unknown[] = ['step', property, ramp[0]];
+  cuts.forEach((cut, i) => expression.push(cut, ramp[i + 1]));
+  return expression;
+}
+
+/**
+ * Hauteur (mètres) du relief : racine de la densité de ventes (ventes par carreau ÷ surface du carreau), pour qu'un
+ * carreau de 32 km et un de 100 m soient comparables, × un facteur qui double à chaque zoom perdu (1 m de colonne
+ * mesure moins de pixels de loin).
+ */
+function heightExpression(sheet: ImmobilierSheet, count: string): unknown[] {
+  const AT_Z13 = 18;
+  const stops: unknown[] = [];
+  for (const [zoom, size] of sheet.tailles) {
+    stops.push(zoom, ['*', AT_Z13 * 2 ** (13 - zoom) * (100 / size), ['sqrt', ['get', count]]]);
+  }
+  return ['interpolate', ['linear'], ['zoom'], ...stops];
+}
+
+/** Filtre des ventes affichées de près : type et période choisis. */
+function pointFilter(kind: Kind, period: Period, sheet: ImmobilierSheet): unknown[] {
+  const filters: unknown[] = [['>', ['get', 'pr'], 0]];
+  if (kind !== 't') filters.push(['==', ['get', 'ty'], kind === 'a' ? 0 : 1]);
+  if (period === '1') filters.push(['>=', ['get', 'mo'], monthIndex(sheet.debut12mois)]);
+  return ['all', ...filters];
+}
+
+let shownKey = '';
+/** La carte, gardée à l'activation : la couche ne se redessine pas quand on déplace la vue (`followsView: false`), le zoom d'un clic se lit donc sur la carte. */
+let theMap: MapLibreMap | null = null;
+let viewZoom = 6;
+
+function sizeAt(sheet: ImmobilierSheet, zoom: number): number {
+  const z = Math.min(13, Math.max(4, Math.floor(zoom)));
+  return sheet.tailles.find(([tileZoom]) => tileZoom === z)?.[1] ?? 100;
+}
+
+export const immobilier = defineModule<ImmobilierData>({
+  id: 'immobilier',
+  name: 'Prix de l’immobilier',
+  category: 'territoire',
+  description: 'Prix de vente au m² des logements (médiane par carreau, ventes une à une de près) : appartements, maisons, 12 mois ou 5 ans.',
+  attribution: 'DGFiP, DVF ; Etalab (licence ouverte)',
+  timeStepMs: 3_600_000, // statistique semestrielle : ne dépend pas de l'instant affiché
+  followsView: false,
+
+  settings: [
+    {
+      id: 'type',
+      label: 'Biens',
+      defaultValue: 't',
+      options: [
+        { value: 't', label: 'Tous' },
+        { value: 'a', label: 'Appartements' },
+        { value: 'm', label: 'Maisons' },
+      ],
+    },
+    {
+      id: 'periode',
+      label: 'Période',
+      defaultValue: '5',
+      options: [
+        { value: '5', label: '5 ans' },
+        { value: '1', label: '12 mois' },
+      ],
+    },
+    {
+      id: 'relief',
+      label: 'Affichage',
+      defaultValue: 'plat',
+      options: [
+        { value: 'plat', label: 'À plat' },
+        { value: '3d', label: 'Relief : nombre de ventes' },
+      ],
+    },
+  ],
+
+  async load({ signal }) {
+    return { sheet: await loadTileSheet<ImmobilierSheet>('dvf', signal) };
+  },
+
+  legend(settings, data) {
+    if (!data) return [];
+    const kind = (settings.type ?? 't') as Kind;
+    const cuts = thresholds(kind, data.sheet.donnees);
+    return DAY_RAMP.map<LegendItem>((color, i) => ({
+      color,
+      label:
+        i === 0
+          ? `Moins de ${fmt(cuts[0]!)} €/m²`
+          : i === DAY_RAMP.length - 1
+            ? `${fmt(cuts[i - 1]!)} €/m² et plus`
+            : i === 3
+              ? `${fmt(cuts[2]!)} à ${fmt(cuts[3]!)} €/m² (médiane nationale)`
+              : `${fmt(cuts[i - 1]!)} à ${fmt(cuts[i]!)} €/m²`,
+    }));
+  },
+
+  summary({ data, settings }) {
+    if (!data) return null;
+    const kind = (settings.type ?? 't') as Kind;
+    const period = (settings.periode ?? '5') as Period;
+    const stats = data.sheet.donnees.national[`${kind}${period}`];
+    return `Médiane nationale ${KIND_LABEL_LOWER[kind]} : ${fmt(stats.mediane)} €/m² (${fmt(stats.n / 1000)} milliers de ventes, ${periodLabel(data.sheet.donnees, period)}) · centré sur la médiane nationale`;
+  },
+
+  native: {
+    add(map: MapLibreMap) {
+      shownKey = '';
+      theMap = map;
+    },
+    update(map, { data, settings, night, view, selection }) {
+      viewZoom = view.zoom;
+      if (!data) return;
+      const sheet = data.sheet;
+      const info = sheet.donnees;
+      if (!map.getSource(SOURCE_ID)) {
+        addTileSource(map, SOURCE_ID, sheet);
+        const before = firstSymbolLayerId(map);
+        const common = { source: SOURCE_ID, 'source-layer': sheet.couche };
+        map.addLayer({ id: EXTRUSION_ID, type: 'fill-extrusion', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-extrusion-opacity': 0.88, 'fill-extrusion-vertical-gradient': true } } as never, before);
+        map.addLayer({ id: FILL_ID, type: 'fill', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-opacity': 0.8 } } as never, before);
+        map.addLayer(
+          {
+            id: POINTS_ID,
+            type: 'circle',
+            ...common,
+            minzoom: info.pointsDepuis,
+            paint: {
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 3.5, 17, 6, 20, 10],
+              'circle-opacity': 0.92,
+              'circle-stroke-width': 1,
+            },
+          } as never,
+          before,
+        );
+        const ring = selectionRingLayers(SELECTED_ID, SOURCE_ID, ['==', ['get', 'pr'], -1], [[5, 1.5], [13, 3]]);
+        addSelectionRing(map, ring.map((layer) => ({ ...layer, 'source-layer': sheet.couche, maxzoom: info.pointsDepuis }) as never), before);
+        // La vente choisie : un cercle blanc cerné de sombre autour du point (deux couches, la sombre dessous).
+        for (const [id, color, extra] of [[`${SELECTED_POINT_ID}-contour`, '#14141a', 3], [SELECTED_POINT_ID, '#ffffff', 0]] as const) {
+          map.addLayer(
+            {
+              id,
+              type: 'circle',
+              ...common,
+              minzoom: info.pointsDepuis,
+              filter: ['==', ['get', 'pr'], -1],
+              paint: {
+                'circle-radius': ['interpolate', ['linear'], ['zoom'], 14, 6 + extra / 2, 20, 14 + extra / 2],
+                'circle-color': 'rgba(0,0,0,0)',
+                'circle-stroke-color': color,
+                'circle-stroke-width': 2 + extra,
+              },
+            } as never,
+            before,
+          );
+        }
+        shownKey = '';
+      }
+      for (const id of [EXTRUSION_ID, FILL_ID]) if (map.getLayer(UNDER) && map.getLayer(id)) map.moveLayer(id, UNDER);
+      const kind = (settings.type ?? 't') as Kind;
+      const period = (settings.periode ?? '5') as Period;
+      const relief = settings.relief === '3d';
+      const key = `${kind}${period}:${relief}:${night >= 0.5}`;
+      if (key !== shownKey) {
+        shownKey = key;
+        const combo = `${kind}${period}`;
+        const cuts = thresholds(kind, info);
+        const cellColor = colorExpression(['get', `p${combo}`], cuts, night) as never;
+        // Un carreau sans vente (de ce type, sur cette période) n'existe pas : il n'est pas dessiné.
+        const hasSales = ['>', ['get', `n${combo}`], 0] as never;
+        // Moins de 3 ventes : la médiane est fragile, le carreau est estompé (fill seulement : l'opacité du relief n'est pas pilotée par les données).
+        map.setFilter(FILL_ID, hasSales);
+        map.setPaintProperty(FILL_ID, 'fill-color', cellColor);
+        map.setPaintProperty(FILL_ID, 'fill-opacity', ['case', ['<', ['get', `n${combo}`], 3], 0.45, 0.82] as never);
+        map.setFilter(EXTRUSION_ID, hasSales);
+        map.setPaintProperty(EXTRUSION_ID, 'fill-extrusion-color', cellColor);
+        map.setPaintProperty(EXTRUSION_ID, 'fill-extrusion-height', heightExpression(info, `n${combo}`) as never);
+        map.setPaintProperty(EXTRUSION_ID, 'fill-extrusion-base', 0);
+        map.setLayoutProperty(EXTRUSION_ID, 'visibility', relief ? 'visible' : 'none');
+        map.setLayoutProperty(FILL_ID, 'visibility', relief ? 'none' : 'visible');
+        map.setFilter(POINTS_ID, pointFilter(kind, period, info) as never);
+        map.setPaintProperty(POINTS_ID, 'circle-color', colorExpression(['get', 'em'], cuts, night) as never);
+        map.setPaintProperty(POINTS_ID, 'circle-stroke-color', night >= 0.5 ? '#14141a' : '#ffffff');
+      }
+      const p = selection as Props | null;
+      const isSale = !!p && p.pr > 0;
+      const none = ['==', ['get', 'pr'], -1];
+      setSelectionRingFilter(
+        map,
+        SELECTED_ID,
+        p && !isSale
+          ? ['all', ...['na5', 'nm5', 'pa5', 'pm5', 'pt5', 'nt5'].map((k) => ['==', ['get', k], p[k] ?? 0])]
+          : none,
+      );
+      const salesFilter = isSale ? ['all', ['==', ['get', 'mo'], p.mo], ['==', ['get', 'pr'], p.pr], ['==', ['get', 'sf'], p.sf], ['==', ['get', 'ty'], p.ty]] : none;
+      for (const id of [SELECTED_POINT_ID, `${SELECTED_POINT_ID}-contour`]) if (map.getLayer(id)) map.setFilter(id, salesFilter as never);
+    },
+    remove(map) {
+      for (const id of [`${SELECTED_POINT_ID}-contour`, SELECTED_POINT_ID, ...selectionRingIds(SELECTED_ID), POINTS_ID, FILL_ID, EXTRUSION_ID]) {
+        if (map.getLayer(id)) map.removeLayer(id);
+      }
+      if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
+      shownKey = '';
+    },
+    pickable: {
+      layerIds: [POINTS_ID, FILL_ID, EXTRUSION_ID],
+      toObject: (feature) => ({ ...(feature.properties as object), zoom: theMap?.getZoom() ?? viewZoom }),
+    },
+  },
+
+  select(object) {
+    const p = object as Props;
+    if (p.mo === undefined && p.na5 === undefined) return null;
+    return { ...p } satisfies Props;
+  },
+
+  describe(selection, { data, settings }): InfoContent | null {
+    const p = selection as Props;
+    if (!data) return null;
+    const sheet = data.sheet.donnees;
+    const source = plainStatus('DGFiP, DVF ; Etalab');
+    const link = { href: sheet.explorateur, label: 'Explorateur officiel des valeurs foncières' };
+    const national = (kind: Kind) => sheet.national[`${kind}5`].mediane;
+
+    if (p.pr > 0) {
+      // Une vente.
+      const kind: Kind = p.ty === 1 ? 'm' : 'a';
+      const reference = national(kind);
+      const gap = Math.round((p.em / reference - 1) * 100);
+      const monthLabel = new Date(Date.UTC(2000 + Math.floor(p.mo / 12), p.mo % 12, 1)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
+      return {
+        kind: `Vente · ${kind === 'a' ? 'appartement' : 'maison'}`,
+        title: `${fmt(p.pr)} €`,
+        subtitle: `${fmt(p.em)} €/m² · ${fmt(p.sf)} m²${p.pc > 0 ? ` · ${p.pc} pièce${p.pc > 1 ? 's' : ''}` : ''}`,
+        status: source,
+        figures: [
+          { value: fmt(p.em), unit: '€/m²', label: 'prix au m²' },
+          { value: fmt(p.sf), unit: 'm²', label: 'surface bâtie' },
+          { value: `${gap > 0 ? '+' : ''}${gap} %`, label: `vs médiane nationale` },
+        ],
+        fields: [
+          ['Vendu en', monthLabel],
+          ['Médiane nationale', `${fmt(reference)} €/m² (${KIND_LABEL[kind].toLowerCase()}, ${periodLabel(sheet, '5')})`],
+        ],
+        note: 'Un seul logement dans la vente (maison ou appartement, dépendances comprises dans le prix). Pour ne pas permettre de ré-identifier les personnes (conditions de réutilisation de la DGFiP), la date est réduite au mois, la position arrondie à une vingtaine de mètres et aucune adresse n’est publiée. Position et surface sont celles du fichier DVF, avec ses erreurs possibles.',
+        link,
+      };
+    }
+
+    // Un carreau.
+    const kind = (settings.type ?? 't') as Kind;
+    const period = (settings.periode ?? '5') as Period;
+    const combo = `${kind}${period}`;
+    const size = sizeAt(sheet, p.zoom ?? viewZoom);
+    const n = p[`n${combo}`] ?? 0;
+    const median = p[`p${combo}`] ?? 0;
+    const q1 = p[`l${combo}`];
+    const q3 = p[`h${combo}`];
+    const reference = national(kind);
+    const row = (k: Kind) => {
+      const count = p[`n${k}${period}`] ?? 0;
+      return count > 0 ? `${fmt(p[`p${k}${period}`] ?? 0)} €/m² (${fmt(count)} vente${count > 1 ? 's' : ''})` : 'aucune vente';
+    };
+    const notes: string[] = [];
+    if (n < 5) notes.push(`Seulement ${n} vente${n > 1 ? 's' : ''} : la médiane est fragile, ne la prenez pas pour le prix du quartier.`);
+    notes.push(
+      'La médiane est lue sur un histogramme (128 classes logarithmiques, précision ~2 %) que le serveur fusionne carreau par carreau : une médiane ne s’additionne pas, on additionne des effectifs par classe de prix.',
+    );
+    if (q1 === undefined) notes.push('Les quartiles ne sont pas publiés à cette échelle (trop peu de ventes par carreau) : dézoomez.');
+    return {
+      kind: `Prix de l’immobilier · carreau de ${fmtSize(size)}`,
+      title: n > 0 ? `${fmt(median)} €/m²` : 'Aucune vente',
+      subtitle: `médiane · ${KIND_LABEL[kind].toLowerCase()} · ${period === '1' ? '12 derniers mois' : '5 ans'}`,
+      status: source,
+      figures: [
+        { value: fmt(median), unit: '€/m²', label: 'médiane' },
+        { value: fmt(n), label: `vente${n > 1 ? 's' : ''}` },
+        { value: q1 !== undefined && q3 !== undefined ? `${fmt(q1)} – ${fmt(q3)}` : '–', unit: q1 !== undefined ? '€/m²' : undefined, label: '1er et 3e quartiles' },
+      ],
+      fields: [
+        ['Période', periodLabel(sheet, period)],
+        ['Appartements', row('a')],
+        ['Maisons', row('m')],
+        ['Médiane nationale', `${fmt(reference)} €/m² (${fmt(Math.round((median / reference) * 100))} % ici)`],
+      ],
+      note: notes.join(' '),
+      link,
+    };
+  },
+});

@@ -57,6 +57,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['population', 'isochrones'],
   },
   {
+    // Seule : bleu, gris et rose (échelle divergente autour de la médiane nationale) ne doivent pas se mêler à d'autres aplats.
+    id: 'immobilier',
+    label: 'Immobilier',
+    description: 'prix de vente au m², ventes une à une',
+    modules: ['immobilier'],
+  },
+  {
     id: 'ville',
     label: 'Ma ville',
     description: 'bus, vélos, trafic, bornes',

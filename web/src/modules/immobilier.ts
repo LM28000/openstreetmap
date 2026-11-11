@@ -10,8 +10,10 @@
  * Les propriétés d'un carreau se nomment `<grandeur><type><période>` : `pa5` = médiane (p), appartements (a), 5 ans (5) ;
  * `nm1` = nombre de ventes (n), maisons (m), 12 mois (1) ; `l…` et `h…` : premier et troisième quartiles.
  *
- * Couleur : palette **divergente autour de la médiane nationale** du type choisi (bleu = moins cher, rose = plus cher,
- * gris = au niveau de la médiane). Le relief (option) donne le nombre de ventes.
+ * Couleur : palette **divergente autour d'une médiane de référence** (bleu = moins cher, rose = plus cher, gris = au
+ * niveau de la médiane) : la médiane nationale du type choisi, ou celle de la **zone affichée** (réglage « Référence ») pour
+ * comparer les quartiers d'une ville chère entre eux (à Paris, tout dépasse 2,8 fois la médiane nationale). Le relief
+ * (option) donne le nombre de ventes.
  */
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
@@ -97,10 +99,53 @@ function periodLabel(sheet: ImmobilierSheet, period: Period): string {
   return `${monthName(start)} à ${monthName(sheet.moisReference)}`;
 }
 
-/** Bornes des sept classes, en €/m², pour un type de bien : multiples de la médiane nationale (5 ans), arrondis à 50 €. */
-function thresholds(kind: Kind, sheet: ImmobilierSheet): number[] {
-  const reference = sheet.national[`${kind}5`].mediane;
-  return RATIOS.map((ratio) => Math.round((reference * ratio) / 50) * 50);
+/**
+ * Médiane de la zone affichée (réglage « Référence : zone affichée »), recalculée quand la carte s'arrête : `null` tant
+ * qu'elle n'est pas connue, ou s'il y a trop peu de ventes à l'écran (on revient alors à la médiane nationale).
+ */
+let viewMedian: number | null = null;
+/** En dessous, la médiane de la zone serait trop fragile pour servir de référence. */
+const MIN_VIEW_SALES = 30;
+
+/** Médiane de référence, en €/m² : celle de la zone affichée si elle est demandée et connue, sinon la nationale (5 ans). */
+function referenceMedian(kind: Kind, sheet: ImmobilierSheet, reference: string | undefined): number {
+  return reference === 'vue' && viewMedian ? viewMedian : sheet.national[`${kind}5`].mediane;
+}
+
+/** Bornes des sept classes, en €/m² : multiples de la médiane de référence, arrondis à 50 €. */
+function thresholds(kind: Kind, sheet: ImmobilierSheet, reference?: string): number[] {
+  const median = referenceMedian(kind, sheet, reference);
+  return RATIOS.map((ratio) => Math.round((median * ratio) / 50) * 50);
+}
+
+/**
+ * Médiane pondérée des objets dessinés à l'écran : les carreaux (médiane du carreau, pondérée par son nombre de ventes)
+ * ou, de près, les ventes elles-mêmes. C'est une médiane de médianes pondérée, une approximation honnête de la médiane
+ * des ventes de la zone (la vraie demanderait les histogrammes). Les carreaux répétés au bord des tuiles comptent
+ * deux fois : sans effet visible sur une zone entière.
+ */
+function medianOnScreen(map: MapLibreMap, combo: string, pointsFrom: number, relief: boolean): number | null {
+  const points = map.getZoom() >= pointsFrom;
+  const layer = points ? POINTS_ID : relief ? EXTRUSION_ID : FILL_ID;
+  if (!map.getLayer(layer)) return null;
+  const values: Array<[number, number]> = [];
+  let total = 0;
+  for (const feature of map.queryRenderedFeatures({ layers: [layer] })) {
+    const p = feature.properties as Record<string, number | undefined>;
+    const value = points ? p.em : p[`p${combo}`];
+    const weight = points ? 1 : (p[`n${combo}`] ?? 0);
+    if (!value || !weight) continue;
+    values.push([value, weight]);
+    total += weight;
+  }
+  if (total < MIN_VIEW_SALES) return null;
+  values.sort((a, b) => a[0] - b[0]);
+  let seen = 0;
+  for (const [value, weight] of values) {
+    seen += weight;
+    if (seen >= total / 2) return value;
+  }
+  return null;
 }
 
 /** Couleur par classes (`step`) : la légende dit exactement ce qu'on voit. */
@@ -143,6 +188,31 @@ function sizeAt(sheet: ImmobilierSheet, zoom: number): number {
   return sheet.tailles.find(([tileZoom]) => tileZoom === z)?.[1] ?? 100;
 }
 
+/** Ce que `update` a affiché en dernier : de quoi recalculer la médiane de la zone quand la carte s'arrête. */
+let current: { combo: string; pointsFrom: number; relief: boolean; reference: string } | null = null;
+
+/**
+ * Recalcule la médiane de la zone affichée. Hystérésis de 3 % : un petit déplacement ne repeint pas la carte (et repeindre
+ * déclenche un nouvel « idle », qui retrouve la même médiane : pas de boucle). Rend vrai si elle a changé.
+ */
+function refreshViewMedian(map: MapLibreMap): boolean {
+  if (!current || current.reference !== 'vue') return false;
+  const median = medianOnScreen(map, current.combo, current.pointsFrom, current.relief);
+  const rounded = median ? Math.round(median / 50) * 50 : null;
+  if (rounded === viewMedian) return false;
+  if (rounded && viewMedian && Math.abs(rounded / viewMedian - 1) < 0.03) return false;
+  viewMedian = rounded;
+  return true;
+}
+
+/** Repeint la couche avec les derniers réglages (fixé par `update`). */
+let repaint: (() => void) | null = null;
+
+/** La carte s'est arrêtée et ses tuiles sont chargées : si la médiane de la zone a changé, on repeint tout de suite. */
+function onIdle(): void {
+  if (theMap && refreshViewMedian(theMap)) repaint?.();
+}
+
 export const immobilier = defineModule<ImmobilierData>({
   id: 'immobilier',
   name: 'Prix de l’immobilier',
@@ -150,7 +220,8 @@ export const immobilier = defineModule<ImmobilierData>({
   description: 'Prix de vente au m² des logements (médiane par carreau, ventes une à une de près) : appartements, maisons, 12 mois ou 5 ans.',
   attribution: 'DGFiP, DVF ; Etalab (licence ouverte)',
   timeStepMs: 3_600_000, // statistique semestrielle : ne dépend pas de l'instant affiché
-  followsView: false,
+  // Suit la vue pour la référence « zone affichée » (sinon, rien ne change quand on se déplace : la clé de `update` est la même).
+  followsView: true,
 
   settings: [
     {
@@ -173,6 +244,17 @@ export const immobilier = defineModule<ImmobilierData>({
       ],
     },
     {
+      id: 'reference',
+      label: 'Référence',
+      // Par défaut, la zone affichée : vue de toute la France, c'est presque la médiane nationale ; dans une ville, les
+      // quartiers se distinguent au lieu de tomber tous dans la classe « plus de 2,8 fois la médiane nationale ».
+      defaultValue: 'vue',
+      options: [
+        { value: 'france', label: 'Médiane nationale' },
+        { value: 'vue', label: 'Zone affichée' },
+      ],
+    },
+    {
       id: 'relief',
       label: 'Affichage',
       defaultValue: 'plat',
@@ -190,7 +272,8 @@ export const immobilier = defineModule<ImmobilierData>({
   legend(settings, data) {
     if (!data) return [];
     const kind = (settings.type ?? 't') as Kind;
-    const cuts = thresholds(kind, data.sheet.donnees);
+    const cuts = thresholds(kind, data.sheet.donnees, settings.reference);
+    const middle = settings.reference === 'vue' && viewMedian ? 'médiane de la zone affichée' : 'médiane nationale';
     return DAY_RAMP.map<LegendItem>((color, i) => ({
       color,
       label:
@@ -199,7 +282,7 @@ export const immobilier = defineModule<ImmobilierData>({
           : i === DAY_RAMP.length - 1
             ? `${fmt(cuts[i - 1]!)} €/m² et plus`
             : i === 3
-              ? `${fmt(cuts[2]!)} à ${fmt(cuts[3]!)} €/m² (médiane nationale)`
+              ? `${fmt(cuts[2]!)} à ${fmt(cuts[3]!)} €/m² (${middle})`
               : `${fmt(cuts[i - 1]!)} à ${fmt(cuts[i]!)} €/m²`,
     }));
   },
@@ -209,13 +292,19 @@ export const immobilier = defineModule<ImmobilierData>({
     const kind = (settings.type ?? 't') as Kind;
     const period = (settings.periode ?? '5') as Period;
     const stats = data.sheet.donnees.national[`${kind}${period}`];
-    return `Médiane nationale ${KIND_LABEL_LOWER[kind]} : ${fmt(stats.mediane)} €/m² (${fmt(stats.n / 1000)} milliers de ventes, ${periodLabel(data.sheet.donnees, period)}) · centré sur la médiane nationale`;
+    const national = `Médiane nationale ${KIND_LABEL_LOWER[kind]} : ${fmt(stats.mediane)} €/m² (${fmt(stats.n / 1000)} milliers de ventes, ${periodLabel(data.sheet.donnees, period)})`;
+    if (settings.reference !== 'vue') return `${national} · centré sur la médiane nationale`;
+    return viewMedian
+      ? `Médiane de la zone affichée : ${fmt(viewMedian)} €/m² · couleurs centrées sur elle · ${national}`
+      : `${national} · trop peu de ventes à l'écran pour une médiane de la zone`;
   },
 
   native: {
     add(map: MapLibreMap) {
       shownKey = '';
       theMap = map;
+      viewMedian = null;
+      map.on('idle', onIdle);
     },
     update(map, { data, settings, night, view, selection }) {
       viewZoom = view.zoom;
@@ -269,11 +358,14 @@ export const immobilier = defineModule<ImmobilierData>({
       const kind = (settings.type ?? 't') as Kind;
       const period = (settings.periode ?? '5') as Period;
       const relief = settings.relief === '3d';
-      const key = `${kind}${period}:${relief}:${night >= 0.5}`;
-      if (key !== shownKey) {
-        shownKey = key;
+      const reference = settings.reference ?? 'france';
+      current = { combo: `${kind}${period}`, pointsFrom: info.pointsDepuis, relief, reference };
+      if (reference === 'vue') refreshViewMedian(map);
+      const keyOf = () => `${kind}${period}:${relief}:${night >= 0.5}:${reference}:${reference === 'vue' ? viewMedian : ''}`;
+      const paint = () => {
+        shownKey = keyOf();
         const combo = `${kind}${period}`;
-        const cuts = thresholds(kind, info);
+        const cuts = thresholds(kind, info, reference);
         const cellColor = colorExpression(['get', `p${combo}`], cuts, night) as never;
         // Un carreau sans vente (de ce type, sur cette période) n'existe pas : il n'est pas dessiné.
         const hasSales = ['>', ['get', `n${combo}`], 0] as never;
@@ -290,7 +382,9 @@ export const immobilier = defineModule<ImmobilierData>({
         map.setFilter(POINTS_ID, pointFilter(kind, period, info) as never);
         map.setPaintProperty(POINTS_ID, 'circle-color', colorExpression(['get', 'em'], cuts, night) as never);
         map.setPaintProperty(POINTS_ID, 'circle-stroke-color', night >= 0.5 ? '#14141a' : '#ffffff');
-      }
+      };
+      repaint = paint;
+      if (keyOf() !== shownKey) paint();
       const p = selection as Props | null;
       const isSale = !!p && p.pr > 0;
       const none = ['==', ['get', 'pr'], -1];
@@ -305,6 +399,9 @@ export const immobilier = defineModule<ImmobilierData>({
       for (const id of [SELECTED_POINT_ID, `${SELECTED_POINT_ID}-contour`]) if (map.getLayer(id)) map.setFilter(id, salesFilter as never);
     },
     remove(map) {
+      map.off('idle', onIdle);
+      current = null;
+      repaint = null;
       for (const id of [`${SELECTED_POINT_ID}-contour`, SELECTED_POINT_ID, ...selectionRingIds(SELECTED_ID), POINTS_ID, FILL_ID, EXTRUSION_ID]) {
         if (map.getLayer(id)) map.removeLayer(id);
       }

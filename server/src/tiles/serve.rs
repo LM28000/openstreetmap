@@ -160,7 +160,13 @@ impl Registry {
     }
 
     /// Télécharge la source puis lance la fabrication dans un processus enfant.
+    ///
+    /// Une seule fabrication à la fois, tous jeux confondus : chacune peut monter à ~150 Mo dans son processus
+    /// enfant, et le conteneur partage 1 Go entre le serveur et ses enfants. Les autres jeux attendent leur tour
+    /// (leur ancienne archive, s'il y en a une, reste servie).
     async fn build(&self, dataset: &Arc<dyn Dataset>, http: &reqwest::Client, data_dir: &Path) -> Result<()> {
+        static ONE_BUILD_AT_A_TIME: tokio::sync::Semaphore = tokio::sync::Semaphore::const_new(1);
+        let _turn = ONE_BUILD_AT_A_TIME.acquire().await.context("file d'attente des fabrications")?;
         let source_dir = source_dir(data_dir, dataset.id());
         std::fs::create_dir_all(&source_dir)?;
         dataset.acquire(http, &source_dir).await.context("téléchargement de la source")?;

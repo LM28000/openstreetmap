@@ -1450,6 +1450,26 @@ function inView(head: Head, bounds: { west: number; east: number; south: number;
   return lon >= bounds.west && lon <= bounds.east && lat >= bounds.south && lat <= bounds.north;
 }
 
+/**
+ * Les gares de la vue, avec une large marge, dans un tableau qui ne change que lorsque la vue en sort.
+ * Les couches de gares lisent l'altitude de chaque gare à chaque arrivée de tuiles de relief : sur les
+ * quelques milliers de gares du pays, seules quelques dizaines se voient, et un tableau stable évite
+ * à deck.gl de tout recalculer pendant que la carte tourne.
+ */
+let stationWindow: { source: Station[]; west: number; east: number; south: number; north: number; stations: Station[]; centred: Station[] } | undefined;
+function stationsInView(data: { stations: Station[]; centred: Station[] }): { stations: Station[]; centred: Station[] } {
+  if (!mapRef) return data;
+  const bounds = mapRef.getBounds();
+  const [west, east, south, north] = [bounds.getWest(), bounds.getEast(), bounds.getSouth(), bounds.getNorth()];
+  const w = stationWindow;
+  if (w && w.source === data.stations && west >= w.west && east <= w.east && south >= w.south && north <= w.north) return w;
+  const margin = Math.max(east - west, north - south) * 0.75;
+  const box = { west: west - margin, east: east + margin, south: south - margin, north: north + margin };
+  const inBox = (s: Station) => s.lon >= box.west && s.lon <= box.east && s.lat >= box.south && s.lat <= box.north;
+  stationWindow = { source: data.stations, ...box, stations: data.stations.filter(inBox), centred: data.centred.filter(inBox) };
+  return stationWindow;
+}
+
 function viewBounds(): { west: number; east: number; south: number; north: number } | null {
   if (!mapRef) return null;
   const bounds = mapRef.getBounds();
@@ -2017,6 +2037,7 @@ export const trains = defineModule<TrainsData>({
     // Gares : leur taille dit leur trafic, la grande a un anneau et un point central.
     const stationScale = zoomRamp(view.zoom, STATION_MIN_ZOOM, 12, 0.75, 1);
     const stationPosition = (s: Station): [number, number, number] => [s.lon, s.lat, terrain.elevation(s.lon, s.lat)];
+    const nearStations = view.zoom >= STATION_MIN_ZOOM ? stationsInView(data) : data;
     const stationRadius = (s: Station) => STATION_RADIUS_PX[s.size];
 
     // De près, la rame entière à la place de la tête, pour les seuls trains dans la vue.
@@ -2047,7 +2068,7 @@ export const trains = defineModule<TrainsData>({
       view.zoom >= STATION_MIN_ZOOM &&
         new ScatterplotLayer<Station>({
           id: 'trains/gares-halo',
-          data: data.stations,
+          data: nearStations.stations,
           getPosition: stationPosition,
           radiusUnits: 'pixels',
           getRadius: (s) => stationRadius(s) + STATION_LINE_PX[s.size] / 2 + STATION_HALO_PX,
@@ -2060,7 +2081,7 @@ export const trains = defineModule<TrainsData>({
       view.zoom >= STATION_MIN_ZOOM &&
         new ScatterplotLayer<Station>({
           id: 'trains/gares',
-          data: data.stations,
+          data: nearStations.stations,
           getPosition: stationPosition,
           radiusUnits: 'pixels',
           getRadius: stationRadius,
@@ -2080,7 +2101,7 @@ export const trains = defineModule<TrainsData>({
       view.zoom >= STATION_MIN_ZOOM &&
         new ScatterplotLayer<Station>({
           id: 'trains/gares-centre',
-          data: data.centred,
+          data: nearStations.centred,
           getPosition: stationPosition,
           radiusUnits: 'pixels',
           getRadius: (s) => stationRadius(s) * STATION_DOT_RATIO,

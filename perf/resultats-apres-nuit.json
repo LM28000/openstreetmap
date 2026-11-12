@@ -1,0 +1,20 @@
+{
+ "paris-z14-p55": {
+  "frames": 281,
+  "moyen_ms": 17.7,
+  "p95_ms": 33.3,
+  "cpu_ms_img": 15.8,
+  "script_ms_img": 14.4,
+  "couchesStyle": 114,
+  "canvas": 2880
+ },
+ "lyon-z15-p60": {
+  "frames": 236,
+  "moyen_ms": 21.2,
+  "p95_ms": 33.4,
+  "cpu_ms_img": 20,
+  "script_ms_img": 18.8,
+  "couchesStyle": 114,
+  "canvas": 2880
+ }
+}

@@ -2,7 +2,7 @@
  * Fond de carte : style OpenStreetMap (OpenFreeMap), globe, relief 3D,
  * ombrage des reliefs et atmosphère.
  */
-import type { Map as MapLibreMap, RasterDEMSourceSpecification, SkySpecification } from 'maplibre-gl';
+import { ScaleControl, type Map as MapLibreMap, type RasterDEMSourceSpecification, type SkySpecification } from 'maplibre-gl';
 import { clock } from '../core/clock';
 import { nightAmount, sunElevation } from '../modules/solar';
 import { NIGHT_STATE, applyCalmStyle, hillshadePaint } from './calmStyle';
@@ -175,4 +175,47 @@ export function firstSymbolLayerId(map: MapLibreMap): string | undefined {
 
 function existingLayerOr(map: MapLibreMap, id: string): string | undefined {
   return map.getLayer(id) ? id : firstSymbolLayerId(map);
+}
+
+/**
+ * Échelle de la carte. Celle de MapLibre se recalcule à chaque image de mouvement avec deux `unproject`,
+ * et avec le relief chaque `unproject` redessine la passe de coordonnées puis relit un pixel du GPU
+ * (`readPixels`, qui bloque le processeur jusqu'à la fin du dessin) : environ la moitié du temps d'image
+ * d'une vue de ville. Pendant le mouvement, le calcul se fait donc sur le plan sans relief (instantané) ;
+ * à l'arrêt, il est refait avec le relief : la barre est exacte au repos.
+ */
+export class CalmScaleControl extends ScaleControl {
+  override onAdd(map: MapLibreMap): HTMLElement {
+    const self = this as unknown as { _onMove: () => void; _map?: MapLibreMap };
+    const exact = self._onMove;
+    type Transform = { screenPointToLocation(point: { x: number; y: number }): unknown };
+    const flat = Object.create(map) as MapLibreMap;
+    (flat as unknown as { unproject: (p: [number, number]) => unknown }).unproject = ([x, y]) =>
+      (map.transform as unknown as Transform).screenPointToLocation({ x, y });
+    let moving = false;
+    self._onMove = () => {
+      moving = true;
+      const real = self._map;
+      self._map = flat;
+      try {
+        exact();
+      } finally {
+        self._map = real;
+      }
+    };
+    const element = super.onAdd(map);
+    // Les déplacements par saccades (suivi d'un train, rotation pilotée) enchaînent des « moveend » à chaque
+    // image : on attend un court silence avant de refaire le calcul exact.
+    let settle: ReturnType<typeof setTimeout> | undefined;
+    map.on('move', () => clearTimeout(settle));
+    map.on('moveend', () => {
+      clearTimeout(settle);
+      settle = setTimeout(() => {
+        if (!moving) return;
+        moving = false;
+        exact();
+      }, 200);
+    });
+    return element;
+  }
 }

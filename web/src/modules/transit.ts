@@ -681,10 +681,15 @@ function shows(data: TransitData, time: number): boolean {
 }
 
 /** Place chaque véhicule à l'instant `time` ; renvoie vrai si au moins un a bougé. */
-function place(data: TransitData, time: number, terrain: { elevation(lon: number, lat: number): number; version: number }): boolean {
+function place(data: TransitData, time: number, terrain: { elevation(lon: number, lat: number): number; version: number }, bounds: readonly [number, number, number, number]): boolean {
   let moved = false;
+  // Seuls les véhicules de la vue (avec une marge) sont posés sur le relief : les autres le seront en y entrant.
+  const [west, south, east, north] = bounds;
+  const margin = Math.max(east - west, north - south) * 0.5;
   for (const v of data.vehicles) {
-    const needsGround = v.groundVersion !== terrain.version;
+    const needsGround =
+      v.groundVersion !== terrain.version &&
+      v.lon >= west - margin && v.lon <= east + margin && v.lat >= south - margin && v.lat <= north + margin;
     if (v.settled && !needsGround) continue;
     if (v.estimate) {
       v.settled = atTime(v.estimate, time, v.position);
@@ -970,12 +975,16 @@ export const transit = defineModule<TransitData>({
     // De près : chaque véhicule, posé sur le relief et glissant vers sa nouvelle position.
     if (data.replay) {
       // Relecture : les positions sont déjà celles de l'instant ; reste à les poser sur le relief (une fois par version du relief).
+      const [west, south, east, north] = view.bounds();
+      const margin = Math.max(east - west, north - south) * 0.5;
       for (const v of data.vehicles) {
         if (v.groundVersion === terrain.version) continue;
+        const [lon, lat] = v.position;
+        if (lon! < west - margin || lon! > east + margin || lat! < south - margin || lat! > north + margin) continue;
         v.position[2] = terrain.elevation(v.position[0], v.position[1]) + ICON_LIFT_M;
         v.groundVersion = terrain.version;
       }
-    } else if (place(data, time, terrain)) {
+    } else if (place(data, time, terrain, view.bounds())) {
       data.motion++;
     }
     const icons = atlas();

@@ -637,9 +637,15 @@ export const planes = defineModule<PlanesData>({
     // Position de chaque avion à cet instant, à son altitude réelle (sans exagération du relief).
     // En relecture, `observedAt` vaut l'instant affiché : `extrapolate` rend la position interpolée telle quelle.
     const shown: Plane[] = [];
+    // L'altitude du sol n'est relue que pour les avions de la vue (avec une marge) : les autres le seront en y entrant.
+    const [west, south, east, north] = view.bounds();
+    const margin = Math.max(east - west, north - south) * 0.5;
     for (const plane of data.replay ? updateReplay(data.replay, time) : data.planes) {
       const at = extrapolate(plane, time);
-      if (now - plane.groundAt > SHADOW_REFRESH_MS || plane.groundVersion !== terrain.version) {
+      if (
+        (now - plane.groundAt > SHADOW_REFRESH_MS || plane.groundVersion !== terrain.version) &&
+        at.lon >= west - margin && at.lon <= east + margin && at.lat >= south - margin && at.lat <= north + margin
+      ) {
         plane.groundZ = terrain.elevation(at.lon, at.lat);
         plane.groundAt = now;
         plane.groundVersion = terrain.version;

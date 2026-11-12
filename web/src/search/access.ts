@@ -69,7 +69,7 @@ export function locate(manager: ModuleManager, moduleId: string, selection: unkn
     terrain: { elevation: () => 0, exaggeration: 0, version: 0 },
     settings: manager.getSnapshot()[moduleId]?.settings ?? {},
     selection,
-    view: { zoom: mapOf(manager)?.getZoom() ?? 0, bearing: 0, pitch: 0 },
+    view: { zoom: mapOf(manager)?.getZoom() ?? 0, bearing: 0, pitch: 0, bounds: () => [-180, -90, 180, 90] as const },
     night: currentNight(),
   } satisfies RenderContext<unknown>;
   try {

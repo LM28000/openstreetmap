@@ -1340,6 +1340,20 @@ p {
   font-variant-numeric: tabular-nums;
 }
 
+.welcome__actions {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+}
+
+.welcome__actions .btn {
+  justify-content: center;
+}
+
+/* La visite guidée, proposée en premier à qui découvre la carte, prend toute la largeur. */
+.welcome__actions .btn--primary {
+  grid-column: 1 / -1;
+}
+
 .welcome__hint {
   color: var(--ui-muted);
   font-size: 12.5px;
@@ -1745,6 +1759,253 @@ p {
 
   .popover {
     right: 0;
+  }
+}
+
+/* --- Visite guidée : bouton du catalogue, panneau de légende --- */
+
+.tour-launch {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  width: 100%;
+  padding: 10px 12px;
+  border: 0;
+  border-radius: 10px;
+  background: #f1f4f9;
+  color: #0e121b;
+  text-align: left;
+  cursor: pointer;
+}
+
+.tour-launch:hover {
+  background: #fff;
+}
+
+.tour-launch__text {
+  display: grid;
+  gap: 1px;
+}
+
+.tour-launch__text b {
+  font-weight: 600;
+}
+
+.tour-launch__text span {
+  color: #4a5366;
+  font-size: 12px;
+}
+
+/* Sur ordinateur : en bas à gauche, au-dessus de la frise (64 px de haut, à 20 px du bord), à l'écart des commandes de la carte. */
+.tour {
+  position: absolute;
+  z-index: 5;
+  left: var(--ui-edge);
+  bottom: 96px;
+  display: grid;
+  gap: 8px;
+  width: min(520px, calc(100% - 2 * var(--ui-edge) - 72px));
+  padding: 14px 18px 16px;
+  background: var(--ui-glass-strong);
+}
+
+/* Une case par étape ; la case en cours se remplit pendant la lecture de la légende. */
+.tour__steps {
+  display: flex;
+  gap: 4px;
+  margin-bottom: 4px;
+}
+
+.tour__step {
+  position: relative;
+  flex: 1;
+  height: 3px;
+  border-radius: 2px;
+  background: rgba(255, 255, 255, 0.16);
+  overflow: hidden;
+}
+
+.tour__step--done {
+  background: rgba(241, 244, 249, 0.85);
+}
+
+.tour__fill {
+  position: absolute;
+  inset: 0;
+  background: var(--ui-ink);
+  transform-origin: left;
+  animation: tour-fill linear forwards;
+}
+
+@keyframes tour-fill {
+  from {
+    transform: scaleX(0);
+  }
+  to {
+    transform: scaleX(1);
+  }
+}
+
+.tour__head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.tour__when {
+  color: var(--ui-muted);
+  font-size: 11.5px;
+  white-space: nowrap;
+}
+
+/* Le rouge est réservé au direct. */
+.tour__when--live::before {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-right: 6px;
+  border-radius: 50%;
+  background: var(--ui-live);
+  content: '';
+  vertical-align: 1px;
+}
+
+.tour__text {
+  display: grid;
+  gap: 8px;
+}
+
+.tour__title {
+  font-family: var(--font-display);
+  font-size: 21px;
+  font-weight: 700;
+  letter-spacing: -0.01em;
+  line-height: 1.2;
+}
+
+.tour__caption {
+  color: var(--ui-ink);
+  font-size: 14px;
+  line-height: 1.5;
+  animation: tour-in 0.35s ease both;
+}
+
+@keyframes tour-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+}
+
+.tour__wait {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--ui-muted);
+}
+
+.tour__dot {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: var(--ui-muted);
+  animation: tour-pulse 1.1s ease-in-out infinite;
+}
+
+@keyframes tour-pulse {
+  50% {
+    opacity: 0.25;
+  }
+}
+
+/* Le chiffre vivant de la couche : la preuve que ce que dit la légende est à l'écran. */
+.tour__stat {
+  padding-top: 8px;
+  border-top: 1px solid var(--ui-line);
+  color: var(--ui-muted);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+.tour__notice,
+.tour__paused {
+  color: var(--ui-warn);
+  font-size: 12.5px;
+}
+
+.tour__paused {
+  color: var(--ui-muted);
+}
+
+.tour__controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 2px;
+}
+
+.tour__controls .icon-button:disabled {
+  opacity: 0.35;
+  cursor: default;
+}
+
+.tour__play {
+  background: #f1f4f9;
+  color: #0e121b;
+}
+
+.tour__play:hover {
+  background: #fff;
+}
+
+.tour__spacer {
+  flex: 1;
+}
+
+.tour__kbd {
+  padding: 1px 5px;
+  border: 1px solid var(--ui-line);
+  border-radius: 5px;
+  color: var(--ui-muted);
+  font-family: var(--font-data);
+  font-size: 10.5px;
+}
+
+/* Téléphone : à la place de la feuille, compact, pour laisser la carte. */
+@media (max-width: 719.98px) {
+  .tour {
+    z-index: 8;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    width: auto;
+    gap: 6px;
+    padding: 10px 16px calc(12px + env(safe-area-inset-bottom, 0px));
+    border-bottom: 0;
+    border-radius: 18px 18px 0 0;
+  }
+
+  .tour__title {
+    font-size: 17px;
+  }
+
+  .tour__caption {
+    font-size: 13px;
+    line-height: 1.42;
+  }
+
+  .tour__stat {
+    padding-top: 6px;
+    overflow: hidden;
+    font-size: 11px;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .tour__controls .icon-button {
+    width: 36px;
+    height: 36px;
   }
 }
 

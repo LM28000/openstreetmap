@@ -108,6 +108,14 @@ export class ModuleManager {
 
   getSelection = (): Selection | null => this.selection;
 
+  /** La carte MapLibre, une fois son style chargé (sinon `undefined`) : la visite guidée y lit et y pilote la caméra. */
+  getMap = (): MapLibreMap | undefined => this.map;
+
+  /** Données chargées par un module (même masqué, si elles ont déjà été chargées une fois). */
+  getData<T>(id: string): T | undefined {
+    return this.entries.get(id)?.data as T | undefined;
+  }
+
   // --- Sélection ---
 
   /** Clic sur un objet deck.gl : le module propriétaire décide quoi sélectionner. */

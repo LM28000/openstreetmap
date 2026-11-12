@@ -1,5 +1,6 @@
 /** Commandes : aller à une date, revenir au direct, relief, globe, pause. */
 import { clock } from '../core/clock';
+import { tour } from '../core/tour';
 import { TERRAIN_EXAGGERATION, TERRAIN_SOURCE } from '../map/baseMap';
 import { mapOf } from './access';
 import { FUTURE_LIMIT_MS, isLiveWord, parseWhen, PAST_LIMIT_MS } from './dates';
@@ -57,6 +58,13 @@ export const commandsProvider: Provider = {
         title: globeOn ? 'Revenir à la carte à plat' : 'Afficher le globe',
         subtitle: 'Commande de la carte',
         run: () => map?.setProjection({ type: globeOn ? 'mercator' : 'globe' }),
+      },
+      {
+        key: 'visite',
+        keywords: 'visite guidee tour demo demonstration presentation decouverte parcours',
+        title: 'Lancer la visite guidée',
+        subtitle: 'Douze étapes en trois minutes',
+        run: () => void tour.start(manager),
       },
       {
         key: 'pause',

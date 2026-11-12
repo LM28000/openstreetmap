@@ -20,12 +20,14 @@ import { clock } from './clock';
 import type { ModuleManager } from './moduleManager';
 
 const KEYS = ['couches', 'reglages', 't', 'vitesse', 'pause', 'objet', 'depuis'] as const;
+/** Drapeau de l'adresse qui lance la visite guidée (`#visite`). Ce n'est pas un état à rouvrir : il est retiré dès qu'il est lu. */
+const TOUR_FLAG = 'visite';
 /** Pendant un rejeu en lecture, l'instant de l'adresse est rafraîchi à ce rythme. */
 const REPLAY_REFRESH_MS = 10_000;
 
 /** Paramètres du fragment, dans l'ordre, valeurs non décodées. */
-function readParams(): Array<[string, string]> {
-  return window.location.hash
+function readParams(fragment: string = window.location.hash): Array<[string, string]> {
+  return fragment
     .replace(/^#/, '')
     .split('&')
     .filter(Boolean)
@@ -48,9 +50,27 @@ export function hasSharedState(): boolean {
   return readParams().some(([key]) => (KEYS as readonly string[]).includes(key));
 }
 
-/** Applique l'état de l'adresse au gestionnaire et à l'horloge. À appeler avant le premier affichage de la carte. */
-export function applySharedState(manager: ModuleManager): void {
-  const params = new Map(readParams());
+/** Vrai si l'adresse demande la visite guidée (`#visite`). */
+export function hasTourFlag(): boolean {
+  return readParams().some(([key]) => key === TOUR_FLAG);
+}
+
+/** Retire le drapeau `visite` de l'adresse : recharger la page ne relance pas la visite. */
+export function clearTourFlag(): void {
+  const rest = readParams().filter(([key]) => key !== TOUR_FLAG);
+  try {
+    window.history.replaceState(window.history.state, '', `${window.location.pathname}${window.location.search}${rest.length ? `#${rest.map(([k, v]) => (v ? `${k}=${v}` : k)).join('&')}` : ''}`);
+  } catch {
+    // l'adresse ne peut pas être modifiée (aperçu intégré…) : tant pis
+  }
+}
+
+/**
+ * Applique l'état de l'adresse au gestionnaire et à l'horloge. À appeler avant le premier affichage de la carte.
+ * `fragment` : un état pris plus tôt par `captureState` (la visite guidée le rejoue en la quittant) ; par défaut, l'adresse.
+ */
+export function applySharedState(manager: ModuleManager, fragment?: string): void {
+  const params = new Map(readParams(fragment));
   const persist = { persist: false };
 
   const layers = params.get('couches');
@@ -68,7 +88,8 @@ export function applySharedState(manager: ModuleManager): void {
   }
 
   const time = params.get('t');
-  if (time && time !== 'direct') {
+  if (time === 'direct') clock.goLive();
+  else if (time) {
     const instant = Date.parse(safeDecode(time) ?? '');
     const speed = Number(params.get('vitesse'));
     if (Number.isFinite(instant)) {
@@ -93,9 +114,8 @@ export function applySharedState(manager: ModuleManager): void {
   }
 }
 
-/** Fragment complet (position de la carte comprise) pour l'état actuel. */
-function buildHash(manager: ModuleManager): string {
-  const kept = readParams().filter(([key]) => !(KEYS as readonly string[]).includes(key));
+/** Les paramètres d'état (couches, réglages, instant, sélection…) pour l'état actuel, sans la position de la carte. */
+function stateParams(manager: ModuleManager): Array<[string, string]> {
   const snapshot = manager.getSnapshot();
   const visible = manager.modules.filter((module) => snapshot[module.id]?.visible);
 
@@ -127,7 +147,18 @@ function buildHash(manager: ModuleManager): string {
   const selection = manager.getSelection();
   if (selection) ours.push(['objet', `${encodeURIComponent(selection.moduleId)}:${encodeURIComponent(JSON.stringify(selection.value))}`]);
 
-  return `#${[...kept, ...ours].map(([key, value]) => `${key}=${value}`).join('&')}`;
+  return ours;
+}
+
+/** Fragment complet (position de la carte comprise) pour l'état actuel. */
+function buildHash(manager: ModuleManager): string {
+  const kept = readParams().filter(([key]) => !(KEYS as readonly string[]).includes(key));
+  return `#${[...kept, ...stateParams(manager)].map(([key, value]) => `${key}=${value}`).join('&')}`;
+}
+
+/** L'état actuel (couches, réglages, instant, sélection) sous forme de fragment, à rejouer avec `applySharedState(manager, fragment)`. */
+export function captureState(manager: ModuleManager): string {
+  return `#${stateParams(manager).map(([key, value]) => `${key}=${value}`).join('&')}`;
 }
 
 /** Écrit l'état dans l'adresse (sans ajouter d'entrée à l'historique). */

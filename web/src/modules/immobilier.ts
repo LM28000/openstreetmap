@@ -18,7 +18,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { fillInsertionId } from '../map/baseMap';
 import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
 import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
@@ -313,7 +313,7 @@ export const immobilier = defineModule<ImmobilierData>({
       const info = sheet.donnees;
       if (!map.getSource(SOURCE_ID)) {
         addTileSource(map, SOURCE_ID, sheet);
-        const before = firstSymbolLayerId(map);
+        const before = fillInsertionId(map);
         const common = { source: SOURCE_ID, 'source-layer': sheet.couche };
         map.addLayer({ id: EXTRUSION_ID, type: 'fill-extrusion', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-extrusion-opacity': 0.88, 'fill-extrusion-vertical-gradient': true } } as never, before);
         map.addLayer({ id: FILL_ID, type: 'fill', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-opacity': 0.8 } } as never, before);

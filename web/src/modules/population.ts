@@ -18,7 +18,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { fillInsertionId } from '../map/baseMap';
 import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
 import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
@@ -203,7 +203,7 @@ export const population = defineModule<PopulationData>({
       const sheet = data.sheet;
       if (!map.getSource(SOURCE_ID)) {
         addTileSource(map, SOURCE_ID, sheet);
-        const before = firstSymbolLayerId(map);
+        const before = fillInsertionId(map);
         map.addLayer(
           {
             id: COLUMNS_ID,

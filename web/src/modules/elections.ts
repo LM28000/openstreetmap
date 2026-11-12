@@ -26,7 +26,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type InfoRow, type LegendItem } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { fillInsertionId } from '../map/baseMap';
 import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
 import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
@@ -488,7 +488,7 @@ export const elections = defineModule<ElectionsData>({
         // Premier affichage, ou changement de scrutin : une autre source de tuiles.
         removeLayers(map);
         addTileSource(map, SOURCE_ID, sheet);
-        const before = firstSymbolLayerId(map);
+        const before = fillInsertionId(map);
         const layer = sheet.couche;
         map.addLayer({ id: RELIEF_ID, type: 'fill-extrusion', source: SOURCE_ID, 'source-layer': layer, paint: { 'fill-extrusion-opacity': 0.9, 'fill-extrusion-vertical-gradient': true } } as never, before);
         map.addLayer({ id: FLAT_ID, type: 'fill', source: SOURCE_ID, 'source-layer': layer, paint: { 'fill-opacity': 0.82 } } as never, before);

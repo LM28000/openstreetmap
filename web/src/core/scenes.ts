@@ -29,6 +29,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['pluie', 'vent', 'vigilance-meteo', 'jour-nuit'],
   },
   {
+    // Le LiDAR HD (estompage gris ou hauteur du sursol vert, jaune, orange) : une couche raster, seule à l'écran pour que ses teintes ne se mêlent à aucune autre.
+    id: 'relief',
+    label: 'Relief LiDAR HD',
+    description: 'terrain nu, arbres et bâtiments à 50 cm',
+    modules: ['lidar'],
+  },
+  {
     // Le niveau de la mer (jauges bleu marine) avec le vent et la vigilance : la tempête et la marée haute se lisent ensemble.
     id: 'littoral',
     label: 'Mer et littoral',

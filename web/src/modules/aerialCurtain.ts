@@ -105,7 +105,7 @@ export interface CurtainLayer extends CustomLayerInterface {
   setCurtain(cssX: number): void;
   setOpacity(opacity: number): void;
   /** Couche prête (cartes, textures) : utile aux tests. */
-  stats(): { tiles: number; ready: number; renderMs: number; frames: number; buildMs: number; builds: number; drawn: number; coveringMs: number };
+  stats(): { tiles: number; ready: number; renderMs: number; frames: number; buildMs: number; builds: number; drawn: number; coveringMs: number; undrawn: number; failed: number; fallbacks: number };
 }
 
 /** Longitude et latitude du coin (x, y) d'une tuile, fractions `u`, `v` en plus. */
@@ -137,6 +137,10 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
   let totalBuilds = 0;
   let drawn = 0;
   let coveringMs = 0;
+  /** Dernière image : tuiles voulues non dessinées (trous), en échec, et dessinées avec une tuile parente. */
+  let lastUndrawn = 0;
+  let lastFailed = 0;
+  let lastFallbacks = 0;
   let frames = 0;
   const tiles = new Map<string, TileEntry>();
   /**
@@ -360,8 +364,31 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
         if (inFlight >= MAX_PARALLEL) break;
         if (tile.state === 'waiting') request(tile);
       }
-      let uploads = 0;
+      // 2 bis. Tuiles de repli : une tuile hors couverture (404) ou lente à charger ne doit pas laisser un trou. On
+      // charge alors un ancêtre (le plus proche qui existe ; deux niveaux au-dessus pour une tuile en attente, partagé
+      // par seize voisines), qui sera montré agrandi, plus flou, en attendant ou à la place.
+      const helpers: TileEntry[] = [];
       for (const { tile } of wanted) {
+        if (tile.state === 'ready' || (tile.state !== 'failed' && fallbackFor(tile))) continue;
+        for (let level = tile.state === 'failed' ? 1 : 2; level <= MAX_FALLBACK_LEVELS && tile.z - level >= vintage.minZoom; level++) {
+          const z = tile.z - level;
+          const x = tile.x >> level;
+          const y = tile.y >> level;
+          const key = keyOf(z, x, y);
+          let ancestor = tiles.get(key);
+          if (!ancestor) {
+            ancestor = { key, z, x, y, state: 'waiting', lastUsed: frame };
+            tiles.set(key, ancestor);
+          }
+          ancestor.lastUsed = frame;
+          if (ancestor.state === 'failed') continue; // hors couverture aussi : on remonte encore
+          helpers.push(ancestor);
+          if (ancestor.state === 'waiting' && inFlight < MAX_PARALLEL) request(ancestor);
+          break;
+        }
+      }
+      let uploads = 0;
+      for (const { tile } of [...wanted, ...helpers.map((tile) => ({ tile }))]) {
         if (tile.state === 'decoded' && uploads < UPLOADS_PER_FRAME) {
           upload(tile);
           uploads++;
@@ -369,7 +396,7 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
       }
       // Les ancêtres déjà prêts servent de repli : on les garde vivants.
       let more = false;
-      for (const { tile } of wanted) if (tile.state === 'decoded' || tile.state === 'waiting' || tile.state === 'loading') more = true;
+      for (const { tile } of [...wanted, ...helpers.map((tile) => ({ tile }))]) if (tile.state === 'decoded' || tile.state === 'waiting' || tile.state === 'loading') more = true;
 
       // 3. Maillages : refaits quand le relief change et qu'ils étaient incomplets (ou que le zoom a changé d'un niveau).
       let builds = 0;
@@ -392,46 +419,61 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
       gl.enableVertexAttribArray(positionLocation);
       gl.enable(gl.BLEND);
       gl.blendFuncSeparate(gl.ONE, gl.ONE_MINUS_SRC_ALPHA, gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+      // La couche passe au-dessus des bâtiments d'aujourd'hui (une photo de 1955 n'a pas de tours de La Défense) :
+      // on repart d'un tampon de profondeur vierge, où seules nos tuiles comptent. Leur maillage est celui du
+      // terrain (drapé) : une crête cache donc bien ce qui est derrière elle, et il n'y a plus à comparer avec le
+      // terrain de MapLibre, plus fin (c'est cette comparaison qui trouait la photo sur les fortes pentes).
+      gl.depthMask(true);
+      gl.clearDepth(1);
+      gl.clear(gl.DEPTH_BUFFER_BIT);
       gl.enable(gl.DEPTH_TEST);
       gl.depthFunc(gl.LEQUAL);
-      gl.depthMask(false);
       gl.disable(gl.CULL_FACE);
-      // Un cran devant le terrain de MapLibre. Le maillage de la photo (8 × 8 cases par tuile) n'est pas celui du
-      // terrain : sans ce décalage de profondeur, la photo disparaît là où le terrain la dépasse de quelques mètres
-      // (valeur trouvée à l'essai : -2000 unités de profondeur suffisent, -2 ne montrent rien).
-      gl.enable(gl.POLYGON_OFFSET_FILL);
-      gl.polygonOffset(-1, -3000);
       const dpr = gl.drawingBufferWidth / (map.getCanvas().clientWidth || 1);
       gl.uniform1f(uniforms.curtain, Number.isFinite(curtainCss) ? curtainCss * dpr : 1e9);
       gl.uniform1f(uniforms.opacity, opacity);
       gl.uniform1i(uniforms.tex, 0);
       gl.activeTexture(gl.TEXTURE0);
 
-      // L'ordre n'a pas d'importance : les tuiles ne se recouvrent pas.
+      lastUndrawn = 0;
+      lastFailed = 0;
+      lastFallbacks = 0;
+      // L'ordre n'a pas d'importance : le tampon de profondeur départage les tuiles.
       for (const { tile, id } of wanted) {
         const mesh = tile.mesh;
-        if (!mesh) continue;
-        let source = tile;
+        if (tile.state === 'failed') lastFailed++;
+        if (!mesh) {
+          lastUndrawn++;
+          continue;
+        }
+        let source: TileEntry | undefined = tile;
         let uv: [number, number, number] = [0, 0, 1];
         if (tile.state !== 'ready') {
           const fallback = fallbackFor(tile);
-          if (!fallback) continue;
-          source = fallback.entry;
-          uv = fallback.uv;
+          if (fallback) {
+            lastFallbacks++;
+            source = fallback.entry;
+            uv = fallback.uv;
+          } else {
+            // Rien à montrer (hors couverture, ou pas encore chargée) : le terrain de la tuile cache quand même ce qui est derrière.
+            lastUndrawn++;
+            source = undefined;
+          }
         }
         const { matrix, worldSize } = projection(id);
         const [, lat] = tileLngLat(tile.z, tile.x, tile.y, 0.5, 0.5);
         gl.uniformMatrix4fv(uniforms.matrix, false, Float32Array.from(matrix));
         gl.uniform1f(uniforms.zScale, worldSize / (EARTH_CIRCUMFERENCE * Math.cos((lat * Math.PI) / 180)));
         gl.uniform3f(uniforms.uv, uv[0], uv[1], uv[2]);
-        gl.bindTexture(gl.TEXTURE_2D, source.texture!);
+        if (source) gl.bindTexture(gl.TEXTURE_2D, source.texture!);
+        else gl.colorMask(false, false, false, false);
         gl.bindBuffer(gl.ARRAY_BUFFER, mesh.buffer);
         gl.vertexAttribPointer(positionLocation, 3, gl.FLOAT, false, 0, 0);
         gl.drawElements(gl.TRIANGLES, indexCount, gl.UNSIGNED_SHORT, 0);
+        if (!source) gl.colorMask(true, true, true, true);
         drawn++;
       }
       gl.bindVertexArray(null);
-      gl.disable(gl.POLYGON_OFFSET_FILL);
 
       // 5. Ménage : on garde les tuiles récentes, dans la limite de la mémoire.
       if (tiles.size > MAX_TILES) {
@@ -461,7 +503,7 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
       map?.triggerRepaint();
     },
     stats() {
-      return { tiles: tiles.size, ready: [...tiles.values()].filter((t) => t.state === 'ready').length, renderMs, frames, buildMs, builds: totalBuilds, drawn, coveringMs };
+      return { tiles: tiles.size, ready: [...tiles.values()].filter((t) => t.state === 'ready').length, renderMs, frames, buildMs, builds: totalBuilds, drawn, coveringMs, undrawn: lastUndrawn, failed: lastFailed, fallbacks: lastFallbacks };
     },
   };
 }

@@ -27,6 +27,7 @@ import { railways } from './railways';
 import { rain } from './rain';
 import { satellites } from './satellites';
 import { ships } from './ships';
+import { tides } from './tides';
 import { traffic } from './traffic';
 import { trains } from './trains';
 import { transit } from './transit';
@@ -35,7 +36,7 @@ import { wind } from './wind';
 
 export const MODULES: LayerModule[] = [
   trains, railways, isochrones, traffic, planes, ships, transit, bikes,
-  floods, weatherAlerts, air, fires, earthquakes,
+  floods, tides, weatherAlerts, air, fires, earthquakes,
   power, chargers, fuel, population, couverture, immobilier, elections,
   dayNight, buildingShadows, satellites, rain, wind,
   aerialPhotos, monuments, accidents,

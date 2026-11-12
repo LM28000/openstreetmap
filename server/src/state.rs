@@ -35,6 +35,8 @@ struct Inner {
     starlink: RwLock<Option<Bytes>>,
     transit: RwLock<Option<Bytes>>,
     wind: RwLock<Option<Bytes>>,
+    /// Marégraphes (niveau de la mer, estimation des marées).
+    tides: RwLock<Option<Bytes>>,
     /// Couches rapides : bornes de recharge, trafic (événements, état des routes), vigilance météo.
     irve: RwLock<Option<Bytes>>,
     traffic: RwLock<Option<Bytes>>,
@@ -64,6 +66,7 @@ impl AppState {
             starlink: RwLock::new(None),
             transit: RwLock::new(None),
             wind: RwLock::new(None),
+            tides: RwLock::new(None),
             irve: RwLock::new(None),
             traffic: RwLock::new(None),
             traffic_state: RwLock::new(None),
@@ -237,6 +240,14 @@ impl AppState {
 
     pub fn set_air_disabled(&self, reason: &'static str) {
         *self.0.air_disabled.write().expect("verrou de la qualité de l'air") = Some(reason);
+    }
+
+    pub fn tides(&self) -> Option<Bytes> {
+        self.0.tides.read().expect("verrou des marées").clone()
+    }
+
+    pub fn set_tides(&self, body: Vec<u8>) {
+        *self.0.tides.write().expect("verrou des marées") = Some(Bytes::from(body));
     }
 
     pub fn vigilance(&self) -> Option<Bytes> {

@@ -8,6 +8,7 @@
 //! - rassemble les bus, trams et métros en direct des réseaux qui publient leurs positions ;
 //! - relève le champ de vent (Open-Meteo, modèle ARPEGE) toutes les 6 heures ;
 //! - relève l'indice de qualité de l'air (Atmo Data, avec un compte) toutes les heures ;
+//! - relève le niveau de la mer aux marégraphes du Shom (REFMAR) toutes les 10 minutes ;
 //! - estime la position des bus, trams et métros des réseaux qui ne publient que leurs horaires en temps réel ;
 //! - sert l'API `/api/trains` au site.
 //!
@@ -47,6 +48,7 @@ mod ships;
 mod satellites;
 mod state;
 mod tiles;
+mod tides;
 mod timetable;
 mod tracks;
 mod transit;
@@ -127,6 +129,7 @@ async fn main() -> Result<()> {
     tokio::spawn(traffic_state::poll_forever(http.clone(), state.clone()));
     tokio::spawn(vigilance::poll_forever(http.clone(), state.clone()));
     tokio::spawn(air::poll_forever(http.clone(), state.clone()));
+    tokio::spawn(tides::poll_forever(http.clone(), state.clone()));
     tokio::spawn(estimates::poll_forever(http.clone(), config.data_dir.clone(), state.clone()));
     state.tiles().spawn(http.clone(), config.data_dir.clone());
     tokio::spawn(multimodal::load::load_forever(http.clone(), config.data_dir.clone(), state.clone()));

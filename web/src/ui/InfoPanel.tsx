@@ -4,6 +4,7 @@ import type { ModuleManager, Selection } from '../core/moduleManager';
 import { shareUrl } from '../core/shareState';
 import { useSelectionInfo } from './hooks';
 import { Icon } from './icons';
+import { InfoChartView } from './InfoChart';
 
 type SelectionInfo = NonNullable<ReturnType<ModuleManager['describeSelection']>>;
 
@@ -53,6 +54,7 @@ export function InfoBody({ manager, selection, info }: { manager: ModuleManager;
           ))}
         </dl>
       )}
+      {content.chart && <InfoChartView chart={content.chart} />}
       {content.fields && content.fields.length > 0 && (
         <dl className="info__fields">
           {content.fields.map(([label, value]) => (

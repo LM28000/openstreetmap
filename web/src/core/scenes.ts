@@ -29,6 +29,13 @@ export const SCENES: readonly Scene[] = [
     modules: ['pluie', 'vent', 'vigilance-meteo', 'jour-nuit'],
   },
   {
+    // Le niveau de la mer (jauges bleu marine) avec le vent et la vigilance : la tempête et la marée haute se lisent ensemble.
+    id: 'littoral',
+    label: 'Mer et littoral',
+    description: 'marées, vent, vigilance',
+    modules: ['marees', 'vent', 'vigilance-meteo', 'jour-nuit'],
+  },
+  {
     // Hors de « Météo » : l'indice (jaune, rouge, turquoise) y recouvrirait la vigilance (jaune, orange, rouge)
     // et le radar de pluie (bleu). Le vent, lui, est blanc et montre où l'air pollué est emporté.
     id: 'air',

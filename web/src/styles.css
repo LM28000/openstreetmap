@@ -2017,3 +2017,353 @@ p {
     transition: none !important;
   }
 }
+
+/* --- Analyse de zone (ui/ZoneTool.tsx, ui/ZonePanel.tsx) --- */
+
+.maplibregl-ctrl-zone button {
+  display: grid;
+  place-items: center;
+  color: var(--ui-ink);
+}
+
+.maplibregl-ctrl-zone button.is-active {
+  color: #ff8a3d;
+}
+
+/* Pendant le dessin, les clics traversent jusqu a la couche des objets : leurs fiches restent cachees. */
+.app[data-zone-drawing] .info,
+.app[data-zone-drawing] .sheet {
+  display: none;
+}
+
+.zone-bar {
+  position: absolute;
+  z-index: 7;
+  right: 0;
+  bottom: 118px;
+  left: 0;
+  width: fit-content;
+  margin: 0 auto;
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px 10px;
+  max-width: calc(100% - 2 * var(--ui-edge));
+  padding: 8px 10px;
+}
+
+.zone-bar__modes {
+  display: flex;
+  gap: 2px;
+  padding: 2px;
+  border-radius: 10px;
+  background: var(--ui-control);
+}
+
+.zone-bar__mode {
+  height: 30px;
+  padding: 0 12px;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.zone-bar__mode.is-on {
+  background: #f1f4f9;
+  color: #0e121b;
+  font-weight: 600;
+}
+
+.zone-bar__hint {
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+
+.zone-bar__hint.is-error {
+  color: var(--ui-warn);
+}
+
+.zone-bar .btn:disabled {
+  opacity: 0.4;
+  cursor: default;
+}
+
+.zone-chip {
+  position: absolute;
+  z-index: 4;
+  top: 20px;
+  right: var(--ui-edge);
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 34px;
+  padding: 0 12px;
+  border: 1px solid var(--ui-line);
+  border-radius: 9px;
+  background: var(--ui-glass);
+  font-size: 13px;
+  cursor: pointer;
+}
+
+.zone-panel {
+  position: absolute;
+  z-index: 5;
+  top: 20px;
+  right: var(--ui-edge);
+  width: 392px;
+  /* Laisse la place aux commandes de la carte (comme la fiche) : le bouton de l'outil reste atteignable. */
+  max-height: calc(100% - 20px - 352px);
+  display: grid;
+  align-content: start;
+  gap: 16px;
+  padding: 18px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+}
+
+.zone-panel--phone {
+  top: auto;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  z-index: 9;
+  width: auto;
+  max-height: 62dvh;
+  border-radius: 22px 22px 0 0;
+  border-bottom: 0;
+  padding-bottom: calc(18px + env(safe-area-inset-bottom, 0px));
+}
+
+.zone-section {
+  display: grid;
+  gap: 8px;
+  padding-top: 14px;
+  border-top: 1px solid var(--ui-line);
+}
+
+.zone-section__title {
+  font-weight: 500;
+}
+
+.zone-section__precision {
+  color: var(--ui-faint);
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
+.zone-rows {
+  display: grid;
+  gap: 5px;
+  margin: 0;
+}
+
+.zone-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.zone-row dt {
+  color: var(--ui-muted);
+}
+
+.zone-row dd {
+  margin: 0;
+  text-align: right;
+  font-size: 12.5px;
+}
+
+.zone-panel .is-strong {
+  font-weight: 600;
+}
+
+.zone-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+}
+
+.zone-table th {
+  padding: 3px 0 5px;
+  color: var(--ui-faint);
+  font-weight: 500;
+  text-align: right;
+}
+
+.zone-table th:first-child,
+.zone-table td:first-child {
+  text-align: left;
+}
+
+.zone-table td {
+  padding: 4px 0;
+  border-top: 1px solid rgba(255, 255, 255, 0.04);
+  text-align: right;
+  font-size: 12.5px;
+}
+
+.zone-table td:first-child {
+  font-family: var(--font-body);
+  color: var(--ui-ink);
+}
+
+.zone-faint {
+  color: var(--ui-faint);
+}
+
+.zone-swatch {
+  display: inline-block;
+  width: 9px;
+  height: 9px;
+  margin-right: 7px;
+  border-radius: 3px;
+}
+
+.zone-swatch.is-none,
+.zone-stack__part.is-none {
+  background: #e0f58a;
+}
+
+.zone-swatch.is-one,
+.zone-stack__part.is-one {
+  background: #92b222;
+}
+
+.zone-swatch.is-many,
+.zone-stack__part.is-many {
+  background: #4f6411;
+}
+
+.zone-stack {
+  display: flex;
+  height: 10px;
+  overflow: hidden;
+  border-radius: 5px;
+  gap: 2px;
+}
+
+.zone-stack__part {
+  min-width: 3px;
+  flex-basis: 0;
+}
+
+.zone-select select {
+  width: 100%;
+  height: 32px;
+  padding: 0 8px;
+  border: 1px solid var(--ui-line);
+  border-radius: 8px;
+  background: var(--ui-control);
+  font-size: 13px;
+}
+
+.zone-select select option {
+  color: #0e121b;
+}
+
+.zone-results {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.zone-result {
+  position: relative;
+  display: flex;
+  justify-content: space-between;
+  gap: 10px;
+  padding-bottom: 6px;
+  font-size: 12.5px;
+}
+
+.zone-result__name {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+}
+
+.zone-result__bar {
+  position: absolute;
+  left: 0;
+  bottom: 0;
+  height: 3px;
+  border-radius: 2px;
+  opacity: 0.85;
+}
+
+.zone-years {
+  display: flex;
+  align-items: flex-end;
+  gap: 6px;
+  height: 54px;
+}
+
+.zone-years__col {
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+  justify-content: flex-end;
+  align-items: center;
+  height: 100%;
+  gap: 3px;
+}
+
+.zone-years__bar {
+  width: 100%;
+  min-height: 2px;
+  border-radius: 3px 3px 0 0;
+  background: #9aa4b6;
+}
+
+.zone-years__label {
+  color: var(--ui-faint);
+  font-size: 10.5px;
+}
+
+.zone-loading {
+  color: var(--ui-muted);
+  font-size: 12px;
+}
+
+.zone-loading.is-stale {
+  color: var(--ui-faint);
+}
+
+.zone-error {
+  color: var(--ui-warn);
+}
+
+.zone-foot {
+  color: var(--ui-faint);
+  font-size: 11px;
+}
+
+.zone-actions {
+  padding-top: 4px;
+}
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip: rect(0 0 0 0);
+}
+
+@media (max-width: 719.98px) {
+  .zone-bar {
+    bottom: calc(var(--sheet-h, 68px) + 64px);
+  }
+
+  .zone-chip {
+    top: auto;
+    bottom: calc(var(--sheet-h, 68px) + 12px);
+    left: var(--ui-edge);
+    right: auto;
+  }
+}

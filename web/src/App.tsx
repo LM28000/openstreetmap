@@ -11,6 +11,7 @@ import { LayerChips } from './ui/LayerChips';
 import { LayerDrawer } from './ui/LayerDrawer';
 import { MobileSheet, type Snap } from './ui/MobileSheet';
 import { TimeBar } from './ui/TimeBar';
+import { ZoneTool } from './ui/ZoneTool';
 import { TourPanel, useTour } from './ui/Tour';
 import { Welcome, shouldShowWelcome } from './ui/Welcome';
 import { PHONE_QUERY, useMediaQuery } from './ui/hooks';
@@ -120,6 +121,8 @@ export function App() {
           {tourState.active && <TourPanel manager={manager} phone={false} />}
         </>
       )}
+
+      <ZoneTool manager={manager} phone={phone} />
 
       {welcome && <Welcome manager={manager} onClose={() => setWelcome(false)} />}
     </div>

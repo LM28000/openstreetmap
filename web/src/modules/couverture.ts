@@ -130,8 +130,8 @@ function cellSize(sheet: CoverageSheet, ring: Array<[number, number]>): number {
 }
 
 /** Habitants sans 4G par km² : les quatre crans de la vue « Habitants sans 4G » (zéro : le carreau reste transparent). */
-const PEOPLE_CUTS = [5, 25, 100];
-const PEOPLE_LABELS = ['Moins de 5 hab./km² sans 4G', '5 à 25 hab./km²', '25 à 100 hab./km²', 'Plus de 100 hab./km²'];
+const PEOPLE_CUTS = [1, 5, 25];
+const PEOPLE_LABELS = ['Moins de 1 hab./km² sans 4G', '1 à 5 hab./km²', '5 à 25 hab./km²', 'Plus de 25 hab./km²'];
 /** Zooms des tuiles (côté des carreaux : 250 m au zoom 11, il double à chaque zoom perdu : voir `cell_size` côté serveur). */
 const MIN_ZOOM = 4;
 const MAX_ZOOM = 11;

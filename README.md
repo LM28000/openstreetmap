@@ -15,7 +15,7 @@ L'écran a quatre zones fixes. Au repos, elles couvrent moins de 15 % de la cart
   - un vol, un navire, une ligne de bus ;
   - une station de vélos, une borne, une couche, une scène ;
   - une date (« demain 8h », « il y a 2 h », « direct »).
-- **Sous la recherche, les pastilles des couches affichées.** Un clic ouvre leurs réglages, la croix les masque. Le bouton « Couches » ouvre le catalogue, avec un filtre et cinq scènes prêtes à l'emploi : Ce qui bouge, Météo, Qualité de l'air, Énergie, Ma ville.
+- **Sous la recherche, les pastilles des couches affichées.** Un clic ouvre leurs réglages, la croix les masque. Le bouton « Couches » ouvre le catalogue, avec un filtre et des scènes prêtes à l'emploi (Ce qui bouge, Météo, Qualité de l'air, Énergie, Ma ville…) et la visite guidée.
 - **À droite, la fiche de l'objet choisi.** Elle montre :
   - le type ;
   - un statut : en direct, rejoué, estimé ou prévu ;
@@ -36,6 +36,16 @@ Raccourcis :
 | `Échap` | Fermer |
 
 Sur téléphone, tout passe dans une feuille qui monte du bas, à trois hauteurs.
+
+### Visite guidée
+
+Une visite de trois minutes, douze étapes, jouée sur la vraie carte : les trains de France, Paris à l'heure de pointe (rejouée d'après l'enregistrement du serveur), un avion suivi à Roissy, le Pas-de-Calais, les isochrones depuis Paris avec la population à portée, les colonnes d'habitants, le prix du m², les zones blanches des Alpes, les élections, les photos aériennes des années 50 (le rideau glisse seul), le vent et la pluie, la nuit.
+
+- **Pour la lancer** : bouton « Visite guidée » de l'accueil (première visite), en tête des scènes du catalogue des couches, commande « visite » de la recherche, ou lien avec `#visite` (le drapeau est retiré de l'adresse dès qu'il est lu).
+- **Commandes** : pause, étape précédente et suivante, `Espace` (pause), `←` `→` (étape), `Échap` (quitter). Glisser ou zoomer sur la carte met la visite en pause ; la reprise repart de l'étape. Avec `prefers-reduced-motion`, la caméra saute au lieu de voler.
+- **Quitter** rend l'état d'avant : caméra, couches, réglages, instant, objet choisi, relief et projection.
+- **Données absentes** : une légende n'apparaît qu'une fois les données de l'étape à l'écran (`ready`) ; sans données après un délai (navires, avions la nuit, isochrones non prêtes), l'étape est passée et un avis le dit. Les étapes rejouées cherchent un enregistrement couvert sur sept jours, sinon elles passent au direct ou sont sautées.
+- **Ajouter ou changer une étape** : c'est une entrée de `web/src/core/tourStops.ts` (caméra, couches, réglages, instant, test `ready`, légende) ; la mécanique est dans `core/tour.ts`, le panneau dans `ui/Tour.tsx`. En développement, `window.__tour` donne la main depuis la console.
 
 Le fond de carte (OpenFreeMap Liberty) est retouché au chargement (`map/calmStyle.ts`) :
 - les routes sont en gris chaud, l'eau en bleu-gris, avec moins de libellés de loin ;
@@ -133,7 +143,9 @@ web/                   le site (TypeScript, React, Vite)
     module.ts          contrat d'un module de couche
     moduleManager.ts   visibilité, réglages, chargements, rendu à chaque image
     scenes.ts          les scènes (ensembles de couches qui vont ensemble)
-    shareState.ts      l'état complet dans l'adresse de la page
+    shareState.ts      l'état complet dans l'adresse de la page (et `#visite`)
+    tour.ts            la visite guidée : déroulé, attente des données, pause, retour à l'état d'avant
+    tourStops.ts       les étapes de la visite (des données)
     infoStatus.ts      pastilles de statut communes des fiches
   src/map/             la carte : fond OSM calmé (jour et nuit), globe, relief, branchement de deck.gl
   src/modules/         une couche = un module ; symbols.ts : halo, contour, atlas d'icônes, anneau de sélection

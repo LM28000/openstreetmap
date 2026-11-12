@@ -1,6 +1,7 @@
 import { useEffect, useRef } from 'react';
 import type { ModuleManager } from '../core/moduleManager';
 import { SCENES, applyScene } from '../core/scenes';
+import { tour } from '../core/tour';
 import { formatShortDate, formatTime } from './format';
 import { useClockTime, useModuleStates } from './hooks';
 import { Icon } from './icons';
@@ -82,11 +83,22 @@ export function Welcome({ manager, onClose }: WelcomeProps) {
           La scène « {motion.label} » ajoute {hidden.map((id) => manager.modules.find((m) => m.id === id)?.name.toLowerCase()).join(', ')}.
         </p>
       )}
-      <div className="actions">
+      <div className="actions welcome__actions">
         <button
           ref={primary}
           type="button"
           className="btn btn--primary"
+          onClick={() => {
+            onClose();
+            void tour.start(manager);
+          }}
+        >
+          <Icon name="visite" size={16} />
+          Visite guidée · 3 minutes
+        </button>
+        <button
+          type="button"
+          className="btn"
           onClick={() => {
             applyScene(manager, motion);
             onClose();

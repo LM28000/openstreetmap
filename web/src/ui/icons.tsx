@@ -10,6 +10,8 @@ const PATHS: Record<string, string> = {
   layers: 'm12 4 8 4.5-8 4.5-8-4.5ZM4 13l8 4.5 8-4.5',
   x: 'm7 7 10 10M17 7 7 17',
   chevron: 'm9 6 6 6-6 6',
+  chevronLeft: 'm15 6-6 6 6 6',
+  visite: 'M12 4a8 8 0 1 0 0 16 8 8 0 0 0 0-16ZM10.2 9v6l5-3Z',
   chevronDown: 'm6 9 6 6 6-6',
   play: 'M8 5.5v13l10-6.5Z',
   pause: 'M8 5v14M16 5v14',

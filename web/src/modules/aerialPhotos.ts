@@ -136,6 +136,12 @@ interface Ui {
 
 let ui: Ui | undefined;
 
+/** Place le rideau (fraction de la largeur, entre 0 et 1) : la visite guidée le fait glisser pour montrer l'avant et l'après. */
+export function setCurtainFraction(value: number): void {
+  fraction = Math.min(0.995, Math.max(0.005, value));
+  if (ui) applyFraction(ui);
+}
+
 const select = () => ModuleManager.current?.setSelection(MODULE_ID, { type: 'rideau' });
 
 function applyFraction(state: Ui): void {

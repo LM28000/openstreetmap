@@ -183,6 +183,17 @@ export function fillInsertionId(map: MapLibreMap): string | undefined {
   return firstSymbolLayerId(map);
 }
 
+/**
+ * Point d'insertion des marques ponctuelles (ventes, pastilles) : au-dessus des bâtiments 3D, sous les textes.
+ * (Le premier texte du style est une flèche de sens unique, sous les ponts et les bâtiments.)
+ */
+export function aboveBuildingsId(map: MapLibreMap): string | undefined {
+  const layers = map.getStyle().layers;
+  const roof = layers.findIndex((layer) => layer.id === 'building-3d' || layer.id === 'building');
+  const from = roof < 0 ? 0 : roof;
+  return layers.slice(from).find((layer) => layer.type === 'symbol')?.id ?? firstSymbolLayerId(map);
+}
+
 function existingLayerOr(map: MapLibreMap, id: string): string | undefined {
   return map.getLayer(id) ? id : firstSymbolLayerId(map);
 }

@@ -6,7 +6,7 @@
 //!
 //! # Un jeu de données par scrutin
 //!
-//! Cinq scrutins, donc cinq jeux (`elec-p22t1`, `elec-p22t2`, `elec-eu24`, `elec-l24t1`, `elec-l24t2`), chacun son archive.
+//! Sept scrutins, donc sept jeux (`elec-p22t1`, `elec-p22t2`, `elec-eu24`, `elec-l24t1`, `elec-l24t2`, `elec-m26t1`, `elec-m26t2`), chacun son archive.
 //! Une archive unique aurait réuni les cinq scrutins dans chaque objet (~80 propriétés) : une tuile de communes au zoom 7 en aurait
 //! porté trois fois trop, au-dessus du plafond de 500 Ko. Cinq archives, ce sont cinq fois la forme des bureaux (qui pèse peu devant
 //! les propriétés) mais des tuiles légères, et le site ne charge que le scrutin qu'on regarde. Les cinq archives se fabriquent
@@ -63,10 +63,10 @@
 //! de 1 % des exprimés au niveau national. Un pourcentage (part des exprimés, participation) se calcule dans le navigateur.
 //! `weight` d'un objet = ses inscrits : si une tuile dépasse le plafond, les plus petits bureaux partent d'abord.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::fs::File;
 use std::future::Future;
-use std::io::Read;
+use std::io::{BufRead, Read, Seek, SeekFrom, Write};
 use std::path::{Path, PathBuf};
 use std::pin::Pin;
 use std::sync::{Arc, Mutex};
@@ -108,6 +108,10 @@ enum Kind {
     Legislatives,
     /// Européennes 2024 : listes, reconnues par leur numéro de panneau.
     Europeennes,
+    /// Municipales 2026 : des listes **locales** (pas de liste nationale) ; seule leur nuance du ministère les rattache à un courant, et
+    /// beaucoup de petites communes n'en ont pas. On additionne par nuance (colonne `-` : sans nuance), mais la « tête » est la *liste*
+    /// la mieux placée, et les listes elles-mêmes (nom, voix) vont dans un fichier annexe lu par la fiche (voir `ListesCommune`).
+    Municipales,
 }
 
 /// Un scrutin : où trouver ses résultats et quelles colonnes en garder.
@@ -143,6 +147,12 @@ const PRESIDENTIELLE_T1: &[&str] =
 const LEGISLATIVES: &[&str] = &["RN", "UG", "ENS", "LR", "UXD", "DVD", "DVG", "DVC", "EXG", "REG", "REC", "HOR"];
 /// Numéros de panneau des 12 listes qui ont dépassé 1 % des exprimés aux européennes 2024 (les 26 autres vont dans « autres »).
 const EUROPEENNES: &[&str] = &["5", "11", "27", "4", "18", "6", "3", "33", "29", "8", "35", "15"];
+
+/// Nuances du ministère aux municipales 2026, de la plus à la moins votée ; `-` : liste sans nuance (35 % des voix au 1er tour : les petites communes).
+/// Les nuances rares (LDSV, LMDM, LREN, LREC, LHOR…) vont dans « autres ».
+const MUNICIPALES: &[&str] = &[
+    "LDVD", "LDVG", "LDVC", "LUG", "LDIV", "LRN", "LFI", "LLR", "LUD", "LUC", "LUXD", "LSOC", "LEXD", "LEXG", "LREG", "LCOM", "LUDI", "LVEC", "LECO", "LUDR", "-",
+];
 
 const SCRUTINS: &[Scrutin] = &[
     Scrutin {
@@ -190,6 +200,24 @@ const SCRUTINS: &[Scrutin] = &[
         columns: LEGISLATIVES,
         others: true,
     },
+    Scrutin {
+        id: "elec-m26t1",
+        label: "Municipales 2026, 1er tour",
+        file: "m26t1.csv.gz",
+        url: "elections-municipales-2026-resultats-du-premier-tour/20260320-164249/municipales-2026-resultats-bv-par-communes-2026-03-20.csv",
+        kind: Kind::Municipales,
+        columns: MUNICIPALES,
+        others: true,
+    },
+    Scrutin {
+        id: "elec-m26t2",
+        label: "Municipales 2026, 2nd tour",
+        file: "m26t2.csv.gz",
+        url: "elections-municipales-2026-resultats-du-scond-tour/20260323-180132/municipales-2026-resultats-bureau-de-vote-2026-03-23-16h15.csv",
+        kind: Kind::Municipales,
+        columns: MUNICIPALES,
+        others: true,
+    },
 ];
 
 /// Les jeux de données « élections » (un par scrutin), à enregistrer dans `serve::datasets`.
@@ -207,6 +235,10 @@ pub struct Elections {
     keys: &'static [&'static str],
     /// Fiche pour le site, remplie par `scan` (lue par `metadata`).
     sheet: Mutex<serde_json::Value>,
+    /// Municipales : les listes de chaque commune, gardées par `scan` jusqu'à ce que `finish` les écrive.
+    lists: Mutex<Option<BTreeMap<String, CommuneLists>>>,
+    /// Municipales, côté serveur : le fichier annexe et l'adresse de chaque commune dedans (voir `load_extras`).
+    extras: Mutex<Option<Extras>>,
 }
 
 impl Elections {
@@ -214,7 +246,7 @@ impl Elections {
         // `Dataset::keys` rend des `&'static str` : on les fabrique une fois (quelques dizaines d'octets par jeu) et on les garde.
         let mut keys: Vec<&'static str> = vec!["niv", "code", "nom", "i", "v", "x", "t"];
         keys.extend((0..scrutin.column_count()).map(|i| &*Box::leak(format!("c{i}").into_boxed_str())));
-        Elections { scrutin, keys: Box::leak(keys.into_boxed_slice()), sheet: Mutex::new(json!({})) }
+        Elections { scrutin, keys: Box::leak(keys.into_boxed_slice()), sheet: Mutex::new(json!({})), lists: Mutex::new(None), extras: Mutex::new(None) }
     }
 }
 
@@ -285,6 +317,35 @@ struct Results {
     abroad_voters: u64,
     /// Voix de candidats qu'aucune colonne ne reconnaît (à zéro quand la définition des colonnes est complète).
     unrecognised_votes: u64,
+    /// Municipales : les listes de chaque commune (code INSEE), avec leurs voix par bureau.
+    lists: BTreeMap<String, CommuneLists>,
+}
+
+/// Une liste municipale, telle que la décrit le fichier du ministère.
+struct ListInfo {
+    nuance: String,
+    label: String,
+    /// Tête de liste (vide dans les petites communes : le fichier ne la donne pas).
+    head: String,
+    /// Colonne des tuiles où ses voix sont additionnées (`columns.len()` : « autres »).
+    column: usize,
+}
+
+/// Les listes d'une commune, leurs voix dans chaque bureau et au total, par numéro de panneau.
+#[derive(Default)]
+struct CommuneLists {
+    lists: BTreeMap<u32, ListInfo>,
+    total: BTreeMap<u32, u32>,
+    bureaux: BTreeMap<String, BTreeMap<u32, u32>>,
+}
+
+impl CommuneLists {
+    /// La colonne (rang + 1, comme la propriété `t`) de la liste qui a le plus de voix ; `None` quand elle n'a pas de colonne (« autres ») ou pas de voix.
+    fn leader(&self, votes: &BTreeMap<u32, u32>, named: usize) -> Option<usize> {
+        let (panel, best) = votes.iter().max_by(|a, b| a.1.cmp(b.1).then(b.0.cmp(a.0)))?;
+        let column = self.lists.get(panel)?.column;
+        (*best > 0 && column < named).then_some(column + 1)
+    }
 }
 
 fn add_into(target: &mut Vec<u32>, row: &[u32]) {
@@ -325,6 +386,16 @@ impl Elections {
                 let key = if scrutin.kind == Kind::Legislatives { base + 1 } else { base };
                 (base, stride, key, find(&["Voix 1"])?)
             }
+            Kind::Municipales => {
+                // 13 colonnes par liste : panneau, nom, prénom, sexe, nuance, libellé abrégé, libellé, voix, % inscrits, % exprimés, élu, sièges ×2.
+                let base = find(&["Numéro de panneau 1"])?;
+                (base, find(&["Numéro de panneau 2"])? - base, find(&["Nuance liste 1"])?, find(&["Voix 1"])?)
+            }
+        };
+        let municipal_offsets = if scrutin.kind == Kind::Municipales {
+            Some((find(&["Libellé de liste 1"])? - base, find(&["Nom candidat 1"])? - base, find(&["Prénom candidat 1"])? - base))
+        } else {
+            None
         };
         let votes_offset = c_votes - base;
         let key_offset = c_key - base;
@@ -339,17 +410,36 @@ impl Elections {
             row[0] = inscrits;
             row[1] = votants;
             row[2] = exprimes;
+            // Municipales : chaque liste de la ligne, avec la colonne où vont ses voix (numéro de panneau, colonne, voix, début du bloc).
+            let mut row_lists: Vec<(u32, usize, u32, usize)> = Vec::new();
             let mut start = base;
             while start + votes_offset < record.len() {
-                let key = record.get(start + key_offset).unwrap_or("").trim();
-                if key.is_empty() {
+                // Le numéro de panneau finit la ligne : une nuance, elle, peut être vide (municipales) sans que la liste manque.
+                let panel = record.get(start).unwrap_or("").trim();
+                if panel.is_empty() {
                     break;
                 }
+                let raw_key = record.get(start + key_offset).unwrap_or("").trim();
+                let key = if scrutin.kind == Kind::Municipales && raw_key.is_empty() { "-" } else { raw_key };
                 let votes = number(start + votes_offset).unwrap_or(0);
-                match scrutin.columns.iter().position(|c| *c == key) {
-                    Some(column) => row[3 + column] += votes,
-                    None if scrutin.others => row[width - 1] += votes,
-                    None => results.unrecognised_votes += u64::from(votes),
+                let column = match scrutin.columns.iter().position(|c| *c == key) {
+                    Some(column) => {
+                        row[3 + column] += votes;
+                        column
+                    }
+                    None if scrutin.others => {
+                        row[width - 1] += votes;
+                        scrutin.columns.len()
+                    }
+                    None => {
+                        results.unrecognised_votes += u64::from(votes);
+                        scrutin.columns.len()
+                    }
+                };
+                if municipal_offsets.is_some() {
+                    if let Ok(panel) = panel.parse::<u32>() {
+                        row_lists.push((panel, column, votes, start));
+                    }
                 }
                 start += stride;
             }
@@ -358,6 +448,21 @@ impl Elections {
                 continue;
             };
             let bureau = record.get(c_bv).unwrap_or("").trim();
+            if let Some((label_at, name_at, first_name_at)) = municipal_offsets {
+                let entry = results.lists.entry(commune.clone()).or_default();
+                let at = |i: usize| record.get(i).unwrap_or("").trim().to_string();
+                let in_bureau = entry.bureaux.entry(format!("{bureau:0>4}")).or_default();
+                for &(panel, column, votes, block) in &row_lists {
+                    *in_bureau.entry(panel).or_default() += votes;
+                    *entry.total.entry(panel).or_default() += votes;
+                    entry.lists.entry(panel).or_insert_with(|| ListInfo {
+                        nuance: at(block + (key_offset)),
+                        label: at(block + label_at).chars().take(120).collect(),
+                        head: format!("{} {}", at(block + first_name_at), at(block + name_at)).trim().to_string(),
+                        column,
+                    });
+                }
+            }
             // Un bureau coupé entre deux circonscriptions (législatives) a deux lignes : on les additionne.
             add_into(results.bureaux.entry(format!("{commune}_{bureau:0>4}")).or_default(), &row);
             add_into(results.departements.entry(department_of(&commune).to_string()).or_default(), &row);
@@ -447,6 +552,17 @@ impl Generalizer for LevelFilter {
     }
 }
 
+/// Le fichier annexe des listes d'un scrutin municipal (la version est dans son nom).
+fn lists_file(dir: &Path, id: &str, version: &str) -> PathBuf {
+    dir.join(format!("listes-{id}-{version}.jsonl"))
+}
+
+/// Où trouver chaque commune dans le fichier des listes : `(décalage, longueur)` de sa ligne.
+struct Extras {
+    path: PathBuf,
+    index: HashMap<String, (u64, u32)>,
+}
+
 /// « 1er », « 2e »… pour les arrondissements de Paris, Lyon et Marseille.
 fn ordinal(n: u32) -> String {
     if n == 1 { "1er".into() } else { format!("{n}e") }
@@ -454,7 +570,8 @@ fn ordinal(n: u32) -> String {
 
 impl Elections {
     /// Les propriétés d'un objet : niveau, code, nom, puis les valeurs de `row` (aucune donnée : des zéros, `i` = 0 dit « pas de résultat »).
-    fn props(&self, level: i64, code: &str, name: &str, row: Option<&Vec<u32>>) -> (Vec<Value>, f32) {
+    /// `leader` : la tête déjà connue (municipales : la liste la mieux placée) ; sinon la colonne qui a le plus de voix.
+    fn props(&self, level: i64, code: &str, name: &str, row: Option<&Vec<u32>>, leader: Option<usize>) -> (Vec<Value>, f32) {
         let width = self.scrutin.row_width();
         let zeros;
         let row = match row {
@@ -465,8 +582,13 @@ impl Elections {
             }
         };
         // La tête : la colonne nommée qui a le plus de voix (« autres » ne compte pas : c'est un regroupement), 0 s'il n'y a pas de voix.
-        let named = &row[3..3 + self.scrutin.columns.len()];
-        let leader = named.iter().enumerate().max_by_key(|(_, v)| **v).filter(|(_, v)| **v > 0).map_or(0, |(i, _)| i + 1);
+        let mut named = &row[3..3 + self.scrutin.columns.len()];
+        // Municipales, départements : on ne les mesure qu'entre nuances (la colonne « sans nuance » est la dernière), sinon les petites communes l'emporteraient partout.
+        if self.scrutin.kind == Kind::Municipales && level == LEVEL_DEPARTMENT {
+            named = &named[..named.len() - 1];
+        }
+        let leader = leader
+            .unwrap_or_else(|| named.iter().enumerate().max_by_key(|(_, v)| **v).filter(|(_, v)| **v > 0).map_or(0, |(i, _)| i + 1));
         let mut props = Vec::with_capacity(FIXED_PROPS + self.scrutin.column_count());
         props.push(Value::Int(level));
         props.push(Value::Str(code.into()));
@@ -478,8 +600,8 @@ impl Elections {
     }
 
     /// Émet une ligne par partie du polygone (le moteur n'accepte qu'un anneau extérieur par objet).
-    fn emit_shape(&self, emit: &mut dyn FnMut(Feature) -> Result<()>, level: i64, shape: Shape, name: &str, row: Option<&Vec<u32>>) -> Result<()> {
-        let (props, weight) = self.props(level, &shape.c, name, row);
+    fn emit_shape(&self, emit: &mut dyn FnMut(Feature) -> Result<()>, level: i64, shape: Shape, name: &str, row: Option<&Vec<u32>>, leader: Option<usize>) -> Result<()> {
+        let (props, weight) = self.props(level, &shape.c, name, row, leader);
         for part in shape.p {
             emit(Feature { geom: Geometry::Polygon(part), props: props.clone(), weight })?;
         }
@@ -518,7 +640,11 @@ impl Dataset for Elections {
     fn source_id(&self) -> String {
         // Résultats définitifs de scrutins passés : la source ne bouge plus. Les contours d'Etalab, eux, sont refaits de temps en temps :
         // on ne refabrique pas pour autant (voir le README : effacer `elections-sources` pour forcer).
-        "resultats-definitifs-2022-2024;contours-etalab-v2;ign-cog-carto".into()
+        match self.scrutin.kind {
+            // Municipales : résultats du ministère du 20 et du 23 mars 2026 (publiés « sous réserve des recours »).
+            Kind::Municipales => "resultats-municipales-2026-03;contours-etalab-v2;ign-cog-carto".into(),
+            _ => "resultats-definitifs-2022-2024;contours-etalab-v2;ign-cog-carto".into(),
+        }
     }
     fn attribution(&self) -> &'static str {
         "Ministère de l’Intérieur ; Etalab (contours des bureaux de vote) ; IGN"
@@ -624,17 +750,19 @@ impl Dataset for Elections {
         geo::read_shapes(&shared.join(geo::DEPARTEMENTS_FILE), |shape| {
             let Some(row) = results.departements.get(&shape.c) else { return Ok(()) };
             let name = shape.n.clone();
-            self.emit_shape(emit, LEVEL_DEPARTMENT, shape, &name, Some(row))
+            self.emit_shape(emit, LEVEL_DEPARTMENT, shape, &name, Some(row), None)
         })?;
         let mut communes_with_results = 0u64;
         geo::read_shapes(&shared.join(geo::COMMUNES_FILE), |shape| {
             let Some(row) = results.communes.get(&shape.c) else { return Ok(()) };
             communes_with_results += 1;
             let name = shape.n.clone();
+            // Municipales : la tête d'une commune est sa liste la mieux placée (pas sa nuance la plus votée).
+            let leader = results.lists.get(&shape.c).and_then(|c| c.leader(&c.total, scrutin.columns.len()));
             if fallback.contains(&shape.c) {
-                self.emit_shape(emit, LEVEL_FALLBACK, shape.clone(), &name, Some(row))?;
+                self.emit_shape(emit, LEVEL_FALLBACK, shape.clone(), &name, Some(row), leader)?;
             }
-            self.emit_shape(emit, LEVEL_COMMUNE, shape, &name, Some(row))
+            self.emit_shape(emit, LEVEL_COMMUNE, shape, &name, Some(row), leader)
         })?;
         info!(scrutin = scrutin.id, communes = communes_with_results, sur = results.communes.len(), "élections : communes avec contour");
         geo::read_shapes(&shared.join(geo::BUREAUX_FILE), |shape| {
@@ -645,13 +773,74 @@ impl Dataset for Elections {
                 return Ok(());
             }
             let name = bureau_name(&shape.c, &shape.n);
-            self.emit_shape(emit, LEVEL_BUREAU, shape, &name, row)
+            let leader = shape.c.split_once('_').and_then(|(commune, bureau)| {
+                let lists = results.lists.get(commune)?;
+                lists.leader(lists.bureaux.get(bureau)?, scrutin.columns.len())
+            });
+            self.emit_shape(emit, LEVEL_BUREAU, shape, &name, row, leader)
         })?;
+        if scrutin.kind == Kind::Municipales {
+            *self.lists.lock().expect("listes des municipales") = Some(results.lists);
+        }
         Ok(())
     }
 
     fn generalizer(&self, zoom: u8) -> Box<dyn Generalizer> {
         Box::new(LevelFilter::new(zoom))
+    }
+
+    /// Municipales : écrit les listes de chaque commune (nom, nuance, voix par bureau), une commune par ligne, pour la fiche.
+    fn finish(&self, out_dir: &Path, version: &str) -> Result<()> {
+        let Some(lists) = self.lists.lock().expect("listes des municipales").take() else { return Ok(()) };
+        let path = lists_file(out_dir, self.scrutin.id, version);
+        let mut out = std::io::BufWriter::new(File::create(&path)?);
+        for (commune, entry) in &lists {
+            let panels: Vec<u32> = entry.lists.keys().copied().collect();
+            let body = json!({
+                "l": panels.iter().map(|p| { let l = &entry.lists[p]; json!({ "p": p, "n": l.nuance, "l": l.label, "t": l.head }) }).collect::<Vec<_>>(),
+                "v": panels.iter().map(|p| entry.total.get(p).copied().unwrap_or(0)).collect::<Vec<_>>(),
+                "b": entry.bureaux.iter().map(|(b, votes)| (b.clone(), panels.iter().map(|p| votes.get(p).copied().unwrap_or(0)).collect::<Vec<_>>())).collect::<BTreeMap<_, _>>(),
+            });
+            // Le code vient en premier, à une place fixe (`load_extras` l'y lit sans décoder la ligne) : on le colle devant le reste.
+            let text = serde_json::to_string(&body)?;
+            write!(out, "{{\"c\":\"{commune}\",{}\n", &text[1..])?;
+        }
+        out.flush()?;
+        info!(scrutin = self.scrutin.id, communes = lists.len(), mo = std::fs::metadata(&path).map_or(0, |m| m.len() / 1_048_576), "élections : listes des communes écrites");
+        Ok(())
+    }
+
+    /// Côté serveur : retient où chaque commune commence dans le fichier des listes (le fichier lui-même reste sur le disque).
+    fn load_extras(&self, dir: &Path, version: &str) -> Result<()> {
+        if self.scrutin.kind != Kind::Municipales {
+            return Ok(());
+        }
+        let path = lists_file(dir, self.scrutin.id, version);
+        let mut index = HashMap::new();
+        let mut offset = 0u64;
+        for line in std::io::BufReader::new(File::open(&path).with_context(|| format!("{} absent", path.display()))?).split(b'\n') {
+            let line = line?;
+            // Chaque ligne commence par `{"c":"<code INSEE>"`.
+            if let Some(code) = line.get(6..11).and_then(|c| std::str::from_utf8(c).ok()) {
+                index.insert(code.to_string(), (offset, line.len() as u32));
+            }
+            offset += line.len() as u64 + 1;
+        }
+        info!(scrutin = self.scrutin.id, communes = index.len(), "élections : listes des communes chargées");
+        *self.extras.lock().expect("listes des municipales") = Some(Extras { path, index });
+        Ok(())
+    }
+
+    /// `GET /api/tuiles/elec-m26t1/objet/<code INSEE>` : les listes de la commune.
+    fn lookup(&self, key: &str) -> Option<serde_json::Value> {
+        let extras = self.extras.lock().expect("listes des municipales");
+        let extras = extras.as_ref()?;
+        let &(offset, len) = extras.index.get(key)?;
+        let mut file = File::open(&extras.path).ok()?;
+        file.seek(SeekFrom::Start(offset)).ok()?;
+        let mut buffer = vec![0u8; len as usize];
+        file.read_exact(&mut buffer).ok()?;
+        serde_json::from_slice(&buffer).ok()
     }
 
     /// Seaux de zoom 8 (~100 km) : les communes (35 000 objets) ne passent que par le dernier zoom de seaux, jamais par un passage global
@@ -819,6 +1008,95 @@ mod tests {
         assert_eq!(bureau["code"].string_value.as_deref(), Some("75056_0101"));
         assert_eq!(bureau["nom"].string_value.as_deref(), Some("Paris 1er arrondissement"));
         assert_eq!((int(&bureau["i"]), int(&bureau["v"]), int(&bureau["c0"]), int(&bureau["c1"])), (1000, 900, 600, 300));
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Municipales : les listes sont locales. La tête est la *liste* la mieux placée (pas la nuance la plus votée), une liste sans nuance
+    /// compte dans la colonne « - », et les listes (nom, voix par bureau) sortent dans le fichier annexe.
+    #[test]
+    fn municipales_tete_par_liste_et_listes_en_fichier_annexe() {
+        let root = std::env::temp_dir().join(format!("carte-vivante-test-municipales-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&root);
+        let shared = root.join("elections-sources");
+        std::fs::create_dir_all(&shared).unwrap();
+        let own = root.join("elec-m26t1");
+
+        let mut header = String::from("Code département;Libellé département;Code commune;Libellé commune;Code BV;Inscrits;Votants;% Votants;Abstentions;% Abstentions;Exprimés;% Exprimés/inscrits;% Exprimés/votants;Blancs;% Blancs/inscrits;% Blancs/votants;Nuls;% Nuls/inscrits;% Nuls/votants");
+        for k in 1..=3 {
+            header.push_str(&format!(";Numéro de panneau {k};Nom candidat {k};Prénom candidat {k};Sexe candidat {k};Nuance liste {k};Libellé abrégé de liste {k};Libellé de liste {k};Voix {k};% Voix/inscrits {k};% Voix/exprimés {k};Elu {k};Sièges au CM {k};Sièges au CC {k}"));
+        }
+        // Une ligne de bureau : les listes sont `(panneau, nuance, libellé, voix)`.
+        let line = |dept: &str, com: &str, bv: &str, ins: u32, lists: &[(u32, &str, &str, u32)]| {
+            let exprimes: u32 = lists.iter().map(|l| l.3).sum();
+            let mut row = format!("{dept};D;{com};Commune;{bv};{ins};{exprimes};0;0;0;{exprimes};0;0;0;0;0;0;0;0");
+            for (panel, nuance, label, votes) in lists {
+                row.push_str(&format!(";{panel};DUPONT;Anne;F;{nuance};{label};Liste {label};{votes};0;0;;0;0"));
+            }
+            row
+        };
+        let mut all = vec![header];
+        // Paris : la liste de droite gagne la commune (600 contre 400), la liste d'union gagne le bureau 0101.
+        all.push(line("75", "75056", "0101", 1000, &[(1, "LUG", "UNION", 300), (2, "LDVD", "DROITE", 200)]));
+        all.push(line("75", "75056", "0102", 800, &[(1, "LUG", "UNION", 100), (2, "LDVD", "DROITE", 400)]));
+        // Une petite commune sans nuance : la liste sans nuance est en tête.
+        all.push(line("75", "75101", "0001", 500, &[(1, "", "VILLAGE", 250), (2, "LDVC", "CENTRE", 100)]));
+        for i in 0..1000 {
+            all.push(line("33", "33063", &format!("{:04}", i + 1), 100, &[(1, "LDVG", "GAUCHE", 60), (2, "LRN", "RN", 30)]));
+        }
+        gz(&shared.join("m26t1.csv.gz"), all.join("\r\n").as_bytes());
+
+        let shape = |code: &str, name: &str, lon: f64, lat: f64, side: f64| Shape { c: code.into(), n: name.into(), p: vec![square(lon, lat, side)] };
+        write_shapes(&shared.join(geo::DEPARTEMENTS_FILE), &[shape("75", "Paris", 2.2, 48.8, 0.2), shape("33", "Gironde", -0.6, 44.8, 0.4)]);
+        write_shapes(&shared.join(geo::COMMUNES_FILE), &[shape("75056", "Paris", 2.2, 48.8, 0.1), shape("75101", "Village", 2.3, 48.8, 0.1), shape("33063", "Bordeaux", -0.6, 44.8, 0.1)]);
+        let mut bureaux = vec![shape("75056_0101", "Paris", 2.2, 48.8, 0.04), shape("75056_0102", "Paris", 2.25, 48.8, 0.04), shape("75101_0001", "Village", 2.3, 48.8, 0.05)];
+        bureaux.extend((0..1000).map(|i| shape(&format!("33063_{:04}", i + 1), "Bordeaux", -0.6 + f64::from(i % 40) * 0.0005, 44.8 + f64::from(i / 40) * 0.0005, 0.0004)));
+        write_shapes(&shared.join(geo::BUREAUX_FILE), &bureaux);
+
+        let dataset = Elections::new(&SCRUTINS[5]);
+        assert_eq!(dataset.id(), "elec-m26t1");
+        let out = root.join("elections.pmtiles");
+        builder::build(&dataset, &own, &root.join("travail"), &out, &Options::default()).unwrap();
+
+        let reader = Reader::open(&out).unwrap();
+        let props_at = |z: u8, lon: f64, lat: f64| -> Vec<HashMap<String, PValue>> {
+            let w = geom::world(lon, lat, z);
+            let (x, y) = ((w[0] / 4096.0) as u32, (w[1] / 4096.0) as u32);
+            let tile = PTile::decode(gunzip(&reader.tile(z, x, y).unwrap().expect("tuile")).unwrap().as_slice()).unwrap();
+            let layer = &tile.layers[0];
+            layer.features.iter().map(|f| f.tags.chunks(2).map(|kv| (layer.keys[kv[0] as usize].clone(), layer.values[kv[1] as usize].clone())).collect()).collect()
+        };
+        let int = |v: &PValue| v.sint_value.expect("entier");
+        let column = |key: &str| MUNICIPALES.iter().position(|c| *c == key).unwrap() as i64;
+
+        // Communes (zoom 9) : Paris → LDVD (la liste qui totalise le plus), le village → « - » (liste sans nuance), avec les voix par nuance additionnées.
+        let communes = props_at(9, 2.25, 48.85);
+        let paris = communes.iter().find(|f| f["code"].string_value.as_deref() == Some("75056")).expect("Paris");
+        assert_eq!(int(&paris["t"]), column("LDVD") + 1);
+        assert_eq!((int(&paris["i"]), int(&paris[&format!("c{}", column("LUG"))]), int(&paris[&format!("c{}", column("LDVD"))])), (1800, 400, 600));
+        let village = communes.iter().find(|f| f["code"].string_value.as_deref() == Some("75101")).expect("village");
+        assert_eq!(int(&village["t"]), column("-") + 1);
+        assert_eq!(int(&village[&format!("c{}", column("-"))]), 250);
+
+        // Bureaux (zoom 12) : le bureau 0101 est gagné par la liste d'union, pas la commune.
+        let near = props_at(12, 2.22, 48.82);
+        let bureau = near.iter().find(|f| f["code"].string_value.as_deref() == Some("75056_0101")).expect("bureau 0101");
+        assert_eq!(int(&bureau["t"]), column("LUG") + 1);
+
+        // Départements (zoom 5) : la colonne « sans nuance » ne compte pas dans la tête (250 voix sans nuance < 600 voix LDVD).
+        let departments = props_at(5, 2.3, 48.85);
+        let seventy_five = departments.iter().find(|f| f["code"].string_value.as_deref() == Some("75")).expect("département 75");
+        assert_eq!(int(&seventy_five["t"]), column("LDVD") + 1);
+
+        // Fichier annexe : les listes de Paris avec leurs voix, au total et par bureau.
+        dataset.finish(&root, "v1").unwrap();
+        let reader_side = Elections::new(&SCRUTINS[5]);
+        reader_side.load_extras(&root, "v1").unwrap();
+        let paris = reader_side.lookup("75056").expect("listes de Paris");
+        assert_eq!(paris["l"][1]["l"], "Liste DROITE");
+        assert_eq!(paris["l"][0]["n"], "LUG");
+        assert_eq!(paris["v"], json!([400, 600]));
+        assert_eq!(paris["b"]["0102"], json!([100, 400]));
+        assert!(reader_side.lookup("99999").is_none());
         std::fs::remove_dir_all(&root).ok();
     }
 }

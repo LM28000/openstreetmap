@@ -229,6 +229,10 @@ pub trait Dataset: Send + Sync {
     fn load_extras(&self, _dir: &Path, _version: &str) -> Result<()> {
         Ok(())
     }
+    /// Les informations d'un objet que les tuiles ne portent pas (les listes d'une commune…) : `GET /api/tuiles/<jeu>/objet/<clé>`.
+    fn lookup(&self, _key: &str) -> Option<serde_json::Value> {
+        None
+    }
     /// Après la fabrication : écrire des fichiers annexes dans `out_dir` (la version est dans leur nom).
     fn finish(&self, _out_dir: &Path, _version: &str) -> Result<()> {
         Ok(())

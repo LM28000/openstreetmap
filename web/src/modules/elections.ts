@@ -25,7 +25,7 @@
  */
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
-import { defineModule, type InfoContent, type InfoRow, type LegendItem } from '../core/module';
+import { defineModule, type InfoContent, type InfoRow, type InfoTable, type LegendItem } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
 import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
 import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
@@ -96,7 +96,7 @@ interface Column {
   bloc: BlocId;
 }
 
-type ScrutinId = 'p22t1' | 'p22t2' | 'eu24' | 'l24t1' | 'l24t2';
+type ScrutinId = 'p22t1' | 'p22t2' | 'eu24' | 'l24t1' | 'l24t2' | 'm26t1' | 'm26t2';
 
 interface ScrutinDef {
   id: ScrutinId;
@@ -108,6 +108,8 @@ interface ScrutinDef {
   page: string;
   /** « candidat », « liste », « nuance » : ce que sont les lignes de la fiche. */
   what: 'candidat' | 'liste' | 'nuance';
+  /** Municipales : les listes de chaque commune sont à part (`/api/tuiles/<jeu>/objet/<commune>`), la fiche les lit. */
+  communeLists?: boolean;
   columns: Column[];
   note?: string;
 }
@@ -143,6 +145,35 @@ const LEGISLATIVES: Column[] = [
   col('REG', 'Régionalistes', 'autres', 'REG'),
   col('REC', 'Reconquête', 'ed', 'REC'),
   col('HOR', 'Horizons', 'centre', 'HOR'),
+  col('autres', 'Autres nuances', 'autres'),
+];
+
+/**
+ * Nuances du ministère aux municipales 2026 : les listes sont locales, seule la nuance les rattache à un courant. Libellés d'après la
+ * grille des nuances du ministère ; `-` : liste sans nuance (la plupart des petites communes : gris, jamais rattachée à une famille).
+ */
+const MUNICIPALES: Column[] = [
+  col('LDVD', 'Divers droite', 'droite', 'LDVD'),
+  col('LDVG', 'Divers gauche', 'gauche', 'LDVG'),
+  col('LDVC', 'Divers centre', 'centre', 'LDVC'),
+  col('LUG', 'Union de la gauche', 'gauche', 'LUG'),
+  col('LDIV', 'Divers', 'autres', 'LDIV'),
+  col('LRN', 'Rassemblement national', 'ed', 'LRN'),
+  col('LFI', 'La France insoumise', 'gauche', 'LFI'),
+  col('LLR', 'Les Républicains', 'droite', 'LLR'),
+  col('LUD', 'Union de la droite', 'droite', 'LUD'),
+  col('LUC', 'Union du centre', 'centre', 'LUC'),
+  col('LUXD', 'Union de l’extrême droite', 'ed', 'LUXD'),
+  col('LSOC', 'Parti socialiste', 'gauche', 'LSOC'),
+  col('LEXD', 'Extrême droite', 'ed', 'LEXD'),
+  col('LEXG', 'Extrême gauche', 'exg', 'LEXG'),
+  col('LREG', 'Régionalistes', 'autres', 'LREG'),
+  col('LCOM', 'Parti communiste', 'gauche', 'LCOM'),
+  col('LUDI', 'Union des démocrates et indépendants', 'centre', 'LUDI'),
+  col('LVEC', 'Les Écologistes', 'eco', 'LVEC'),
+  col('LECO', 'Divers écologistes', 'eco', 'LECO'),
+  col('LUDR', 'Union de la droite républicaine', 'droite', 'LUDR'),
+  col('-', 'Liste sans nuance', 'autres'),
   col('autres', 'Autres nuances', 'autres'),
 ];
 
@@ -210,11 +241,33 @@ const SCRUTINS: ScrutinDef[] = [
     columns: LEGISLATIVES,
     note: 'Par nuance du ministère. Sans 2nd tour là où un candidat a été élu dès le 1er.',
   },
+  {
+    id: 'm26t1',
+    jeu: 'elec-m26t1',
+    label: 'Municipales 2026, 1er tour',
+    short: 'Municipales 2026 · 1er tour',
+    page: 'https://www.data.gouv.fr/fr/datasets/elections-municipales-2026-resultats-du-premier-tour/',
+    what: 'nuance',
+    communeLists: true,
+    columns: MUNICIPALES,
+    note: 'Les listes sont locales : la couleur est celle de la nuance de la liste en tête, et reste grise sans nuance.',
+  },
+  {
+    id: 'm26t2',
+    jeu: 'elec-m26t2',
+    label: 'Municipales 2026, 2nd tour',
+    short: 'Municipales 2026 · 2nd tour',
+    page: 'https://www.data.gouv.fr/fr/datasets/elections-municipales-2026-resultats-du-second-tour/',
+    what: 'nuance',
+    communeLists: true,
+    columns: MUNICIPALES,
+    note: 'Seules les communes qui ont eu un 2nd tour (environ 1 500) ont un résultat ; les départements ne totalisent qu’elles.',
+  },
 ];
 
 const BY_ID = new Map<string, ScrutinDef>(SCRUTINS.map((s) => [s.id, s]));
 /** Du plus récent au plus ancien : par défaut, le scrutin le plus récent dont le serveur a fini les tuiles. */
-const RECENCY: ScrutinId[] = ['l24t2', 'l24t1', 'eu24', 'p22t2', 'p22t1'];
+const RECENCY: ScrutinId[] = ['m26t1', 'm26t2', 'l24t2', 'l24t1', 'eu24', 'p22t2', 'p22t1'];
 const DEFAULT_SCRUTIN: ScrutinId = RECENCY[0]!;
 
 function scrutinOf(id: string | undefined): ScrutinDef {
@@ -366,6 +419,59 @@ function removeLayers(map: MapLibreMap): void {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Municipales : les listes d'une commune (fichier annexe du serveur, lu à la demande)
+// ---------------------------------------------------------------------------------------------
+
+interface CommuneLists {
+  l: Array<{ p: number; n: string; l: string; t: string }>;
+  /** Voix de la commune, une par liste (même ordre que `l`). */
+  v: number[];
+  /** Voix de chaque bureau (clé : numéro du bureau sur 4 chiffres), une par liste. */
+  b: Record<string, number[]>;
+}
+
+const listsCache = new Map<string, CommuneLists | 'loading' | 'absent'>();
+
+/** Les listes de la commune, ou `null` le temps de les lire (la fiche est recalculée en continu : elle les montre dès qu'elles arrivent). */
+function listsOf(def: ScrutinDef, insee: string): CommuneLists | null {
+  const key = `${def.jeu}/${insee}`;
+  const cached = listsCache.get(key);
+  if (cached && cached !== 'loading' && cached !== 'absent') return cached;
+  if (!cached) {
+    listsCache.set(key, 'loading');
+    fetch(`/api/tuiles/${def.jeu}/objet/${encodeURIComponent(insee)}`)
+      .then((response) => (response.ok ? (response.json() as Promise<CommuneLists>) : Promise.reject(new Error(String(response.status)))))
+      .then((lists) => listsCache.set(key, lists))
+      .catch(() => listsCache.set(key, 'absent'));
+  }
+  return null;
+}
+
+/** Tableau des listes d'une commune ou d'un bureau, avec nuance, voix et part des exprimés ; `null` tant qu'on ne les a pas. */
+function communeListTable(def: ScrutinDef, p: Picked): InfoTable | null {
+  const [insee = '', bureau] = p.code.split('_');
+  const lists = listsOf(def, insee);
+  if (!lists) return null;
+  const votes = p.niv === 2 && bureau ? lists.b[bureau] : lists.v;
+  if (!votes) return null;
+  const ranked = lists.l.map((list, k) => ({ list, votes: votes[k] ?? 0 })).sort((a, b) => b.votes - a.votes);
+  const shown = ranked.slice(0, 8);
+  const rows: InfoRow[] = shown.map(({ list, votes: v }, rank) => {
+    const column = def.columns.find((c) => c.key === (list.n || '-'));
+    const bloc = BLOCS[column?.bloc ?? 'autres'];
+    return {
+      cells: ['' + (rank + 1), list.t ? `${list.l} · ${list.t}` : list.l, fmt(v), pct(v, p.x)],
+      badge: { text: list.n || 'sans', color: bloc.day.slice(1) },
+    };
+  });
+  if (ranked.length > shown.length) {
+    const rest = ranked.slice(shown.length).reduce((sum, r) => sum + r.votes, 0);
+    rows.push({ cells: ['', `${ranked.length - shown.length} autres listes`, fmt(rest), pct(rest, p.x)] });
+  }
+  return { title: p.niv === 2 ? 'Listes (voix dans ce bureau)' : 'Listes de la commune', columns: ['', 'Liste', 'Voix', '%'], rows };
+}
+
+// ---------------------------------------------------------------------------------------------
 // Le module
 // ---------------------------------------------------------------------------------------------
 
@@ -374,7 +480,7 @@ export const elections = defineModule<ElectionsData>({
   name: 'Élections',
   category: 'territoire',
   description:
-    'Résultats des scrutins nationaux (présidentielle 2022, européennes et législatives 2024) par bureau de vote : départements de loin, communes puis bureaux de près.',
+    'Résultats des scrutins nationaux (présidentielle 2022, européennes et législatives 2024, municipales 2026) par bureau de vote : départements de loin, communes puis bureaux de près.',
   attribution: 'Ministère de l’Intérieur ; Etalab (contours des bureaux de vote) ; IGN',
   timeStepMs: 3_600_000, // résultats définitifs : ne dépendent pas de l'instant affiché
   followsView: false,
@@ -444,7 +550,10 @@ export const elections = defineModule<ElectionsData>({
     const affichage = (settings.affichage ?? 'tete') as Affichage;
     if (affichage === 'tete') {
       const present = new Set(def.columns.filter((c) => c.key !== 'autres').map((c) => c.bloc));
-      const items: LegendItem[] = BLOC_ORDER.filter((b) => present.has(b)).map((b) => ({ color: night ? BLOCS[b].night : BLOCS[b].day, label: BLOCS[b].label }));
+      const items: LegendItem[] = BLOC_ORDER.filter((b) => present.has(b)).map((b) => ({
+        color: night ? BLOCS[b].night : BLOCS[b].day,
+        label: b === 'autres' && def.communeLists ? 'Autres nuances, ou sans nuance' : BLOCS[b].label,
+      }));
       items.push({ color: NO_DATA.day, label: 'Pas de résultat' });
       return items;
     }
@@ -552,6 +661,7 @@ export const elections = defineModule<ElectionsData>({
   describe(selection): InfoContent | null {
     const p = selection as Picked;
     const def = scrutinOf(p.scrutin);
+    const listTable = def.communeLists && p.i > 0 ? communeListTable(def, p) : null;
     const level = ['Département', 'Commune', 'Bureau de vote', 'Commune'][p.niv] ?? 'Objet';
     const code = p.niv === 2 ? p.code.split('_')[1] ?? p.code : p.code.split('_')[0] ?? p.code;
     const subtitle =
@@ -563,10 +673,10 @@ export const elections = defineModule<ElectionsData>({
             ? `Commune ${code} · résultats de l’ensemble des bureaux`
             : `Commune ${code}`;
     const base: InfoContent = {
-      kind: `${level} · ${def.short}`,
+      kind: def.communeLists ? `${level} · ${def.short.replace('Municipales 2026 · ', 'Municipales ')}` : `${level} · ${def.short}`,
       title: p.nom,
       subtitle,
-      status: plainStatus('Résultats définitifs · ministère de l’Intérieur'),
+      status: plainStatus(def.communeLists ? 'Ministère de l’Intérieur · sous réserve des recours' : 'Résultats définitifs · ministère de l’Intérieur'),
       link: { href: def.page, label: 'Résultats sur data.gouv.fr' },
     };
     if (p.i <= 0) {
@@ -581,11 +691,13 @@ export const elections = defineModule<ElectionsData>({
     }));
     // Une phrase par chose à savoir : la fiche doit montrer le tableau des candidats sans défiler.
     const notes: string[] = [];
-    if (p.niv === 2) notes.push('Contour approximatif d’Etalab, sans valeur officielle.');
+    // Municipales : une seule ligne, pour que les listes restent à l'écran (le tableau est sous la note).
+    if (def.communeLists) notes.push(p.niv === 2 ? 'Contour Etalab approximatif. Nuance : celle du ministère, absente des petites communes.' : 'Nuance : celle du ministère, absente de la plupart des petites communes.');
+    else if (p.niv === 2) notes.push('Contour approximatif d’Etalab, sans valeur officielle.');
     else notes.push('Totaux : sommes des bureaux de vote.');
-    if (p.niv === 3) notes.push('Des bureaux de cette commune n’ont pas de contour : elle est montrée entière.');
-    if (def.what === 'nuance') notes.push('Candidats d’une même nuance additionnés.');
-    notes.push('Pourcentages sur les exprimés.');
+    if (p.niv === 3 && !def.communeLists) notes.push('Des bureaux de cette commune n’ont pas de contour : elle est montrée entière.');
+    if (!def.communeLists && def.what === 'nuance') notes.push('Candidats d’une même nuance additionnés.');
+    if (!def.communeLists) notes.push('Pourcentages sur les exprimés.');
     return {
       ...base,
       figures: [
@@ -593,7 +705,7 @@ export const elections = defineModule<ElectionsData>({
         { value: compact(p.v), label: 'votants' },
         { value: pct(p.v, p.i), label: 'participation' },
       ],
-      tables: [{ title: def.what === 'candidat' ? 'Candidats' : def.what === 'liste' ? 'Listes (celles à plus de 1 % en France, et « autres »)' : 'Nuances', columns: ['', def.what === 'candidat' ? 'Candidat' : def.what === 'liste' ? 'Liste' : 'Nuance', 'Voix', '%'], rows }],
+      tables: [listTable ?? { title: def.communeLists ? 'Nuances (listes en cours de chargement)' : def.what === 'candidat' ? 'Candidats' : def.what === 'liste' ? 'Listes (celles à plus de 1 % en France, et « autres »)' : 'Nuances', columns: ['', def.what === 'candidat' ? 'Candidat' : def.what === 'liste' ? 'Liste' : 'Nuance', 'Voix', '%'], rows }],
       fields: [
         ['Exprimés', `${fmt(p.x)} · blancs et nuls ${fmt(p.v - p.x)}`],
         ['Abstentions', fmt(p.i - p.v)],

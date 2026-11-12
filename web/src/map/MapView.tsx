@@ -4,7 +4,6 @@ import {
   GlobeControl,
   Map as MapLibreMap,
   NavigationControl,
-  ScaleControl,
   TerrainControl,
 } from 'maplibre-gl';
 import 'maplibre-gl/dist/maplibre-gl.css';
@@ -19,6 +18,7 @@ import {
   TERRAIN_EXAGGERATION,
   TERRAIN_SOURCE,
   ignoreMissingIcons,
+  CalmScaleControl,
   keepGlobeAndTerrainApart,
   setupBaseMap,
 } from './baseMap';
@@ -62,7 +62,7 @@ export function MapView({ manager }: { manager: ModuleManager }) {
     // Commandes regroupées en bas à droite, loin de la fiche (voir styles.css). Pour les coins du bas,
     // MapLibre empile du bas vers le haut : le dernier contrôle ajouté est le plus haut.
     map.addControl(new AttributionControl(), 'bottom-right'); // placé en bas de l'écran par le CSS
-    map.addControl(new ScaleControl({ maxWidth: 110 }), 'bottom-right');
+    map.addControl(new CalmScaleControl({ maxWidth: 110 }), 'bottom-right');
     map.addControl(new TerrainControl({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION }), 'bottom-right');
     map.addControl(new GlobeControl(), 'bottom-right');
     map.addControl(new NavigationControl({ visualizePitch: true }), 'bottom-right');

@@ -68,8 +68,29 @@ export class ModuleManager {
   private currentTime = Date.now();
   private lastSummaryAt = 0;
   private selection: Selection | null = null;
+  /**
+   * Altitudes déjà lues, au mètre près, valables pour une version du relief. Chaque lecture de MapLibre
+   * parcourt les tuiles du relief (de l'ordre de 30 µs) : sans mémoire, les couches de points qui se
+   * partagent les mêmes lieux (trois couches de gares, bornes, vélos…) la payaient à chaque arrivée de tuiles.
+   */
+  private readonly elevationCache = new Map<number, number>();
+  private elevationCacheVersion = -1;
   private readonly terrain: TerrainSampler = {
-    elevation: (lon, lat) => this.map?.queryTerrainElevation([lon, lat]) ?? 0,
+    elevation: (lon, lat) => {
+      const map = this.map;
+      if (!map) return 0;
+      if (this.elevationCacheVersion !== this.terrain.version || this.elevationCache.size > 200_000) {
+        this.elevationCache.clear();
+        this.elevationCacheVersion = this.terrain.version;
+      }
+      const key = Math.round((lon + 180) * 1e5) * 2e7 + Math.round((lat + 90) * 1e5);
+      let value = this.elevationCache.get(key);
+      if (value === undefined) {
+        value = map.queryTerrainElevation([lon, lat]) ?? 0;
+        this.elevationCache.set(key, value);
+      }
+      return value;
+    },
     exaggeration: 0,
     version: 0,
   };
@@ -341,9 +362,26 @@ export class ModuleManager {
       terrain: this.terrain,
       settings: this.snapshot[entry.module.id]?.settings ?? {},
       selection,
-      view: { zoom: this.map?.getZoom() ?? 0, bearing: this.map?.getBearing() ?? 0, pitch: this.map?.getPitch() ?? 0 },
+      view: {
+        zoom: this.map?.getZoom() ?? 0,
+        bearing: this.map?.getBearing() ?? 0,
+        pitch: this.map?.getPitch() ?? 0,
+        bounds: () => this.viewBounds(),
+      },
       night: currentNight(),
     };
+  }
+
+  private boundsFrame = -1;
+  private boundsValue: readonly [number, number, number, number] = [-180, -90, 180, 90];
+  /** Emprise visible de la carte, calculée au plus une fois par image. */
+  private viewBounds(): readonly [number, number, number, number] {
+    if (this.map && this.boundsFrame !== this.frameCount) {
+      const b = this.map.getBounds();
+      this.boundsValue = [b.getWest(), b.getSouth(), b.getEast(), b.getNorth()];
+      this.boundsFrame = this.frameCount;
+    }
+    return this.boundsValue;
   }
 
   private selectedEntry(): { entry: Entry; selection: Selection } | null {

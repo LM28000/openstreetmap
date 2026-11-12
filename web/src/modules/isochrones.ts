@@ -27,7 +27,7 @@ import type { ImageSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent, type InfoTable } from '../core/module';
 import { ModuleManager } from '../core/moduleManager';
 import { plainStatus, isLiveTime } from '../core/infoStatus';
-import { currentNight, firstSymbolLayerId } from '../map/baseMap';
+import { currentNight, fillInsertionId } from '../map/baseMap';
 import { OVER_MAP } from '../map/parameters';
 import { goTo } from '../search/access';
 import { formatTime } from '../ui/format';
@@ -895,7 +895,7 @@ export const isochrones = defineModule<IsochroneData>({
           source: AREA_SOURCE,
           paint: { 'raster-opacity': 0, 'raster-fade-duration': 0, 'raster-resampling': 'linear' },
         },
-        firstSymbolLayerId(map),
+        fillInsertionId(map),
       );
     },
     update(map, { data, night, settings }) {

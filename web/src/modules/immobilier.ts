@@ -18,7 +18,7 @@
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { aboveBuildingsId, fillInsertionId } from '../map/baseMap';
 import { addTileSource, loadTileSheet, type TileSheet } from '../map/vectorTiles';
 import { addSelectionRing, selectionRingIds, selectionRingLayers, setSelectionRingFilter } from './statusColors';
 
@@ -28,6 +28,14 @@ const EXTRUSION_ID = 'immobilier-relief';
 const POINTS_ID = 'immobilier-ventes';
 const SELECTED_ID = 'immobilier-choisi';
 const SELECTED_POINT_ID = 'immobilier-vente-choisie';
+/** Pastilles du nombre de ventes sur un même point (calculées côté navigateur, voir `refreshStacks`). */
+const STACKS_SOURCE_ID = 'immobilier-piles';
+const STACKS_ID = 'immobilier-piles';
+const STACKS_LABEL_ID = 'immobilier-piles-nombre';
+/** Zoom à partir duquel les pastilles apparaissent (on y distingue les points voisins). */
+const STACKS_FROM_ZOOM = 16;
+/** Au plus autant de ventes dans une fiche (la sélection voyage dans l'adresse) ; le nombre exact reste affiché. */
+const MAX_STACK = 40;
 /** Zone des isochrones (module `isochrones`) : les couches de tuiles passent dessous. */
 const UNDER = 'isochrones-zone';
 
@@ -77,12 +85,27 @@ interface ImmobilierData {
 /** Propriétés d'un objet de tuile : une vente (`mo`, `ty`, `pc`, `sf`, `pr`, `em`) ou un carreau (`n…`, `p…`, `l…`, `h…`). */
 type Props = Record<'mo' | 'ty' | 'pc' | 'sf' | 'pr' | 'em', number> & Record<string, number | undefined>;
 
+/** Une vente d'un point partagé : `[mois, type (0 appartement, 1 maison), pièces, surface, prix, €/m²]`. */
+type Sale = [mo: number, ty: number, pc: number, sf: number, pr: number, em: number];
+/** Ventes d'un même point (positions arrondies à ~20 m : tout un immeuble se retrouve au même endroit). */
+interface StackInfo {
+  /** Nombre total de ventes sur le point. */
+  n: number;
+  /** Les plus récentes d'abord, au plus `MAX_STACK`. */
+  ventes: Sale[];
+}
+
 const fmt = (n: number) => Math.round(n).toLocaleString('fr-FR');
 const fmtSize = (m: number) => (m >= 1000 ? `${(m / 1000).toLocaleString('fr-FR')} km` : `${m} m`);
 const KIND_LABEL: Record<Kind, string> = { a: 'Appartements', m: 'Maisons', t: 'Tous logements' };
 const KIND_LABEL_LOWER: Record<Kind, string> = { a: 'd’appartements', m: 'de maisons', t: 'de logements' };
 
 /** Mois « 2025-12 » → « décembre 2025 ». */
+/** Mois (depuis janvier 2000) → « déc. 2025 ». */
+function shortMonth(mo: number): string {
+  return new Date(Date.UTC(2000 + Math.floor(mo / 12), mo % 12, 1)).toLocaleDateString('fr-FR', { month: 'short', year: 'numeric', timeZone: 'UTC' });
+}
+
 function monthName(label: string): string {
   const [year, month] = label.split('-').map(Number) as [number, number];
   return new Date(Date.UTC(year, month - 1, 1)).toLocaleDateString('fr-FR', { month: 'long', year: 'numeric', timeZone: 'UTC' });
@@ -208,9 +231,66 @@ function refreshViewMedian(map: MapLibreMap): boolean {
 /** Repeint la couche avec les derniers réglages (fixé par `update`). */
 let repaint: (() => void) | null = null;
 
+/** Nom de la couche des tuiles et filtre des ventes affichées (type, période), fixés par `update`. */
+let salesLayer = '';
+let shownPointsFilter: unknown[] | null = null;
+
+const saleOf = (p: Record<string, unknown>): Sale => [Number(p.mo), Number(p.ty), Number(p.pc), Number(p.sf), Number(p.pr), Number(p.em)];
+
+/** Les ventes affichées des tuiles chargées, avec leur position : de quoi regrouper celles qui partagent un point. */
+function loadedSales(map: MapLibreMap): Array<{ lng: number; lat: number; sale: Sale }> {
+  if (!salesLayer || !map.getSource(SOURCE_ID)) return [];
+  const features = map.querySourceFeatures(SOURCE_ID, { sourceLayer: salesLayer, filter: shownPointsFilter as never });
+  const found: Array<{ lng: number; lat: number; sale: Sale }> = [];
+  const seen = new Set<string>();
+  for (const feature of features) {
+    if (feature.geometry.type !== 'Point') continue;
+    const [lng, lat] = feature.geometry.coordinates as [number, number];
+    const sale = saleOf(feature.properties);
+    // Une vente au bord d'une tuile figure dans les deux : on ne la compte qu'une fois.
+    const key = `${lng.toFixed(6)}|${lat.toFixed(6)}|${sale.join(',')}`;
+    if (seen.has(key)) continue;
+    seen.add(key);
+    found.push({ lng, lat, sale });
+  }
+  return found;
+}
+
+/** Les ventes qui partagent le point d'une vente cliquée (la sienne comprise), les plus récentes d'abord. */
+function stackAt(map: MapLibreMap, lng: number, lat: number): StackInfo {
+  const EPS = 2e-6; // ~0,2 m : très en dessous de la grille de 20 m
+  const sales = loadedSales(map)
+    .filter((entry) => Math.abs(entry.lng - lng) < EPS && Math.abs(entry.lat - lat) < EPS)
+    .map((entry) => entry.sale)
+    .sort((a, b) => b[0] - a[0] || b[4] - a[4]);
+  return { n: sales.length, ventes: sales.slice(0, MAX_STACK) };
+}
+
+/** Pastilles « nombre de ventes » sur les points qui en portent plusieurs (zoom ≥ 16, fonds de tuiles chargés). */
+function refreshStacks(map: MapLibreMap): void {
+  const source = map.getSource(STACKS_SOURCE_ID) as { setData(data: unknown): void } | undefined;
+  if (!source) return;
+  const features: unknown[] = [];
+  if (map.getZoom() >= STACKS_FROM_ZOOM) {
+    const groups = new Map<string, { lng: number; lat: number; n: number }>();
+    for (const { lng, lat } of loadedSales(map)) {
+      const key = `${Math.round(lng * 1e5)}|${Math.round(lat * 1e5)}`;
+      const group = groups.get(key);
+      if (group) group.n++;
+      else groups.set(key, { lng, lat, n: 1 });
+    }
+    for (const g of groups.values()) {
+      if (g.n > 1) features.push({ type: 'Feature', properties: { n: g.n }, geometry: { type: 'Point', coordinates: [g.lng, g.lat] } });
+    }
+  }
+  source.setData({ type: 'FeatureCollection', features });
+}
+
 /** La carte s'est arrêtée et ses tuiles sont chargées : si la médiane de la zone a changé, on repeint tout de suite. */
 function onIdle(): void {
-  if (theMap && refreshViewMedian(theMap)) repaint?.();
+  if (!theMap) return;
+  if (refreshViewMedian(theMap)) repaint?.();
+  refreshStacks(theMap);
 }
 
 export const immobilier = defineModule<ImmobilierData>({
@@ -313,7 +393,9 @@ export const immobilier = defineModule<ImmobilierData>({
       const info = sheet.donnees;
       if (!map.getSource(SOURCE_ID)) {
         addTileSource(map, SOURCE_ID, sheet);
-        const before = firstSymbolLayerId(map);
+        const before = fillInsertionId(map);
+        // Les ventes (points) restent visibles au-dessus des bâtiments 3D : sous les textes seulement.
+        const abovePoints = aboveBuildingsId(map);
         const common = { source: SOURCE_ID, 'source-layer': sheet.couche };
         map.addLayer({ id: EXTRUSION_ID, type: 'fill-extrusion', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-extrusion-opacity': 0.88, 'fill-extrusion-vertical-gradient': true } } as never, before);
         map.addLayer({ id: FILL_ID, type: 'fill', ...common, maxzoom: info.pointsDepuis, paint: { 'fill-opacity': 0.8 } } as never, before);
@@ -329,7 +411,37 @@ export const immobilier = defineModule<ImmobilierData>({
               'circle-stroke-width': 1,
             },
           } as never,
-          before,
+          abovePoints,
+        );
+        salesLayer = sheet.couche;
+        // Pastille du nombre de ventes sur un point partagé (sous la vente choisie, au-dessus des points).
+        map.addSource(STACKS_SOURCE_ID, { type: 'geojson', data: { type: 'FeatureCollection', features: [] } });
+        map.addLayer(
+          {
+            id: STACKS_ID,
+            type: 'circle',
+            source: STACKS_SOURCE_ID,
+            minzoom: STACKS_FROM_ZOOM,
+            paint: {
+              'circle-radius': ['interpolate', ['linear'], ['zoom'], 16, 8, 20, 12],
+              'circle-color': '#14141a',
+              'circle-stroke-color': '#ffffff',
+              'circle-stroke-width': 1.5,
+              'circle-translate': [0, -10],
+            },
+          } as never,
+          abovePoints,
+        );
+        map.addLayer(
+          {
+            id: STACKS_LABEL_ID,
+            type: 'symbol',
+            source: STACKS_SOURCE_ID,
+            minzoom: STACKS_FROM_ZOOM,
+            layout: { 'text-field': ['to-string', ['get', 'n']], 'text-font': ['Noto Sans Bold'], 'text-size': 11, 'text-allow-overlap': true, 'text-ignore-placement': true },
+            paint: { 'text-color': '#ffffff', 'text-translate': [0, -10] },
+          } as never,
+          abovePoints,
         );
         const ring = selectionRingLayers(SELECTED_ID, SOURCE_ID, ['==', ['get', 'pr'], -1], [[5, 1.5], [13, 3]]);
         addSelectionRing(map, ring.map((layer) => ({ ...layer, 'source-layer': sheet.couche, maxzoom: info.pointsDepuis }) as never), before);
@@ -349,7 +461,7 @@ export const immobilier = defineModule<ImmobilierData>({
                 'circle-stroke-width': 2 + extra,
               },
             } as never,
-            before,
+            abovePoints,
           );
         }
         shownKey = '';
@@ -379,7 +491,9 @@ export const immobilier = defineModule<ImmobilierData>({
         map.setPaintProperty(EXTRUSION_ID, 'fill-extrusion-base', 0);
         map.setLayoutProperty(EXTRUSION_ID, 'visibility', relief ? 'visible' : 'none');
         map.setLayoutProperty(FILL_ID, 'visibility', relief ? 'none' : 'visible');
-        map.setFilter(POINTS_ID, pointFilter(kind, period, info) as never);
+        shownPointsFilter = pointFilter(kind, period, info);
+        map.setFilter(POINTS_ID, shownPointsFilter as never);
+        refreshStacks(map);
         map.setPaintProperty(POINTS_ID, 'circle-color', colorExpression(['get', 'em'], cuts, night) as never);
         map.setPaintProperty(POINTS_ID, 'circle-stroke-color', night >= 0.5 ? '#14141a' : '#ffffff');
       };
@@ -402,15 +516,26 @@ export const immobilier = defineModule<ImmobilierData>({
       map.off('idle', onIdle);
       current = null;
       repaint = null;
-      for (const id of [`${SELECTED_POINT_ID}-contour`, SELECTED_POINT_ID, ...selectionRingIds(SELECTED_ID), POINTS_ID, FILL_ID, EXTRUSION_ID]) {
+      shownPointsFilter = null;
+      for (const id of [`${SELECTED_POINT_ID}-contour`, SELECTED_POINT_ID, ...selectionRingIds(SELECTED_ID), STACKS_LABEL_ID, STACKS_ID, POINTS_ID, FILL_ID, EXTRUSION_ID]) {
         if (map.getLayer(id)) map.removeLayer(id);
       }
+      if (map.getSource(STACKS_SOURCE_ID)) map.removeSource(STACKS_SOURCE_ID);
       if (map.getSource(SOURCE_ID)) map.removeSource(SOURCE_ID);
       shownKey = '';
     },
     pickable: {
       layerIds: [POINTS_ID, FILL_ID, EXTRUSION_ID],
-      toObject: (feature) => ({ ...(feature.properties as object), zoom: theMap?.getZoom() ?? viewZoom }),
+      toObject: (feature) => {
+        const object: Record<string, unknown> = { ...(feature.properties as object), zoom: theMap?.getZoom() ?? viewZoom };
+        // Plusieurs ventes sur le même point : la fiche les liste toutes (la plus récente d'abord).
+        if (theMap && feature.layer.id === POINTS_ID && feature.geometry.type === 'Point') {
+          const [lng, lat] = feature.geometry.coordinates as [number, number];
+          const stack = stackAt(theMap, lng, lat);
+          if (stack.n > 1) object.pile = stack;
+        }
+        return object;
+      },
     },
   },
 
@@ -427,6 +552,34 @@ export const immobilier = defineModule<ImmobilierData>({
     const source = plainStatus('DGFiP, DVF ; Etalab');
     const link = { href: sheet.explorateur, label: 'Explorateur officiel des valeurs foncières' };
     const national = (kind: Kind) => sheet.national[`${kind}5`].mediane;
+
+    const stack = (selection as { pile?: StackInfo }).pile;
+    if (p.pr > 0 && stack && stack.n > 1) {
+      // Plusieurs ventes sur le même point (un immeuble, un lotissement) : la liste, la plus récente d'abord.
+      const rows = stack.ventes.map((sale) => {
+        const [mo, ty, pc, sf, pr, em] = sale;
+        return {
+          cells: [shortMonth(mo), `${ty === 1 ? 'Maison' : 'Appart.'} ${fmt(sf)} m²${pc > 0 ? ` · ${pc} p.` : ''}`, fmt(pr), fmt(em)],
+          select: { mo, ty, pc, sf, pr, em } satisfies Props,
+        };
+      });
+      const ems = stack.ventes.map((sale) => sale[5]).sort((a, b) => a - b);
+      const mid = ems[Math.floor(ems.length / 2)] ?? 0;
+      const more = stack.n > stack.ventes.length ? ` (les ${stack.ventes.length} plus récentes)` : '';
+      return {
+        kind: 'Ventes · même point',
+        title: `${stack.n} ventes à cet endroit`,
+        subtitle: `${shortMonth(stack.ventes[stack.ventes.length - 1]![0])} à ${shortMonth(stack.ventes[0]![0])}`,
+        status: source,
+        figures: [
+          { value: fmt(stack.n), label: 'ventes' },
+          { value: fmt(mid), unit: '€/m²', label: 'médiane de ce point' },
+        ],
+        tables: [{ title: `Ventes${more}`, columns: ['Mois', 'Bien (surface, pièces)', 'Prix €', '€/m²'], rows }],
+        note: 'Position arrondie à une vingtaine de mètres (conditions de réutilisation de la DGFiP) : toutes les ventes d’un même immeuble se retrouvent au même point. Date réduite au mois, aucune adresse. Cliquez une ligne pour le détail d’une vente.',
+        link,
+      };
+    }
 
     if (p.pr > 0) {
       // Une vente.

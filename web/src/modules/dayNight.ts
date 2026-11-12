@@ -13,7 +13,7 @@
  */
 import type { CanvasSource, Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule } from '../core/module';
-import { DAY_SKY, firstSymbolLayerId, setNight } from '../map/baseMap';
+import { DAY_SKY, aboveBuildingsId, setNight } from '../map/baseMap';
 import { NIGHT_FADE_FROM_ZOOM, NIGHT_FADE_TO_ZOOM } from '../map/calmStyle';
 import { clock } from '../core/clock';
 import { nightAmount, subsolarPoint, sunPosition } from './solar';
@@ -242,7 +242,7 @@ export const dayNight = defineModule<undefined>({
             'raster-opacity': ['interpolate', ['linear'], ['zoom'], NIGHT_FADE_FROM_ZOOM, 1, NIGHT_FADE_TO_ZOOM, 0],
           },
         },
-        firstSymbolLayerId(map),
+        aboveBuildingsId(map), // au-dessus des photos anciennes (qui passent au-dessus des bâtiments), sous les textes
       );
       // En revenant de près à loin, le voile n'a pas suivi l'heure : on le remet à jour.
       onZoomEnd = () => {

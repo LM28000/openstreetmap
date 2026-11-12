@@ -12,7 +12,7 @@ import type { Map as MapLibreMap } from 'maplibre-gl';
 import { defineModule, type InfoContent, type ModuleSetting } from '../core/module';
 import { ModuleManager } from '../core/moduleManager';
 import { plainStatus } from '../core/infoStatus';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { aboveBuildingsId } from '../map/baseMap';
 import { createCurtainLayer, type CurtainLayer, type Vintage } from './aerialCurtain';
 import './aerialCurtain.css';
 
@@ -303,8 +303,9 @@ export const aerialPhotos = defineModule<undefined>({
   native: {
     add(map) {
       const layer = createCurtainLayer(LAYER_ID, VINTAGES[0]!);
-      // Sous l'ombre de la nuit si elle est là, sinon sous les étiquettes.
-      const before = map.getLayer('jour-nuit') ? 'jour-nuit' : firstSymbolLayerId(map);
+      // Sous l'ombre de la nuit si elle est là, sinon sous les étiquettes. Au-dessus des bâtiments d'aujourd'hui : des tours
+      // de La Défense sur une photo de 1955 seraient un contresens (et leurs toits laissaient des plaques blanches).
+      const before = map.getLayer('jour-nuit') ? 'jour-nuit' : aboveBuildingsId(map);
       map.addLayer(layer, before);
       // Crédit dans le cartouche de la carte : une source vide, jamais dessinée, qui porte la mention.
       map.addSource(CREDIT_SOURCE, {

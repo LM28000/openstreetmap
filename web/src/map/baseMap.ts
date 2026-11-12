@@ -173,6 +173,27 @@ export function firstSymbolLayerId(map: MapLibreMap): string | undefined {
   return map.getStyle().layers.find((layer) => layer.type === 'symbol')?.id;
 }
 
+/**
+ * Point d'insertion des aplats de tuiles (élections, prix, population, zone des isochrones) : au-dessus des routes
+ * **et des ponts** du fond, sous les bâtiments et les noms. Insérés avant le premier texte, les aplats passaient sous
+ * les couches « bridge_* » (posées après les routes), et de courts traits blancs de ponts perçaient la couleur.
+ */
+export function fillInsertionId(map: MapLibreMap): string | undefined {
+  for (const id of ['building', 'building-3d', 'boundary_3']) if (map.getLayer(id)) return id;
+  return firstSymbolLayerId(map);
+}
+
+/**
+ * Point d'insertion des marques ponctuelles (ventes, pastilles) : au-dessus des bâtiments 3D, sous les textes.
+ * (Le premier texte du style est une flèche de sens unique, sous les ponts et les bâtiments.)
+ */
+export function aboveBuildingsId(map: MapLibreMap): string | undefined {
+  const layers = map.getStyle().layers;
+  const roof = layers.findIndex((layer) => layer.id === 'building-3d' || layer.id === 'building');
+  const from = roof < 0 ? 0 : roof;
+  return layers.slice(from).find((layer) => layer.type === 'symbol')?.id ?? firstSymbolLayerId(map);
+}
+
 function existingLayerOr(map: MapLibreMap, id: string): string | undefined {
   return map.getLayer(id) ? id : firstSymbolLayerId(map);
 }

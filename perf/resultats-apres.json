@@ -1,0 +1,38 @@
+{
+ "paris-z14-p55": {
+  "frames": 295,
+  "moyen_ms": 16.9,
+  "p95_ms": 16.8,
+  "cpu_ms_img": 11.5,
+  "script_ms_img": 10.4,
+  "couchesStyle": 114,
+  "canvas": 2880
+ },
+ "lyon-z15-p60": {
+  "frames": 284,
+  "moyen_ms": 17.5,
+  "p95_ms": 16.8,
+  "cpu_ms_img": 13.4,
+  "script_ms_img": 12.1,
+  "couchesStyle": 114,
+  "canvas": 2880
+ },
+ "france-z6": {
+  "frames": 299,
+  "moyen_ms": 16.7,
+  "p95_ms": 16.7,
+  "cpu_ms_img": 3.8,
+  "script_ms_img": 3.3,
+  "couchesStyle": 114,
+  "canvas": 2880
+ },
+ "alpes-z11": {
+  "frames": 298,
+  "moyen_ms": 16.7,
+  "p95_ms": 16.8,
+  "cpu_ms_img": 8.1,
+  "script_ms_img": 7.1,
+  "couchesStyle": 114,
+  "canvas": 2880
+ }
+}

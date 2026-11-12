@@ -15,7 +15,8 @@
 //! - `HOST` (127.0.0.1) et `PORT` (8787) : adresse d'écoute ;
 //! - `DATA_DIR` (../data) : où ranger les fichiers téléchargés ;
 //! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel et enregistre l'historique des avions, bateaux et transports ;
-//! - `HISTORIQUE_JOURS` (7) : durée de conservation des positions enregistrées, en jours (l'archive SNCF est gardée) ;
+//! - `HISTORIQUE_JOURS` (7) : durée de conservation des positions enregistrées, en jours ;
+//! - `ARCHIVE_SNCF_JOURS` (180) : durée de conservation de l'archive brute du temps réel SNCF (0 = sans limite) ;
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `TUILES_EFFACER_SOURCES` (aucune) : si définie, la source d'un jeu de tuiles est effacée après sa fabrication ;

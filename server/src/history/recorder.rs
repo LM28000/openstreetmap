@@ -360,22 +360,27 @@ impl History {
         merge_spans(spans, MERGE_GAP_S)
     }
 
-    /// Supprime les jours entièrement plus vieux que la durée de conservation, dans les dossiers des couches
-    /// seulement. L'archive brute du temps réel SNCF (`sncf-trip-updates`) est gardée sans limite : c'est la mémoire
-    /// longue des retards, à analyser plus tard. Rend le nombre de dossiers supprimés.
+    /// Supprime les jours entièrement plus vieux que leur durée de conservation : `retention_days` pour les positions
+    /// enregistrées des couches, `ARCHIVE_SNCF_JOURS` (180 par défaut, 0 = sans limite) pour l'archive brute du temps
+    /// réel SNCF (`sncf-trip-updates`, ~120 Mo par jour : la mémoire longue des retards). Rend le nombre de dossiers supprimés.
     pub fn purge(&self, now: i64) -> usize {
         let cutoff = now - self.retention_days * 86_400;
         let mut removed = 0;
-        let folders: Vec<PathBuf> = Layer::ALL.iter().map(|l| self.layer_dir(*l)).collect();
-        for folder in folders {
+        let mut folders: Vec<(PathBuf, i64)> = Layer::ALL.iter().map(|l| (self.layer_dir(*l), self.retention_days)).collect();
+        let sncf_days = std::env::var("ARCHIVE_SNCF_JOURS").ok().and_then(|v| v.trim().parse::<i64>().ok()).unwrap_or(180);
+        if sncf_days > 0 {
+            folders.push((self.dir.join(super::trains::ARCHIVE_FOLDER), sncf_days.max(self.retention_days)));
+        }
+        for (folder, days_kept) in folders {
+            let folder_cutoff = now - days_kept * 86_400;
             let Ok(days) = std::fs::read_dir(&folder) else { continue };
             for day in days.flatten() {
                 let Some(start) = day.file_name().to_str().and_then(parse_day) else { continue };
-                if start + 86_400 <= cutoff {
+                if start + 86_400 <= folder_cutoff {
                     match std::fs::remove_dir_all(day.path()) {
                         Ok(()) => {
                             removed += 1;
-                            info!(dossier = %day.path().display(), "historique : jour supprimé (conservation de {} jours)", self.retention_days);
+                            info!(dossier = %day.path().display(), "historique : jour supprimé (conservation de {days_kept} jours)");
                         }
                         Err(error) => warn!(dossier = %day.path().display(), "historique : suppression impossible : {error}"),
                     }

@@ -2009,6 +2009,73 @@ p {
   }
 }
 
+/* Courbe de la fiche (InfoChart) : niveau de la mer, etc. */
+.chart {
+  display: grid;
+  gap: 4px;
+  margin: 0;
+}
+
+.chart__title {
+  color: var(--ui-muted);
+  font-size: 11.5px;
+}
+
+.chart svg {
+  display: block;
+  width: 100%;
+  height: auto;
+  overflow: visible;
+}
+
+.chart__axis {
+  fill: var(--ui-faint);
+  font-family: var(--font-data);
+  font-size: 9.5px;
+}
+
+.chart__grid {
+  stroke: var(--ui-line);
+  stroke-width: 1;
+}
+
+.chart__line {
+  fill: none;
+  stroke: #8cc8f2;
+  stroke-width: 1.8;
+  stroke-linejoin: round;
+  stroke-linecap: round;
+}
+
+.chart__area {
+  fill: rgba(140, 200, 242, 0.16);
+  stroke: none;
+}
+
+.chart__forecast {
+  fill: none;
+  stroke: #8cc8f2;
+  stroke-width: 1.6;
+  stroke-dasharray: 3 3;
+  opacity: 0.8;
+}
+
+.chart__now {
+  stroke: var(--ui-ink);
+  stroke-width: 1;
+  opacity: 0.55;
+}
+
+.chart__dot {
+  fill: #0e121b;
+  stroke: #8cc8f2;
+  stroke-width: 1.5;
+}
+
+.chart__dot--estimated {
+  stroke-dasharray: 2 2;
+}
+
 @media (prefers-reduced-motion: reduce) {
   *,
   *::before,

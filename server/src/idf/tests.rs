@@ -207,3 +207,84 @@ fn le_rer_est_rapproche_par_identifiant_et_son_retard_est_exact() {
     assert!(update.delay_known);
     assert_eq!(update.stops.iter().map(|s| s.departure.unwrap().delay).collect::<Vec<_>>(), [Some(120), Some(180)]);
 }
+
+// ───────────────────────── Bus ─────────────────────────
+
+const BUS_CALENDAR: &str = "service_id,monday,tuesday,wednesday,thursday,friday,saturday,sunday,start_date,end_date\nIDFM:1,1,1,1,1,1,1,1,20260101,20261231\nIDFM:2,0,0,0,0,0,0,0,20260101,20261231\n";
+/// Le service `IDFM:2` ne roule que le mercredi 11 novembre 2026, lendemain de la date des tests.
+const BUS_CALENDAR_DATES: &str = "service_id,date,exception_type\nIDFM:2,20261111,1\n";
+const BUS_TRIPS: &str = "route_id,service_id,trip_id,trip_headsign\n\
+IDFM:C00033,IDFM:1,IDFM:BUS:1,Gare\n\
+IDFM:C00033,IDFM:1,IDFM:BUS:2,Gare\n\
+IDFM:C00033,IDFM:1,IDFM:BUS:3,Gare\n\
+IDFM:C00033,IDFM:2,IDFM:BUS:DEMAIN,Gare\n";
+/// Trois bus de la ligne 740 passent à 12:00, 12:10 et 12:20 à l'arrêt 100, puis 3 et 6 minutes plus tard aux deux suivants ; un quatrième ne roule que demain.
+const BUS_STOP_TIMES: &str = "trip_id,arrival_time,departure_time,stop_id,stop_sequence\n\
+IDFM:BUS:1,12:00:00,12:00:00,IDFM:100,0\nIDFM:BUS:1,12:03:00,12:03:00,IDFM:101,1\nIDFM:BUS:1,12:06:00,12:06:00,IDFM:102,2\n\
+IDFM:BUS:2,12:10:00,12:10:00,IDFM:100,0\nIDFM:BUS:2,12:13:00,12:13:00,IDFM:101,1\nIDFM:BUS:2,12:16:00,12:16:00,IDFM:102,2\n\
+IDFM:BUS:3,12:20:00,12:20:00,IDFM:100,0\nIDFM:BUS:3,12:23:00,12:23:00,IDFM:101,1\nIDFM:BUS:3,12:26:00,12:26:00,IDFM:102,2\n\
+IDFM:BUS:DEMAIN,07:00:00,07:00:00,IDFM:100,0\nIDFM:BUS:DEMAIN,07:03:00,07:03:00,IDFM:101,1\nIDFM:BUS:DEMAIN,07:06:00,07:06:00,IDFM:102,2\n";
+
+fn bus_schedule(name: &str, all_days: bool) -> Schedule {
+    let zip = fixture::tisseo_zip_with(
+        name,
+        &[
+            ("agency.txt".into(), AGENCY.into()),
+            ("calendar.txt".into(), BUS_CALENDAR.into()),
+            ("calendar_dates.txt".into(), BUS_CALENDAR_DATES.into()),
+            ("routes.txt".into(), ROUTES.into()),
+            ("stops.txt".into(), STOPS.into()),
+            ("trips.txt".into(), BUS_TRIPS.into()),
+            ("stop_times.txt".into(), BUS_STOP_TIMES.into()),
+            ("shapes.txt".into(), "shape_id,shape_pt_lat,shape_pt_lon,shape_pt_sequence\n".into()),
+        ],
+    );
+    let config = config(&["bus"]);
+    gtfs_compact::build_days(&zip.0, fixture::paris("2026-11-10T12:00:00"), &|info| config.keeps(info), &|info| if all_days { gtfs_compact::ALL_DAYS } else { config.service_days(info) }, None).unwrap()
+}
+
+#[test]
+fn les_bus_ne_gardent_pas_les_courses_qui_ne_roulent_que_demain() {
+    let all = bus_schedule("bus-tous", true);
+    assert_eq!(all.trip_count(), 4, "tous les jours : la course de demain est là");
+    let today = bus_schedule("bus-aujourdhui", false);
+    assert_eq!(today.trip_count(), 3, "sans « demain » : seules les courses d'aujourd'hui");
+    assert!(today.trips.iter().all(|t| !t.id.contains("DEMAIN")));
+    assert!(today.approx_bytes() < all.approx_bytes());
+    // Le métro, lui, garde les trois jours.
+    let both = config(&["metro", "bus"]);
+    let metro = schedule("jours-metro");
+    assert!(metro.routes.iter().all(|r| both.service_days(r) == crate::gtfs_compact::ALL_DAYS));
+    assert!(all.routes.iter().all(|r| both.service_days(r) == 0b011));
+}
+
+#[test]
+fn des_bus_qui_se_suivent_a_dix_minutes_sont_chacun_rapproches_de_leur_course() {
+    let schedule = bus_schedule("bus-suite", false);
+    let now = fixture::paris("2026-11-10T12:08:00");
+    // Un SIRI de bus (quais `StopPoint:Q`, heures théoriques données) : le 1er avec 6 minutes de retard (il est à l'heure du 2e !), le 2e avec 1 minute, le 3e à l'heure.
+    let first = journey("C00033", "509_KGPVM:VehicleJourney::3853623:LOC", Some("STIF:StopPoint:Q:102:"), vec![call("STIF:StopPoint:Q:101:", "2026-11-10T12:09:00", Some("2026-11-10T12:03:00")), call("STIF:StopPoint:Q:102:", "2026-11-10T12:12:00", Some("2026-11-10T12:06:00"))]);
+    let second = journey("C00033", "509_KGPVM:VehicleJourney::3853624:LOC", Some("STIF:StopPoint:Q:102:"), vec![call("STIF:StopPoint:Q:101:", "2026-11-10T12:14:00", Some("2026-11-10T12:13:00")), call("STIF:StopPoint:Q:102:", "2026-11-10T12:17:00", Some("2026-11-10T12:16:00"))]);
+    let third = journey("C00033", "509_KGPVM:VehicleJourney::3853625:LOC", Some("STIF:StopPoint:Q:102:"), vec![call("STIF:StopPoint:Q:100:", "2026-11-10T12:20:00", Some("2026-11-10T12:20:00")), call("STIF:StopPoint:Q:101:", "2026-11-10T12:23:00", Some("2026-11-10T12:23:00"))]);
+    let journeys = parse_siri(&siri(vec![third, second, first]), &|route| route == "IDFM:C00033").unwrap();
+    let (realtime, stats) = match_journeys(&schedule, &journeys, now);
+    assert_eq!((stats.journeys, stats.by_stops, stats.unmatched), (3, 3, 0));
+    // Chacun a la course dont l'heure *théorique* est la sienne, quel que soit son retard : 6 minutes de retard ne font pas du 1er le 2e.
+    let delay_at = |trip: &str, sequence: u32| realtime.trips[trip][0].stops.iter().find(|s| s.stop_sequence == Some(sequence)).unwrap().arrival.unwrap().delay;
+    assert_eq!(delay_at("IDFM:BUS:1", 1), Some(360));
+    assert_eq!(delay_at("IDFM:BUS:2", 1), Some(60));
+    assert_eq!(delay_at("IDFM:BUS:3", 1), Some(0));
+    assert!(realtime.trips.values().all(|updates| updates[0].delay_known));
+}
+
+#[test]
+fn un_bus_sans_heure_theorique_est_rapproche_par_ses_heures_prevues() {
+    let schedule = bus_schedule("bus-sans-theorique", false);
+    let now = fixture::paris("2026-11-10T12:08:00");
+    // Sans heure théorique, le retard est confondu avec l'écart d'horaire : 1 minute de retard reste attribuable à la bonne course (écart de 4 minutes toléré).
+    let bus = journey("C00033", "509_KGPVM:VehicleJourney::inconnu:LOC", Some("STIF:StopPoint:Q:102:"), vec![call("STIF:StopPoint:Q:101:", "2026-11-10T12:14:00", None), call("STIF:StopPoint:Q:102:", "2026-11-10T12:17:00", None)]);
+    let (realtime, stats) = match_journeys(&schedule, &parse_siri(&siri(vec![bus]), &|_| true).unwrap(), now);
+    assert_eq!(stats.by_stops, 1);
+    assert!(realtime.trips.contains_key("IDFM:BUS:2"));
+    assert!(!realtime.trips["IDFM:BUS:2"][0].delay_known, "sans heure théorique : pas de retard affiché");
+}

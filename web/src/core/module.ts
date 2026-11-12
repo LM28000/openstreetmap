@@ -150,6 +150,26 @@ export interface InfoContent {
    * un module ne les déclare pas). `link` s'affiche à la suite, avec le même style.
    */
   actions?: InfoAction[];
+  /** Courbe sous les chiffres clés (niveau de la mer sur 48 h, par exemple). */
+  chart?: InfoChart;
+}
+
+/** Courbe de la fiche : des mesures, un prolongement estimé en pointillés, un repère « maintenant » et des repères nommés. */
+export interface InfoChart {
+  /** Légende au-dessus de la courbe (« Niveau de la mer, 48 h »). */
+  title: string;
+  /** Unité de l'axe vertical (« m »). */
+  unit: string;
+  /** Mesures : `[instant en ms, valeur]`. Une valeur `null` est un trou. */
+  points: ReadonlyArray<readonly [number, number | null]>;
+  /** Prolongement estimé, tracé en pointillés. */
+  forecast?: ReadonlyArray<readonly [number, number]>;
+  /** Instant simulé, repéré par un trait vertical. */
+  now?: number;
+  /** Repères (pleines et basses mers) : un point et sa valeur. */
+  marks?: ReadonlyArray<{ t: number; value: number; high: boolean; estimated?: boolean }>;
+  /** Texte alternatif de la courbe, pour les lecteurs d'écran. */
+  summary: string;
 }
 
 /**

@@ -430,6 +430,16 @@ pub fn build(path: &Path, now: i64, guided_only: bool) -> Result<Schedule> {
 /// Comme `build`, avec le choix des lignes gardées (`keep`) et un plafond de courses facultatif (`max_trips` : au-delà,
 /// l'erreur « trop de courses »).
 pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_trips: Option<usize>) -> Result<Schedule> {
+    build_days(path, now, keep, &|_| ALL_DAYS, max_trips)
+}
+
+/// Les trois jours de service gardés (`Trip::days`) : hier, aujourd'hui, demain.
+pub const ALL_DAYS: u8 = 0b111;
+
+/// Comme `build_with`, avec en plus les jours de service gardés pour chaque ligne (`days_of`, masque de `Trip::days`) : une course qui
+/// ne roule aucun de ces jours n'est pas lue du tout (ni ses horaires, ni son motif). Les bus d'Île-de-France ne gardent pas « demain » :
+/// c'est ce qui fait leur poids (voir `idf.rs`).
+pub fn build_days(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, days_of: &dyn Fn(&RouteInfo) -> u8, max_trips: Option<usize>) -> Result<Schedule> {
     let mut zip = Zip::open(path)?;
     let tz = network_zone(&mut zip);
     let today = Timestamp::from_second(now)?.to_zoned(tz.clone()).date();
@@ -467,6 +477,10 @@ pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_
             while reader.read_byte_record(&mut record)? {
                 let Some(&days) = std::str::from_utf8(field(&record, Some(service))).ok().and_then(|s| services.get(s)) else { continue };
                 let Some(&route) = std::str::from_utf8(field(&record, Some(route))).ok().and_then(|r| route_index.get(r)) else { continue };
+                let days = days & days_of(&routes[route as usize]);
+                if days == 0 {
+                    continue;
+                }
                 if max_trips.is_some_and(|max| raw_trips.len() >= max) {
                     return Ok(true);
                 }
@@ -507,6 +521,8 @@ pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_
     })?
     .context("stop_times.txt absent")?;
     rows.sort_unstable_by_key(|r| (r.0, r.1));
+    // Les index par identifiant ne servent plus (des dizaines de Mo pour les bus d'Île-de-France) : on les libère avant le gros du travail.
+    drop(trip_index);
 
     // Arrêts utilisés.
     let mut stops: Vec<Stop> = stop_order.iter().map(|id| Stop { id: text(id).into(), name: "".into(), lon: f64::NAN, lat: f64::NAN }).collect();
@@ -526,20 +542,21 @@ pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_
         Ok(())
     })?
     .context("stops.txt absent")?;
+    drop(stop_index);
 
     // Heures complètes et croissantes de chaque course ; celles qu'on ne sait pas lire sont écartées.
+    // Les heures ne sont pas gardées ici (des millions de paires pour les bus) : on vérifie qu'elles sont lisibles, on les recalcule plus bas.
     struct Built {
         raw: u32,
         rows: std::ops::Range<usize>,
-        times: Vec<(i32, i32)>,
     }
     let mut built: Vec<Built> = Vec::new();
     let mut at = 0;
     while at < rows.len() {
         let raw = rows[at].0;
         let end = at + rows[at..].iter().take_while(|r| r.0 == raw).count();
-        if let Some(times) = complete_times(&rows[at..end]).filter(|_| rows[at..end].len() >= 2 && rows[at..end].iter().all(|r| stops[r.2 as usize].lat.is_finite())) {
-            built.push(Built { raw, rows: at..end, times });
+        if complete_times(&rows[at..end]).is_some() && rows[at..end].len() >= 2 && rows[at..end].iter().all(|r| stops[r.2 as usize].lat.is_finite()) {
+            built.push(Built { raw, rows: at..end });
         }
         at = end;
     }
@@ -588,7 +605,8 @@ pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_
     let mut times: Vec<u16> = Vec::new();
     for b in &built {
         let raw = &raw_trips[b.raw as usize];
-        let (start, end) = (b.times[0].0, b.times[b.times.len() - 1].0);
+        let Some(b_times) = complete_times(&rows[b.rows.clone()]) else { continue };
+        let (start, end) = (b_times[0].0, b_times[b_times.len() - 1].0);
         // Hier ne compte que si la course passe minuit.
         let mut days = raw.days;
         if i64::from(end) + day_starts[0] <= day_starts[1] {
@@ -624,7 +642,7 @@ pub fn build_with(path: &Path, now: i64, keep: &dyn Fn(&RouteInfo) -> bool, max_
             })
         });
         let offset = times.len() as u32;
-        for &(arrival, departure) in &b.times {
+        for &(arrival, departure) in &b_times {
             times.push((arrival - start) as u16);
             times.push((departure - start) as u16);
         }

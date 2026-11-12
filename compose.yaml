@@ -32,7 +32,7 @@ services:
       ATMO_PASSWORD: "${ATMO_PASSWORD:-}"
       # Vide = métro, RER, Transilien et tramways d'Île-de-France ignorés. Clé PRIM d'Île-de-France Mobilités : elle ne sort jamais du serveur.
       IDFM_PRIM_API_KEY: "${IDFM_PRIM_API_KEY:-}"
-      # Facultatifs : modes (« metro,tram,train,cable » par défaut ; ajouter « bus » demande environ 100 Mo de plus), intervalle du relevé en secondes (180), budget de mémoire en Mo (100).
+      # Facultatifs : modes (« metro,tram,train,cable » par défaut ; ajouter « bus » demande +80 Mo en permanence et +175 Mo de pic : voir le README, pas avec 1 Go), intervalle du relevé en secondes (180), budget de mémoire en Mo (100).
       IDFM_MODES: "${IDFM_MODES:-}"
       IDFM_INTERVALLE_S: "${IDFM_INTERVALLE_S:-}"
       IDFM_MEMOIRE_MO: "${IDFM_MEMOIRE_MO:-}"

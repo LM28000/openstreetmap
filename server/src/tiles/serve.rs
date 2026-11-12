@@ -337,6 +337,7 @@ pub fn router<S: Clone + Send + Sync + 'static>(registry: Registry) -> Router<S>
     Router::<Registry>::new()
         .route("/api/tuiles/{jeu}", get(sheet))
         .route("/api/tuiles/{jeu}/{version}/{z}/{x}/{y}", get(tile))
+        .route("/api/tuiles/{jeu}/objet/{cle}", get(object))
         // Les données DVF ne doivent pas être indexées par les moteurs de recherche (conditions de réutilisation de la DGFiP) :
         // on le dit pour toutes les tuiles, c'est sans coût.
         .layer(tower_http::set_header::SetResponseHeaderLayer::overriding(
@@ -355,6 +356,15 @@ async fn sheet(State(registry): State<Registry>, UrlPath(id): UrlPath<String>) -
             let building = served.building.load(std::sync::atomic::Ordering::Relaxed);
             (StatusCode::SERVICE_UNAVAILABLE, no_cache, axum::Json(serde_json::json!({ "pret": false, "enCours": building }))).into_response()
         }
+    }
+}
+
+/// Ce que les tuiles ne portent pas (voir `Dataset::lookup`) : les listes d'une commune aux municipales.
+async fn object(State(registry): State<Registry>, UrlPath((id, key)): UrlPath<(String, String)>) -> Response {
+    let Some(served) = registry.find(&id) else { return (StatusCode::NOT_FOUND, "jeu de tuiles inconnu").into_response() };
+    match served.dataset.lookup(&key) {
+        Some(value) => ([(header::CACHE_CONTROL, "public, max-age=3600")], axum::Json(value)).into_response(),
+        None => (StatusCode::NOT_FOUND, "objet inconnu").into_response(),
     }
 }
 

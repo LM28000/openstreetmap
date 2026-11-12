@@ -110,6 +110,15 @@ impl Config {
     }
 }
 
+impl Config {
+    /// Les jours de service gardés pour une ligne (masque de `Trip::days` : hier, aujourd'hui, demain). Les bus, qui font l'essentiel du
+    /// poids des horaires, ne gardent pas « demain » : une course qui ne roule que demain est lue au changement de jour, quand le GTFS est
+    /// relu (le SIRI ne l'annonce qu'à l'approche de son départ). Le métro, le RER et le tramway, peu nombreux, gardent les trois.
+    pub fn service_days(&self, info: &RouteInfo) -> u8 {
+        if info.mode == Some("bus") { 0b011 } else { crate::gtfs_compact::ALL_DAYS }
+    }
+}
+
 /// « A » → « RER A », « H » → « Transilien H » (le GTFS ne distingue les deux que par l'exploitant) ; le reste est inchangé.
 pub fn decorate(schedule: &mut Schedule) {
     for route in &mut schedule.routes {
@@ -553,3 +562,5 @@ pub fn match_journeys(schedule: &Schedule, journeys: &[Journey], now: i64) -> (R
 
 #[cfg(test)]
 pub(crate) mod tests;
+#[cfg(test)]
+mod measure;

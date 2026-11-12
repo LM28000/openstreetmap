@@ -553,7 +553,7 @@ async fn load_slot(http: &reqwest::Client, data_dir: &Path, shared: &Shared, slo
         let prim_config = shared.prim.clone().filter(|_| prim);
         let built = tokio::task::spawn_blocking(move || match prim_config {
             // Île-de-France : les modes choisis, sans plafond de courses (voir `idf.rs`).
-            Some(config) => gtfs_compact::build_with(&path, now, &|info| config.keeps(info), None).map(|mut schedule| {
+            Some(config) => gtfs_compact::build_days(&path, now, &|info| config.keeps(info), &|info| config.service_days(info), None).map(|mut schedule| {
                 idf::decorate(&mut schedule);
                 schedule
             }),

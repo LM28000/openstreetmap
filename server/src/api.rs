@@ -13,6 +13,7 @@
 //! - `GET /api/monuments` : monuments historiques (base Mérimée, ministère de la Culture), JSON déjà compressé en gzip.
 //! - `GET /api/trafic` : événements routiers (Bison Futé) ; `GET /api/trafic/etat` : état de la circulation.
 //! - `GET /api/vigilance` : vigilance météo par département (Météo-France).
+//! - `GET /api/marees` : niveau de la mer aux marégraphes (Shom, REFMAR), 48 h de mesures et estimation des marées.
 //! - `GET /api/air` : indice ATMO de qualité de l'air par commune, et épisodes de pollution (Atmo France / AASQA).
 //! - `GET /api/trains?from=…&to=…` : les trains qui roulent entre deux instants
 //!   (secondes UTC), avec leurs arrêts et leurs horaires prévus et réels. Le
@@ -79,6 +80,7 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
         .route("/api/trafic", get(|State(state): State<AppState>| async move { prepared(state.traffic(), "trafic") }))
         .route("/api/trafic/etat", get(|State(state): State<AppState>| async move { prepared(state.traffic_state(), "état du trafic") }))
         .route("/api/vigilance", get(|State(state): State<AppState>| async move { prepared(state.vigilance(), "vigilance") }))
+        .route("/api/marees", get(|State(state): State<AppState>| async move { prepared(state.tides(), "marées") }))
         .route("/api/air", get(air))
         .route("/api/satellites/starlink", get(|State(state): State<AppState>| async move { prepared(state.starlink(), "Starlink") }))
         .route("/api/vent", get(|State(state): State<AppState>| async move { prepared(state.wind(), "vent") }))

@@ -45,7 +45,7 @@ use super::proj::Crs;
 use super::{Cell, Dataset, Feature, Finalize, Generalizer, GridAggregator, Geometry, Value};
 
 /// Millésime des données (affiché et dans l'identifiant de version : changer de millésime refait les tuiles).
-const VINTAGE: &str = "2019";
+pub const VINTAGE: &str = "2019";
 const DEFAULT_URL: &str = "https://www.insee.fr/fr/statistiques/fichier/7655475/Filosofi2019_carreaux_200m_csv.zip";
 const ZIP_NAME: &str = "carreaux_200m_csv.zip";
 /// Côté des blocs alignés sur la grille qui servent de seaux : tous les carreaux d'un bloc se retrouvent dans le même seau,
@@ -188,6 +188,17 @@ impl Population {
         }
         Ok(count)
     }
+}
+
+/// La grille compacte de la dernière fabrication publiée de `population` dans `data_dir` : lue d'après la fiche
+/// `tuiles/population.json` (la même que le serveur), pour les jeux qui croisent leurs données avec les habitants
+/// (`couverture`, voir `Dataset::depends_on`).
+pub fn published_grid(data_dir: &Path) -> Result<std::path::PathBuf> {
+    let dir = data_dir.join("tuiles");
+    let manifest: serde_json::Value =
+        serde_json::from_str(&std::fs::read_to_string(dir.join("population.json")).context("fiche de la population absente")?)?;
+    let version = manifest["version"].as_str().context("fiche de la population sans version")?;
+    Ok(Population::grid_file(&dir, version))
 }
 
 /// `CRS3035RES200mN2029800E4252400` → (repère, côté, nord, est).

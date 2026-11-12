@@ -15,7 +15,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -48,7 +48,34 @@ pub fn response() -> Response {
 }
 
 fn publish(body: Vec<u8>) {
+    // L'analyse de zone (`analyse.rs`) compte les monuments d'un contour : on garde leurs positions, relues de la réponse.
+    match build_index(&body) {
+        Ok(index) => *INDEX.write().expect("verrou de l'index des monuments") = Some(Arc::new(index)),
+        Err(error) => warn!("monuments : index pour l'analyse de zone impossible : {error:#}"),
+    }
     *BODY.write().expect("verrou des monuments") = Some(Bytes::from(body));
+}
+
+/// Position (degrés), catégorie (`category`) et protection (`protection`) de chaque monument : 12 octets (45 000 : 0,5 Mo).
+pub struct Index {
+    pub points: Vec<(f32, f32, u8, u8)>,
+}
+
+static INDEX: RwLock<Option<Arc<Index>>> = RwLock::new(None);
+
+/// L'index des monuments, une fois la base chargée.
+pub fn index() -> Option<Arc<Index>> {
+    INDEX.read().expect("verrou de l'index des monuments").clone()
+}
+
+fn build_index(gzipped: &[u8]) -> Result<Index> {
+    use serde::de::IgnoredAny as X;
+    #[derive(serde::Deserialize)]
+    struct Body {
+        monuments: Vec<(X, f64, f64, u8, u8, X, X, X, X, X, X, X)>,
+    }
+    let body: Body = serde_json::from_reader(flate2::read::GzDecoder::new(gzipped)).context("réponse des monuments illisible")?;
+    Ok(Index { points: body.monuments.iter().map(|m| (m.1 as f32, m.2 as f32, m.3, m.4)).collect() })
 }
 
 /// Fait vivre la couche : relit le cache s'il est récent, sinon télécharge, puis recommence la semaine suivante.

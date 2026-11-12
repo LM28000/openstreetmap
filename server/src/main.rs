@@ -27,6 +27,7 @@
 
 mod accidents;
 mod air;
+mod analyse;
 mod api;
 mod bikes;
 mod dem;

@@ -201,6 +201,13 @@ pub trait Dataset: Send + Sync {
     fn attribution(&self) -> &'static str;
     fn license(&self) -> &'static str;
 
+    /// Jeux dont la fabrication doit être terminée avant celle-ci (par exemple `couverture` croise ses carreaux avec la grille
+    /// de `population`). Le serveur attend que leur archive du millésime courant soit sur le disque, **sans** tenir la file
+    /// des fabrications (sinon, chacun attendrait l'autre).
+    fn depends_on(&self) -> &'static [&'static str] {
+        &[]
+    }
+
     /// S'assure que la source est dans `dir` (la télécharge si elle manque).
     fn acquire<'a>(&'a self, http: &'a reqwest::Client, dir: &'a Path) -> Pin<Box<dyn Future<Output = Result<()>> + Send + 'a>>;
     /// Lit la source **en flux** et appelle `emit` pour chaque objet.

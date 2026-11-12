@@ -59,6 +59,26 @@ pub struct Archive {
     sheet: serde_json::Value,
 }
 
+impl Archive {
+    /// Zooms minimal et maximal de l'archive.
+    pub fn zooms(&self) -> (u8, u8) {
+        let header = self.reader.header();
+        (header.min_zoom, header.max_zoom)
+    }
+
+    /// Les données propres au jeu (`metadata()` du jeu : tailles de carreaux par zoom, colonnes…), comme dans la fiche du site.
+    pub fn data(&self) -> &serde_json::Value {
+        &self.sheet["donnees"]
+    }
+
+    /// Une tuile, décompressée et lue (`None` s'il n'y en a pas : mer, zone vide). Sert à l'analyse de zone (`analyse.rs`).
+    pub fn read(&self, z: u8, x: u32, y: u32) -> Result<Option<Vec<super::mvt::ReadLayer>>> {
+        let Some(bytes) = self.reader.tile(z, x, y)? else { return Ok(None) };
+        let raw = super::pmtiles::gunzip(&bytes)?;
+        Ok(Some(super::mvt::read_tile(&raw).context("tuile illisible")?))
+    }
+}
+
 struct Served {
     dataset: Arc<dyn Dataset>,
     archive: RwLock<Option<Arc<Archive>>>,
@@ -129,6 +149,11 @@ impl Registry {
         &self.0.population
     }
 
+    /// L'archive en service d'un jeu (pour l'analyse de zone), si elle est prête.
+    pub fn archive(&self, id: &str) -> Option<Arc<Archive>> {
+        self.find(id)?.archive.read().expect("verrou de l'archive").clone()
+    }
+
     fn find(&self, id: &str) -> Option<&Served> {
         self.0.sets.iter().find(|s| s.dataset.id() == id)
     }
@@ -164,6 +189,7 @@ impl Registry {
         }
         served.building.store(true, std::sync::atomic::Ordering::Relaxed);
         loop {
+            self.wait_for_dependencies(dataset.as_ref(), &data_dir).await;
             match self.build(&dataset, &http, &data_dir).await {
                 Ok(()) => match self.load(served, &data_dir) {
                     Ok(true) => break,
@@ -175,6 +201,36 @@ impl Registry {
             tokio::time::sleep(Duration::from_secs(3600)).await;
         }
         served.building.store(false, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    /// Attend que les jeux dont `dataset` dépend (`Dataset::depends_on`) aient fini : leur fiche, sur le disque, porte la
+    /// version courante. On lit le disque plutôt que l'état en mémoire : cela marche aussi si leur archive n'est pas mise
+    /// en service par ce serveur (`TUILES_JEUX`). Appelé **avant** de prendre la file des fabrications : celle du jeu
+    /// dont on dépend en a besoin pour avancer.
+    async fn wait_for_dependencies(&self, dataset: &dyn Dataset, data_dir: &Path) {
+        let mut told = false;
+        loop {
+            let missing: Vec<&str> = dataset
+                .depends_on()
+                .iter()
+                .copied()
+                .filter(|id| {
+                    let Some(dep) = self.find(id) else { return false }; // jeu inconnu : on ne bloque pas
+                    let manifest = std::fs::read_to_string(tiles_dir(data_dir).join(format!("{id}.json")))
+                        .ok()
+                        .and_then(|text| serde_json::from_str::<Manifest>(&text).ok());
+                    !manifest.is_some_and(|m| m.version == version_of(dep.dataset.as_ref()))
+                })
+                .collect();
+            if missing.is_empty() {
+                return;
+            }
+            if !told {
+                told = true;
+                info!(jeu = dataset.id(), attend = ?missing, "tuiles : fabrication en attente des jeux dont elle dépend");
+            }
+            tokio::time::sleep(Duration::from_secs(5)).await;
+        }
     }
 
     /// Télécharge la source puis lance la fabrication dans un processus enfant.

@@ -251,6 +251,195 @@ pub fn decode_geometry(commands: &[u32]) -> Vec<Vec<[i32; 2]>> {
     rings
 }
 
+// ---------------------------------------------------------------------------------------------
+// Lecture d'une tuile (pour l'analyse de zone : on relit les archives que l'on a écrites)
+// ---------------------------------------------------------------------------------------------
+
+/// Un objet lu dans une tuile : sa géométrie (commandes brutes, voir `decode_geometry`) et ses propriétés en paires
+/// (indice de clé, indice de valeur) dans les tables de sa couche.
+pub struct ReadFeature {
+    pub geom_type: u8,
+    pub geometry: Vec<u32>,
+    tags: Vec<u32>,
+}
+
+/// Une couche lue : les clés et les valeurs sont dédupliquées, les objets y renvoient par indices.
+pub struct ReadLayer {
+    pub name: String,
+    pub keys: Vec<String>,
+    values: Vec<Value>,
+    pub features: Vec<ReadFeature>,
+}
+
+impl ReadLayer {
+    /// Indice d'une clé de propriété (à chercher une fois par tuile, pas une fois par objet).
+    pub fn key(&self, name: &str) -> Option<u32> {
+        self.keys.iter().position(|k| k == name).map(|i| i as u32)
+    }
+
+    /// La valeur de la propriété `key` (indice donné par `key`) d'un objet.
+    pub fn get(&self, feature: &ReadFeature, key: u32) -> Option<&Value> {
+        feature.tags.chunks_exact(2).find(|pair| pair[0] == key).and_then(|pair| self.values.get(pair[1] as usize))
+    }
+
+    /// Une propriété numérique (entière ou flottante), 0 si elle manque.
+    pub fn number(&self, feature: &ReadFeature, key: u32) -> f64 {
+        match self.get(feature, key) {
+            Some(Value::Int(i)) => *i as f64,
+            Some(Value::Float(f)) => f64::from(*f),
+            Some(Value::Bool(b)) => f64::from(u8::from(*b)),
+            _ => 0.0,
+        }
+    }
+
+    pub fn text(&self, feature: &ReadFeature, key: u32) -> Option<&str> {
+        match self.get(feature, key) {
+            Some(Value::Str(s)) => Some(s),
+            _ => None,
+        }
+    }
+}
+
+/// Curseur sur un message protobuf : le miroir en lecture de `put_varint`, `put_key` et `put_bytes`.
+struct Cursor<'a> {
+    data: &'a [u8],
+    at: usize,
+}
+
+impl<'a> Cursor<'a> {
+    fn varint(&mut self) -> Option<u64> {
+        let (mut value, mut shift) = (0u64, 0);
+        loop {
+            let byte = *self.data.get(self.at)?;
+            self.at += 1;
+            value |= u64::from(byte & 0x7f) << shift;
+            if byte & 0x80 == 0 {
+                return Some(value);
+            }
+            shift += 7;
+            if shift > 63 {
+                return None;
+            }
+        }
+    }
+
+    /// Le champ suivant : `(numéro, type de fil)`, ou `None` à la fin du message.
+    fn key(&mut self) -> Option<(u32, u8)> {
+        if self.at >= self.data.len() {
+            return None;
+        }
+        let key = self.varint()?;
+        Some(((key >> 3) as u32, (key & 7) as u8))
+    }
+
+    fn bytes(&mut self) -> Option<&'a [u8]> {
+        let len = self.varint()? as usize;
+        let slice = self.data.get(self.at..self.at.checked_add(len)?)?;
+        self.at += len;
+        Some(slice)
+    }
+
+    /// Passe un champ dont on ne veut pas.
+    fn skip(&mut self, wire: u8) -> Option<()> {
+        match wire {
+            0 => self.varint().map(|_| ()),
+            1 => self.advance(8),
+            2 => self.bytes().map(|_| ()),
+            5 => self.advance(4),
+            _ => None,
+        }
+    }
+
+    fn advance(&mut self, n: usize) -> Option<()> {
+        (self.at + n <= self.data.len()).then(|| self.at += n)
+    }
+
+    fn fixed32(&mut self) -> Option<[u8; 4]> {
+        let out = self.data.get(self.at..self.at + 4)?.try_into().ok()?;
+        self.at += 4;
+        Some(out)
+    }
+
+    fn packed(&mut self) -> Option<Vec<u32>> {
+        let mut inner = Cursor { data: self.bytes()?, at: 0 };
+        let mut out = Vec::new();
+        while inner.at < inner.data.len() {
+            out.push(inner.varint()? as u32);
+        }
+        Some(out)
+    }
+}
+
+fn read_value(data: &[u8]) -> Option<Value> {
+    let mut c = Cursor { data, at: 0 };
+    let mut out = None;
+    while let Some((field, wire)) = c.key() {
+        out = match (field, wire) {
+            (1, 2) => Some(Value::Str(String::from_utf8_lossy(c.bytes()?).into())),
+            (2, 5) => Some(Value::Float(f32::from_le_bytes(c.fixed32()?))),
+            (3, 1) => {
+                let bytes: [u8; 8] = c.data.get(c.at..c.at + 8)?.try_into().ok()?;
+                c.at += 8;
+                Some(Value::Float(f64::from_le_bytes(bytes) as f32))
+            }
+            (4, 0) | (5, 0) => Some(Value::Int(c.varint()? as i64)),
+            (6, 0) => {
+                let z = c.varint()?;
+                Some(Value::Int(((z >> 1) as i64) ^ -((z & 1) as i64)))
+            }
+            (7, 0) => Some(Value::Bool(c.varint()? != 0)),
+            _ => {
+                c.skip(wire)?;
+                out
+            }
+        };
+    }
+    out
+}
+
+fn read_feature(data: &[u8]) -> Option<ReadFeature> {
+    let mut c = Cursor { data, at: 0 };
+    let mut feature = ReadFeature { geom_type: 0, geometry: Vec::new(), tags: Vec::new() };
+    while let Some((field, wire)) = c.key() {
+        match (field, wire) {
+            (2, 2) => feature.tags = c.packed()?,
+            (3, 0) => feature.geom_type = c.varint()? as u8,
+            (4, 2) => feature.geometry = c.packed()?,
+            _ => c.skip(wire)?,
+        }
+    }
+    Some(feature)
+}
+
+fn read_layer(data: &[u8]) -> Option<ReadLayer> {
+    let mut c = Cursor { data, at: 0 };
+    let mut layer = ReadLayer { name: String::new(), keys: Vec::new(), values: Vec::new(), features: Vec::new() };
+    while let Some((field, wire)) = c.key() {
+        match (field, wire) {
+            (1, 2) => layer.name = String::from_utf8_lossy(c.bytes()?).into_owned(),
+            (2, 2) => layer.features.push(read_feature(c.bytes()?)?),
+            (3, 2) => layer.keys.push(String::from_utf8_lossy(c.bytes()?).into_owned()),
+            (4, 2) => layer.values.push(read_value(c.bytes()?)?),
+            _ => c.skip(wire)?,
+        }
+    }
+    Some(layer)
+}
+
+/// Lit une tuile non compressée : ses couches, ou `None` si le protobuf est invalide.
+pub fn read_tile(bytes: &[u8]) -> Option<Vec<ReadLayer>> {
+    let mut c = Cursor { data: bytes, at: 0 };
+    let mut layers = Vec::new();
+    while let Some((field, wire)) = c.key() {
+        if (field, wire) == (3, 2) {
+            layers.push(read_layer(c.bytes()?)?);
+        } else {
+            c.skip(wire)?;
+        }
+    }
+    Some(layers)
+}
+
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
@@ -344,6 +533,26 @@ pub(crate) mod tests {
         let rings = decode_geometry(&layer.features[0].geometry);
         assert_eq!(rings, vec![vec![[10, 10], [110, 10], [110, 110], [10, 110]], vec![[40, 40], [40, 80], [80, 80], [80, 40]]]);
         assert_eq!(decode_geometry(&layer.features[1].geometry), vec![vec![[-5, 4100]]]);
+    }
+
+    #[test]
+    fn notre_lecteur_relit_ce_que_notre_encodeur_ecrit() {
+        let bytes = encode_tile(&[sample_layer()]);
+        let layers = read_tile(&bytes).expect("tuile lisible");
+        assert_eq!(layers.len(), 1);
+        let layer = &layers[0];
+        assert_eq!((layer.name.as_str(), layer.features.len()), ("test", 2));
+        let (nom, n, ratio, ok) = (layer.key("nom").unwrap(), layer.key("n").unwrap(), layer.key("ratio").unwrap(), layer.key("ok").unwrap());
+        let f = &layer.features[0];
+        assert_eq!(layer.text(f, nom), Some("carré"));
+        assert_eq!(layer.number(f, n), -42.0);
+        assert_eq!(layer.number(f, ratio), 0.25);
+        assert_eq!(layer.number(f, ok), 1.0);
+        assert_eq!(f.geom_type, 3);
+        assert_eq!(decode_geometry(&layer.features[1].geometry), vec![vec![[-5, 4100]]]);
+        assert!(layer.key("absente").is_none());
+        // Une tuile tronquée ne fait pas paniquer.
+        let _ = read_tile(&bytes[..bytes.len() / 2]);
     }
 
     #[test]

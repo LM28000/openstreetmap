@@ -136,6 +136,19 @@ impl PopGrid {
         self.pop.iter().map(|&p| f64::from(p)).sum()
     }
 
+    /// Visite chaque carreau : `(est, nord du coin sud-ouest, habitants)`, en mètres LAEA. C'est l'opération inverse de
+    /// `build` : la grille compacte (une case de 1 km + un octet de position) redonne les coordonnées exactes.
+    pub fn for_each_cell(&self, mut visit: impl FnMut(i32, i32, f32)) {
+        for case in 0..(self.w as usize * self.h as usize) {
+            let (col, row) = ((case % self.w as usize) as i32, (case / self.w as usize) as i32);
+            let (e_case, n_case) = ((self.e0 + col) * BUCKET_M, (self.n0 + row) * BUCKET_M);
+            for k in self.offsets[case] as usize..self.offsets[case + 1] as usize {
+                let (ix, iy) = (i32::from(self.pos[k]) / PER_SIDE, i32::from(self.pos[k]) % PER_SIDE);
+                visit(e_case + ix * CELL_M, n_case + iy * CELL_M, self.pop[k]);
+            }
+        }
+    }
+
     /// Habitants atteints en `limit_s` secondes, par tranche de `band_s`.
     pub fn reach(&self, sources: &[Source], limit_s: i32, band_s: i32) -> Reach {
         let band_count = ((limit_s + band_s - 1) / band_s).max(1) as usize;
@@ -248,6 +261,18 @@ mod tests {
         let cells: Vec<(i32, i32, f32)> =
             (0..20).flat_map(|i| (0..20).map(move |j| (3_000_000 + i * 200, 2_000_000 + j * 200, 10.0))).collect();
         PopGrid::build(&cells)
+    }
+
+    #[test]
+    fn la_visite_redonne_les_carreaux_de_la_construction() {
+        let cells = vec![(3_000_200, 2_000_400, 7.0), (2_999_800, 1_999_600, 3.0), (3_004_800, 2_003_800, 1.5)];
+        let grid = PopGrid::build(&cells);
+        let mut seen = Vec::new();
+        grid.for_each_cell(|e, n, p| seen.push((e, n, p)));
+        seen.sort_by_key(|c| (c.0, c.1));
+        let mut expected = cells.clone();
+        expected.sort_by_key(|c| (c.0, c.1));
+        assert_eq!(seen, expected);
     }
 
     #[test]

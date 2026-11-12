@@ -12,9 +12,14 @@
  * `q` et `s` empaquettent les quatre opérateurs (7 bits chacun) : MapLibre n'a pas d'opérations binaires dans ses
  * expressions, on lit l'opérateur `i` par `floor(v / 128^i) % 128`.
  *
- * Deux vues, toutes deux à plat :
+ * Trois familles de vues, toutes à plat :
  * - « Nombre d'opérateurs » (0 à 4) : une couleur par nombre ;
- * - un opérateur : sa qualité de couverture (aucune, limitée, bonne, très bonne).
+ * - un opérateur : sa qualité de couverture (aucune, limitée, bonne, très bonne) ;
+ * - « Habitants sans 4G » : le nombre de personnes qui vivent dans un carreau où aucun opérateur n'a la 4G. Le serveur a croisé
+ *   la grille de population (200 m) avec celle de la couverture (250 m) : chaque carreau porte `hp` (ses habitants), `h0` (ceux
+ *   qui n'ont aucun opérateur en 4G) et `h1` (un seul). Ce sont des **comptes** : ils s'additionnent d'un zoom à l'autre, alors
+ *   que la carte colore une **densité** (habitants sans 4G par km²), la seule grandeur qui garde le même sens quand la taille
+ *   des carreaux change avec le zoom. Elle est calculée par zoom (voir `peopleExpression`).
  *
  * Couleur : une seule teinte (vert olive), et **la carence est la plus visible** : zéro opérateur, ou aucune couverture, est
  * le plus foncé sur le fond clair (le plus clair sur le fond sombre), la bonne couverture s'efface. Ce ne sont pas les couleurs
@@ -60,8 +65,17 @@ interface TechStats {
   zoneBlancheKm2: number;
 }
 
+/** Habitants de la France métropolitaine selon le nombre d'opérateurs qui couvrent leur carreau en 4G (croisement de deux grilles). */
+interface PeopleStats {
+  total: number;
+  /** Habitants couverts par 0, 1, 2, 3 ou 4 opérateurs. */
+  parNombre: number[];
+}
+
 interface CoverageSheet {
   trimestre: string;
+  /** Absent des archives faites avant le croisement avec la population. */
+  habitants?: PeopleStats;
   /** Date butoir des cartes, `AAAA-MM-JJ`. */
   date: string;
   terreKm2: number;
@@ -81,6 +95,11 @@ interface Cell {
 }
 
 const fmt = (n: number) => Math.round(n).toLocaleString('fr-FR');
+/** Part en pour cent, avec une décimale sous 10 % (« 0,4 % », « 12 % »). */
+const pct = (part: number, whole: number) => {
+  const value = whole > 0 ? (100 * part) / whole : 0;
+  return `${value.toLocaleString('fr-FR', { maximumFractionDigits: value < 10 ? 1 : 0 })} %`;
+};
 const fmtSize = (m: number) => (m >= 1000 ? `${(m / 1000).toLocaleString('fr-FR')} km` : `${m} m`);
 
 /** L'opérateur `i` (0 à 3) dans un entier empaqueté (4 × 7 bits). */
@@ -110,8 +129,36 @@ function cellSize(sheet: CoverageSheet, ring: Array<[number, number]>): number {
   return sizes.reduce((best, size) => (Math.abs(Math.log(size / span)) < Math.abs(Math.log(best / span)) ? size : best), sizes[0] ?? 250);
 }
 
-/** Couleur d'un carreau : le nombre d'opérateurs, ou la qualité d'un opérateur. */
+/** Habitants sans 4G par km² : les quatre crans de la vue « Habitants sans 4G » (zéro : le carreau reste transparent). */
+const PEOPLE_CUTS = [1, 5, 25];
+const PEOPLE_LABELS = ['Moins de 1 hab./km² sans 4G', '1 à 5 hab./km²', '5 à 25 hab./km²', 'Plus de 25 hab./km²'];
+/** Zooms des tuiles (côté des carreaux : 250 m au zoom 11, il double à chaque zoom perdu : voir `cell_size` côté serveur). */
+const MIN_ZOOM = 4;
+const MAX_ZOOM = 11;
+const cellSideM = (zoom: number) => 250 * 2 ** (MAX_ZOOM - zoom);
+
+/**
+ * Couleur d'un carreau de la vue « Habitants sans 4G » : sa densité de personnes sans 4G, `h0 / km²`.
+ *
+ * Une expression MapLibre ne connaît pas le côté du carreau : il dépend du zoom des tuiles. On le fait entrer par la porte permise :
+ * un `step` sur `['zoom']` au niveau le plus haut de l'expression, dont chaque branche est une expression sur les propriétés avec
+ * la surface de ce zoom écrite en dur. Les tuiles de zoom `z` s'affichent de `z` à `z + 1` (arrondi à l'entier inférieur).
+ */
+function peopleExpression(night: boolean): unknown[] {
+  const ramp = night ? NIGHT_RAMP : DAY_RAMP;
+  const colors = [ramp[1], ramp[2], ramp[3], ramp[4]];
+  const forZoom = (zoom: number): unknown[] => {
+    const km2 = (cellSideM(zoom) / 1000) ** 2;
+    return ['step', ['/', ['get', 'h0'], km2], 'rgba(0,0,0,0)', 0.01, colors[0], PEOPLE_CUTS[0], colors[1], PEOPLE_CUTS[1], colors[2], PEOPLE_CUTS[2], colors[3]];
+  };
+  const stops: unknown[] = [];
+  for (let zoom = MIN_ZOOM + 1; zoom <= MAX_ZOOM; zoom++) stops.push(zoom, forZoom(zoom));
+  return ['step', ['zoom'], forZoom(MIN_ZOOM), ...stops];
+}
+
+/** Couleur d'un carreau : le nombre d'opérateurs, la qualité d'un opérateur, ou les habitants sans 4G. */
 function colorExpression(tech: Tech, view: string, night: boolean): unknown[] {
+  if (view === 'habitants') return peopleExpression(night);
   const ramp = night ? NIGHT_RAMP : DAY_RAMP;
   const p = PREFIX[tech];
   const operator = VIEW_OPERATOR[view];
@@ -167,6 +214,7 @@ export const couverture = defineModule<CoverageData>({
         { value: 'sfr', label: 'SFR' },
         { value: 'bouygues', label: 'Bouygues' },
         { value: 'free', label: 'Free' },
+        { value: 'habitants', label: 'Habitants sans 4G' },
       ],
     },
   ],
@@ -177,6 +225,10 @@ export const couverture = defineModule<CoverageData>({
 
   legend(settings) {
     const { view } = readSettings(settings);
+    if (view === 'habitants') {
+      const ramp = [DAY_RAMP[1]!, DAY_RAMP[2]!, DAY_RAMP[3]!, DAY_RAMP[4]!];
+      return ramp.map((color, i): LegendItem => ({ color, label: PEOPLE_LABELS[i]! }));
+    }
     if (VIEW_OPERATOR[view] === undefined) {
       const labels = ['4 opérateurs', '3 opérateurs', '2 opérateurs', '1 opérateur', 'Aucun opérateur (zone blanche)'];
       return DAY_RAMP.map((color, i): LegendItem => ({ color, label: labels[i]! }));
@@ -192,7 +244,13 @@ export const couverture = defineModule<CoverageData>({
     const s = stats[tech];
     if (!s) return null;
     const blanche = s.nbOperateurs[0] ?? 0;
-    return `${TECH_LABEL[tech]} : ${blanche.toLocaleString('fr-FR')} % du territoire sans aucun opérateur (${fmt(s.zoneBlancheKm2)} km² sur ${fmt(terreKm2)}) · cartes théoriques ARCEP, ${trimestre.replace(' ', ' ')}`;
+    const { habitants } = data.sheet.donnees;
+    // Le chiffre qui parle : combien de personnes, pas combien de kilomètres carrés (la zone blanche est presque déserte).
+    const people =
+      habitants && habitants.total > 0
+        ? ` · ${fmt(habitants.parNombre[0] ?? 0)} habitants (${pct(habitants.parNombre[0] ?? 0, habitants.total)}) sans 4G, ${fmt(habitants.parNombre[1] ?? 0)} (${pct(habitants.parNombre[1] ?? 0, habitants.total)}) avec un seul opérateur`
+        : '';
+    return `${TECH_LABEL[tech]} : ${blanche.toLocaleString('fr-FR')} % du territoire sans aucun opérateur (${fmt(s.zoneBlancheKm2)} km² sur ${fmt(terreKm2)})${people} · cartes théoriques ARCEP, ${trimestre.replace(' ', ' ')}`;
   },
 
   native: {
@@ -290,8 +348,11 @@ export const couverture = defineModule<CoverageData>({
     const note = [
       'Cartes théoriques : des simulations des opérateurs, publiées sous le contrôle de l’ARCEP, pas des mesures.',
       aggregated ? `Carreau agrégé (${fmtSize(size)}) : ${white4} % de sa surface sans opérateur en 4G.` : 'Très bonne : dedans comme dehors ; limitée : plutôt dehors.',
+      p.hp ? `Habitants : carreaux INSEE de 200 m, rattachés au carreau de couverture qui contient leur centre${p.h1 ? ` ; ${fmt(p.h1)} n'ont qu'un seul opérateur en 4G` : ''}.` : '',
       'Voix = 2G et 3G ; pas de 5G publiée.',
-    ].join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
 
     return {
       kind: `Couverture mobile · carreau de ${fmtSize(size)}`,
@@ -301,6 +362,8 @@ export const couverture = defineModule<CoverageData>({
       figures: [
         { value: countText('4g'), unit: 'sur 4', label: aggregated ? '4G, en moyenne' : 'opérateurs en 4G' },
         { value: countText('voix'), unit: 'sur 4', label: aggregated ? 'voix, en moyenne' : 'opérateurs en voix' },
+        // Les habitants du carreau (grille INSEE) qui n'ont aucun opérateur en 4G : absent des archives plus anciennes.
+        ...(p.h0 === undefined ? [] : [{ value: fmt(p.h0), unit: 'hab.', label: `sans 4G, sur ${fmt(p.hp ?? 0)}` }]),
       ],
       tables: [
         {

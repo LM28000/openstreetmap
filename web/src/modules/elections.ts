@@ -602,3 +602,6 @@ export const elections = defineModule<ElectionsData>({
     };
   },
 });
+
+/** Pour le panneau d'analyse de zone (`ui/ZonePanel.tsx`) : les scrutins, leurs colonnes et les couleurs des familles. */
+export { BLOCS, SCRUTINS, type Column, type ScrutinDef };

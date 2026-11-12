@@ -28,7 +28,7 @@ use std::borrow::Cow;
 use std::collections::HashMap;
 use std::io::Write;
 use std::path::{Path, PathBuf};
-use std::sync::RwLock;
+use std::sync::{Arc, RwLock};
 use std::time::Duration;
 
 use anyhow::{Context, Result, bail};
@@ -73,7 +73,45 @@ pub fn response() -> Response {
 }
 
 fn publish(body: Vec<u8>) {
+    // L'analyse de zone (`analyse.rs`) a besoin des positions : on en garde une copie compacte, relue de la réponse.
+    match build_index(&body) {
+        Ok(index) => *INDEX.write().expect("verrou de l'index des accidents") = Some(Arc::new(index)),
+        Err(error) => warn!("accidents : index pour l'analyse de zone impossible : {error:#}"),
+    }
     *BODY.write().expect("verrou des accidents") = Some(Bytes::from(body));
+}
+
+/// Les accidents pour l'analyse de zone : position (degrés × 10 000), année et personnes par gravité (voir `cnt`), 16 octets chacun
+/// (275 000 accidents : 4,4 Mo). Aucune donnée de plus que la réponse publique `/api/accidents`.
+pub struct Index {
+    pub points: Vec<(i32, i32, u16, u32)>,
+    /// Les années couvertes, dans l'ordre.
+    pub years: Vec<u16>,
+}
+
+static INDEX: RwLock<Option<Arc<Index>>> = RwLock::new(None);
+
+/// L'index des accidents, une fois la collecte faite.
+pub fn index() -> Option<Arc<Index>> {
+    INDEX.read().expect("verrou de l'index des accidents").clone()
+}
+
+fn build_index(gzipped: &[u8]) -> Result<Index> {
+    /// Seules les colonnes utiles sont lues (serde ignore les autres sans les garder).
+    #[derive(serde::Deserialize)]
+    struct Columns {
+        lon: Vec<i32>,
+        lat: Vec<i32>,
+        ts: Vec<u64>,
+        cnt: Vec<u32>,
+        years: Vec<u16>,
+    }
+    let columns: Columns = serde_json::from_reader(flate2::read::GzDecoder::new(gzipped)).context("réponse des accidents illisible")?;
+    if columns.lon.len() != columns.lat.len() || columns.lon.len() != columns.ts.len() || columns.lon.len() != columns.cnt.len() {
+        bail!("colonnes de longueurs différentes");
+    }
+    let points = (0..columns.lon.len()).map(|i| (columns.lon[i], columns.lat[i], (columns.ts[i] / 100_000_000) as u16, columns.cnt[i])).collect();
+    Ok(Index { points, years: columns.years })
 }
 
 /// Fait vivre la couche : relit le cache s'il est récent, sinon collecte, puis recommence le mois suivant.

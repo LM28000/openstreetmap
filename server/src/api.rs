@@ -36,7 +36,7 @@ use axum::body::Bytes;
 use axum::extract::{Path, Query, State};
 use axum::http::{HeaderValue, StatusCode, header};
 use axum::response::IntoResponse;
-use axum::routing::{get, get_service};
+use axum::routing::{get, get_service, post};
 use axum::{Json, Router};
 use jiff::Timestamp;
 use serde::{Deserialize, Serialize};
@@ -76,6 +76,7 @@ pub fn router(state: AppState, web_dir: Option<&std::path::Path>) -> Router {
         .route("/api/bornes", get(|State(state): State<AppState>| async move { prepared(state.irve(), "bornes") }))
         .route("/api/accidents", get(|| async { crate::accidents::response() }))
         .route("/api/monuments", get(|| async { crate::monuments::response() }))
+        .route("/api/analyse", post(crate::analyse::handler))
         .route("/api/trafic", get(|State(state): State<AppState>| async move { prepared(state.traffic(), "trafic") }))
         .route("/api/trafic/etat", get(|State(state): State<AppState>| async move { prepared(state.traffic_state(), "état du trafic") }))
         .route("/api/vigilance", get(|State(state): State<AppState>| async move { prepared(state.vigilance(), "vigilance") }))

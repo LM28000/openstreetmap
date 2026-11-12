@@ -401,6 +401,54 @@ fn gpkg_wkb(blob: &[u8]) -> Result<&[u8]> {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Croiser avec la population : « combien d'habitants sans 4G ? »
+// ---------------------------------------------------------------------------------------------
+
+/// Nombre d'opérateurs 4G d'un carreau (0 à 4), d'après son octet de niveaux (2 bits par opérateur).
+fn operator_count(byte: u8) -> usize {
+    (0..4).filter(|o| (byte >> (2 * o)) & 3 > 0).count()
+}
+
+/// Pose les habitants de la grille INSEE (carreaux de 200 m, `population`) sur la grille de couverture (250 m).
+///
+/// Les deux grilles sont dans le même repère (LAEA, EPSG:3035) mais ne sont pas alignées : 200 et 250 m. On échantillonne
+/// donc la couverture **au centre de chaque carreau de population** : ses habitants vont au carreau de couverture qui
+/// contient ce centre. C'est la même convention que celle de la rastérisation (la couverture d'un carreau est celle de
+/// son centre) : un carreau de population est entièrement « couvert » ou « sans 4G », jamais partagé. L'erreur est
+/// celle de l'échantillonnage : un carreau de 200 m dont le centre est couvert mais dont un coin ne l'est pas compte
+/// couvert, et inversement ; elle se compense sur de grands nombres, mais pas sur un hameau de quelques maisons.
+///
+/// Rend les habitants arrondis par carreau de couverture (accumulés en quarts d'habitant, `u16` : 38 Mo pour toute la France) et remplit les totaux nationaux de `stats` (en habitants
+/// exacts : on n'additionne pas des arrondis). Les habitants viennent de `DATA_DIR/tuiles/population-grille-<version>.bin`,
+/// écrit à la fin de la fabrication de `population` (voir `Dataset::depends_on`).
+fn assign_population(grid: &Grid, stats: &mut Stats) -> Result<Vec<u16>> {
+    let data_dir = PathBuf::from(std::env::var("DATA_DIR").unwrap_or_else(|_| "../data".into()));
+    let path = super::population::published_grid(&data_dir).context("grille de population (fabriquer d'abord `population`)")?;
+    let pop = super::popgrid::PopGrid::read(&path)?;
+    // Habitants par carreau en quarts d'habitant (u16 : jusqu'à 16 000 habitants par carreau de 250 m, bien au-delà du
+    // maximum réel) : une grille f32 ferait 77 Mo au lieu de 38. Les valeurs imputées de l'INSEE sont fractionnaires.
+    let mut per_cell = vec![0u16; grid.w * grid.h];
+    pop.for_each_cell(|e, n, habitants| {
+        let (x, y) = grid.to_cells(f64::from(e) + 100.0, f64::from(n) + 100.0); // centre du carreau de 200 m
+        if x < 0.0 || y < 0.0 || x >= grid.w as f64 || y >= grid.h as f64 {
+            stats.pop_unlocated += f64::from(habitants);
+            return;
+        }
+        let k = y as usize * grid.w + x as usize;
+        per_cell[k] = per_cell[k].saturating_add((habitants * 4.0).round() as u16);
+        stats.pop_by_count[operator_count(grid.levels[0][k])] += f64::from(habitants);
+    });
+    info!(
+        habitants = stats.pop_by_count.iter().sum::<f64>().round(),
+        sans_4g = stats.pop_by_count[0].round(),
+        un_operateur = stats.pop_by_count[1].round(),
+        hors_grille = stats.pop_unlocated.round(),
+        "couverture : habitants croisés avec la 4G"
+    );
+    Ok(per_cell.into_iter().map(|quarters| (f32::from(quarters) / 4.0).round() as u16).collect())
+}
+
+// ---------------------------------------------------------------------------------------------
 // Le jeu de données
 // ---------------------------------------------------------------------------------------------
 
@@ -415,6 +463,10 @@ struct Stats {
     by_count: [[u64; 5]; 2],
     /// Date des cartes (inscrite dans les fichiers).
     date: String,
+    /// Habitants (grille INSEE de 200 m) par nombre d'opérateurs 4G qui couvrent le centre de leur carreau : 0, 1, 2, 3 ou 4.
+    pop_by_count: [f64; 5],
+    /// Habitants dont le carreau n'est pas dans la grille de couverture (aucun, normalement).
+    pop_unlocated: f64,
 }
 
 pub struct Couverture {
@@ -607,16 +659,22 @@ impl Dataset for Couverture {
         "couverture"
     }
     fn keys(&self) -> &'static [&'static str] {
-        &["gq", "gs", "gm", "gz", "vq", "vs", "vm", "vz"]
+        &["gq", "gs", "gm", "gz", "vq", "vs", "vm", "vz", "hp", "h0", "h1"]
     }
     fn zooms(&self) -> (u8, u8) {
         (4, 11)
     }
     fn schema_version(&self) -> u32 {
-        1
+        // 2 : habitants par carreau (`hp`, `h0`, `h1`).
+        2
     }
     fn source_id(&self) -> String {
-        format!("arcep-{QUARTER}|{:?}", self.filters)
+        // Le millésime de la population y est : une autre grille d'habitants change les tuiles.
+        format!("arcep-{QUARTER}|pop-{}|{:?}", super::population::VINTAGE, self.filters)
+    }
+    /// Les habitants viennent de la grille que fabrique `population` : elle doit exister avant.
+    fn depends_on(&self) -> &'static [&'static str] {
+        &["population"]
     }
     fn attribution(&self) -> &'static str {
         "ARCEP, Mon réseau mobile"
@@ -683,15 +741,18 @@ impl Dataset for Couverture {
         }
         info!(secondes = started.elapsed().as_secs(), "couverture : polygones rastérisés");
 
-        // Émission des carreaux : ceux de terre (zones blanches comprises) et ceux couverts (en mer, près des côtes).
+        // Les habitants, posés sur la grille de couverture (une fois les niveaux connus).
         let mut stats = Stats { date, ..Stats::default() };
+        let population = assign_population(&grid, &mut stats)?;
+
+        // Émission des carreaux : ceux de terre (zones blanches comprises), ceux couverts (en mer, près des côtes) et ceux habités.
         let mut emitted = 0u64;
         for j in 0..grid.h {
             for i in 0..grid.w {
                 let k = j * grid.w + i;
                 let (a, v) = (grid.levels[0][k], grid.levels[1][k]);
                 let land = grid.is_land(k);
-                if !land && a == 0 && v == 0 {
+                if !land && a == 0 && v == 0 && population[k] == 0 {
                     continue;
                 }
                 if land {
@@ -709,7 +770,8 @@ impl Dataset for Couverture {
                     }
                 }
                 let cell = Cell { crs: Crs::Laea, e: grid.e0 + i as i32 * CELL_M, n: grid.n0 + j as i32 * CELL_M, size: CELL_M as u32 };
-                emit(Feature { geom: Geometry::Cell(cell), props: vec![Value::Int(i64::from(a)), Value::Int(i64::from(v))], weight: 1.0 })?;
+                let props = vec![Value::Int(i64::from(a)), Value::Int(i64::from(v)), Value::Int(i64::from(population[k]))];
+                emit(Feature { geom: Geometry::Cell(cell), props, weight: 1.0 })?;
                 emitted += 1;
             }
         }
@@ -779,6 +841,12 @@ impl Dataset for Couverture {
             "operateurs": OPERATORS.iter().map(|(_, n)| n).collect::<Vec<_>>(),
             "terreKm2": km2(s.land_cells),
             "stats": techs,
+            // Habitants par nombre d'opérateurs en 4G (croisement avec la grille de population, voir `assign_population`).
+            "habitants": {
+                "total": s.pop_by_count.iter().sum::<f64>().round(),
+                "parNombre": s.pop_by_count.iter().map(|p| p.round()).collect::<Vec<_>>(),
+                "hors": s.pop_unlocated.round(),
+            },
             "tailles": (4..=11).map(|z| serde_json::json!([z, cell_size(z)])).collect::<Vec<_>>(),
         })
     }
@@ -791,7 +859,9 @@ impl Dataset for Couverture {
 /// Nombre de comptes par carreau : `n`, puis par technologie 4 niveaux, 4 « couvert » et « zone blanche ». Le nombre moyen
 /// d'opérateurs n'a pas son compte : c'est la somme des 4 « couvert » (moins il y a de comptes, moins la mémoire du
 /// `GridAggregator` aux zooms bas est grande : il en garde `SUMS` par gros carreau, ~550 000 au zoom 9).
-const SUMS: usize = 1 + 2 * 9;
+/// Les trois derniers comptes sont les habitants : tous, ceux d'un carreau sans 4G, ceux d'un carreau à un seul opérateur 4G.
+const SUMS: usize = 1 + 2 * 9 + 3;
+const POP_SUM: usize = 1 + 2 * 9;
 
 /// Décore un `GridAggregator` : les carreaux de la source portent des octets de niveaux (compacts, 2 entiers : c'est ce
 /// qui est déposé dans les seaux), et `GridAggregator` ne sait qu'additionner des nombres. On éclate donc chaque octet en
@@ -830,6 +900,16 @@ impl Generalizer for Unpack {
                 covered += i64::from(level > 0);
             }
             self.scratch.props[base + 8] = Value::Int(i64::from(covered == 0));
+            if t == 0 {
+                // Habitants du carreau, et ceux qui n'ont aucun (ou un seul) opérateur 4G : des comptes, donc additionnables.
+                let people = match feature.props.get(2) {
+                    Some(Value::Int(v)) => *v,
+                    _ => 0,
+                };
+                self.scratch.props[POP_SUM] = Value::Int(people);
+                self.scratch.props[POP_SUM + 1] = Value::Int(if covered == 0 { people } else { 0 });
+                self.scratch.props[POP_SUM + 2] = Value::Int(if covered == 1 { people } else { 0 });
+            }
         }
         self.inner.push(&self.scratch);
     }
@@ -856,6 +936,10 @@ fn finalize(sums: &[f32], _size: u32) -> (Vec<Value>, f32) {
         let operators: f32 = sums[base + 4..base + 8].iter().sum();
         props.push(Value::Int((10.0 * operators / n).round() as i64));
         props.push(Value::Int((100.0 * sums[base + 8] / n).round() as i64));
+    }
+    // Les habitants : des sommes, pas des ratios (le site divise par la surface s'il veut une densité).
+    for offset in 0..3 {
+        props.push(Value::Int(sums[POP_SUM + offset].round() as i64));
     }
     (props, n)
 }
@@ -982,7 +1066,35 @@ mod tests {
     }
 
     fn cell_with(a: u8, v: u8) -> Feature {
-        Feature { geom: Geometry::Cell(Cell { crs: Crs::Laea, e: 3_760_000, n: 2_890_000, size: 250 }), props: vec![Value::Int(i64::from(a)), Value::Int(i64::from(v))], weight: 1.0 }
+        cell_with_people(a, v, 0)
+    }
+
+    fn cell_with_people(a: u8, v: u8, people: i64) -> Feature {
+        Feature {
+            geom: Geometry::Cell(Cell { crs: Crs::Laea, e: 3_760_000, n: 2_890_000, size: 250 }),
+            props: vec![Value::Int(i64::from(a)), Value::Int(i64::from(v)), Value::Int(people)],
+            weight: 1.0,
+        }
+    }
+
+    #[test]
+    fn les_habitants_sans_4g_s_additionnent_et_ne_se_moyennent_pas() {
+        // Quatre carreaux de 250 m dans un de 500 m : 100 habitants sans 4G, 40 avec un seul opérateur, 60 avec deux (Orange + Free), 800 avec quatre.
+        let mut generalizer: Box<dyn Generalizer> = Box::new(Unpack::new(GridAggregator::new(500, Box::new(finalize))));
+        let all_four = 3 | (3 << 2) | (3 << 4) | (3 << 6);
+        for (k, (byte, people)) in [(0u8, 100i64), (1, 40), (3 | (3 << 6), 60), (all_four, 800)].into_iter().enumerate() {
+            let mut f = cell_with_people(byte, 0, people);
+            if let Geometry::Cell(c) = &mut f.geom {
+                c.e += 250 * (k as i32 % 2);
+                c.n += 250 * (k as i32 / 2);
+            }
+            generalizer.push(&f);
+        }
+        let out = generalizer.finish().to_vec();
+        // Propriétés 8, 9, 10 : habitants, sans 4G, un seul opérateur.
+        assert_eq!(out[0].props[8..], [Value::Int(1000), Value::Int(100), Value::Int(40)]);
+        assert_eq!(operator_count(3 | (3 << 6)), 2);
+        assert_eq!(operator_count(0), 0);
     }
 
     #[test]

@@ -65,7 +65,7 @@ use super::{Cell, Dataset, Feature, FeatureSet, Generalizer, Geometry, Value};
 /// À partir de ce zoom, on montre les ventes (des points) ; avant, des carreaux.
 pub const POINTS_FROM: u8 = 14;
 /// Nombre de classes de l'histogramme des €/m².
-const BINS: usize = 128;
+pub(crate) const BINS: usize = 128;
 /// Une vente a au plus cet âge (en mois, depuis le mois de référence exclu) pour entrer dans « 5 ans » ; « récent » : 12 mois.
 const MAX_AGE: u32 = 60;
 const RECENT_AGE: u32 = 12;
@@ -109,7 +109,7 @@ fn cell_size(zoom: u8) -> u32 {
 // ---------------------------------------------------------------------------------------------
 
 /// Numéro de la classe d'un prix au m². Les prix hors bornes sont ramenés à la première ou à la dernière classe.
-fn bin_of(euro_m2: f64) -> usize {
+pub(crate) fn bin_of(euro_m2: f64) -> usize {
     let position = (euro_m2 / MIN_EURO_M2).ln() / (MAX_EURO_M2 / MIN_EURO_M2).ln() * BINS as f64;
     position.floor().clamp(0.0, (BINS - 1) as f64) as usize
 }

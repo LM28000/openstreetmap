@@ -20,6 +20,7 @@
  * pas dans les réglages, qui sont des listes d'options. L'heure de départ est celle de l'horloge :
  * le calcul est refait quand elle s'écarte de `REQUERY_S` de celle du dernier calcul.
  */
+import { ISO } from '../design/tokens';
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { declutter, halfZoomBreaks, zoomBand } from '../map/declutter';
@@ -40,9 +41,9 @@ import { HALO, KEY, selectionRing, zoomRamp } from './symbols';
  * Jour : le plus proche est le plus foncé, le plus lointain le plus clair (validée avec
  * `validate_palette.js --ordinal` sur le fond clair : ordre monotone, écarts nets, bout clair à 2,2:1).
  */
-const DAY_RAMP = ['#5a0a3a', '#86114f', '#ad2368', '#cc4a86', '#e0709f', '#ec8fb2'];
+const DAY_RAMP = [...ISO.jour].reverse();
 /** Nuit : le proche est le plus clair, le lointain s'estompe (validée de même sur le fond sombre, bout sombre à 2,6:1). */
-const NIGHT_RAMP = ['#fbd0de', '#f4a9c3', '#e982ab', '#d95b92', '#c43a7b', '#a9255f'];
+const NIGHT_RAMP = [...ISO.nuit].reverse();
 const BAND_S = 3600;
 const BAND_LABELS = ['Moins d’1 h', '1 à 2 h', '2 à 3 h', '3 à 4 h', '4 à 5 h', '5 h et plus'];
 /** Opacité de la zone sur le fond (le fond est plus sombre la nuit : un peu plus dense pour rester lisible). */

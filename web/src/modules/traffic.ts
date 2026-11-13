@@ -15,6 +15,7 @@
  * minutes. Les autoroutes concédées (Vinci, APRR, Sanef…) ne sont pas couvertes : leurs
  * événements et leur état ne sont pas publiés en données ouvertes.
  */
+import { STATUS } from '../design/tokens';
 import type { Color } from '@deck.gl/core';
 import { ScatterplotLayer } from '@deck.gl/layers';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
@@ -94,7 +95,7 @@ const JAM = [
   { color: '#764002', label: 'Bouchon très important (5 km et plus) ou trafic à l’arrêt', width: 9 },
 ] as const;
 
-const INK = '#161a26';
+const INK = STATUS.ink;
 const SHAPES: Record<Exclude<Kind, 'bouchon'>, { shape: Shape; label: string; size: number; fill: Color }> = {
   accident: { shape: 'star', label: 'Accident', size: 10, fill: [22, 26, 38] },
   fermeture: { shape: 'square', label: 'Route fermée', size: 8, fill: [22, 26, 38] },

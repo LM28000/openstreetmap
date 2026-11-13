@@ -1,4 +1,4 @@
-# La carte vivante (serveur et site), en service permanent (serveur maison).
+# Vigie (serveur et site), en service permanent (serveur maison).
 #
 #   docker compose up -d --build      installer ou mettre à jour
 #   docker compose logs -f            suivre les journaux

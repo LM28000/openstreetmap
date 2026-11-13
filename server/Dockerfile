@@ -1,4 +1,4 @@
-# Image de la carte vivante : le serveur et le site, dans un seul conteneur.
+# Image de Vigie : le serveur et le site, dans un seul conteneur.
 #
 # Se construit depuis la racine du dépôt (contexte « . », voir compose.yaml) :
 #   docker build -f server/Dockerfile .

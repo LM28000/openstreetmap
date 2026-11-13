@@ -6,6 +6,7 @@ import { formatShortDate, formatTime } from './format';
 import { useClockTime, useModuleStates } from './hooks';
 import { Icon } from './icons';
 import { leadingCount } from './layerInfo';
+import { Mark } from './Mark';
 
 const SEEN_KEY = 'carte-vivante:accueil-vu';
 /** Lignes de l'accueil, dans l'ordre de préférence : ce qui parle d'abord à quelqu'un qui découvre. */
@@ -60,10 +61,13 @@ export function Welcome({ manager, onClose }: WelcomeProps) {
   return (
     <section className="welcome panel" role="dialog" aria-label="Maintenant en France">
       <header className="welcome__head">
-        <span className="kicker">
-          Maintenant en France · <span className="mono">{formatTime(time)}</span>
-        </span>
-        <h2 className="welcome__title">{capitalize(formatShortDate(time))}</h2>
+        <Mark size={40} className="welcome__mark" />
+        <div className="welcome__headtext">
+          <span className="kicker">
+            Maintenant en France · <span className="mono">{formatTime(time)}</span>
+          </span>
+          <h2 className="welcome__title">{capitalize(formatShortDate(time))}</h2>
+        </div>
       </header>
       <ul className="welcome__lines">
         {withSummary.map((module) => {

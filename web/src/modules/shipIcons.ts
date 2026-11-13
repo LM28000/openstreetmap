@@ -16,6 +16,7 @@
  * coque arrondie. Les cellules sont grandes (256 px) pour rester nettes sur un écran haute densité
  * quand on s'approche d'un navire dessiné à sa longueur réelle.
  */
+import { SHIP } from '../design/tokens';
 import type { IconLayerProps } from '@deck.gl/layers';
 
 type IconMapping = NonNullable<IconLayerProps['iconMapping']>;
@@ -26,12 +27,7 @@ export type Family = 'marchandises' | 'passagers' | 'petits' | 'autres';
 export const SHIP_TYPES: readonly ShipType[] = ['cargo', 'tanker', 'ferry', 'peche', 'voilier', 'plaisance', 'remorqueur', 'service'];
 
 /** Palette validée (sur la mer et sur la terre du fond de carte), et un gris pour le reste. */
-export const SHIP_COLORS: Record<Family, string> = {
-  marchandises: '#a3262a',
-  passagers: '#a66b00',
-  petits: '#00897a',
-  autres: '#6b7280',
-};
+export const SHIP_COLORS: Record<Family, string> = { ...SHIP };
 
 export const TYPE_FAMILY: Record<ShipType, Family> = {
   cargo: 'marchandises',

@@ -6,7 +6,7 @@ Merci de **ne pas ouvrir de ticket public** pour une faille de sécurité. Utili
 
 ## Comment les secrets sont gérés
 
-La Carte vivante n'a besoin d'aucun secret pour démarrer. Trois couches utilisent des clés ou des comptes gratuits :
+Vigie n'a besoin d'aucun secret pour démarrer. Trois couches utilisent des clés ou des comptes gratuits :
 
 | Secret | Couche |
 |---|---|

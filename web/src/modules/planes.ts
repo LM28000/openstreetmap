@@ -22,6 +22,7 @@
  * garde donc son altitude). Pas d'extrapolation : le passé se lit entre deux mesures connues. Là où rien n'a
  * été enregistré, la couche se masque et dit pourquoi.
  */
+import { AVION_ALT } from '../design/tokens';
 import type { Color } from '@deck.gl/core';
 import { IconLayer, LineLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type InfoFigure, type LegendItem } from '../core/module';
@@ -164,7 +165,7 @@ const SHADOW_REFRESH_MS = 2_000;
  * validate_palette.js (--ordinal) : écarts de luminosité réguliers, extrémité claire à 2,09:1 sur le
  * fond clair de la carte, extrémité foncée à 2,02:1 sur le panneau sombre de la légende.
  */
-const BAND_COLORS = ['#aca8ff', '#918be5', '#7670c7', '#5d55a9', '#463b8d'] as const;
+const BAND_COLORS = AVION_ALT.jour;
 const GROUND_COLOR = '#cfcdc6';
 const BAND_LABELS = ['Moins de 1 000 m', '1 000 à 3 000 m', '3 000 à 6 000 m', '6 000 à 9 000 m', '9 000 m et plus'] as const;
 const ALERT_COLOR: Color = [229, 72, 77];
@@ -670,7 +671,7 @@ export const planes = defineModule<PlanesData>({
     const models = wants3d(settings) && zoom >= MESH_MIN_ZOOM;
     const meshes = models ? aircraftMeshes() : undefined;
     const grow = (p: Plane) => displayed(p, zoom).spanMeters / SIZING[p.cls].spanMeters;
-    const bandColor = (p: Plane): Color => hexColor(p.band === 'ground' ? GROUND_COLOR : BAND_COLORS[p.band]);
+    const bandColor = (p: Plane): Color => hexColor(p.band === 'ground' ? GROUND_COLOR : BAND_COLORS[p.band]!);
     const ringRadius = (p: Plane) => RING_RADIUS * displayed(p, zoom).spanMeters;
 
     return [

@@ -2,6 +2,7 @@
  * Couleurs de statut partagées par les crues, la vigilance météo et l'état du trafic,
  * et anneau de sélection commun à ces trois couches.
  */
+import { STATUS } from '../design/tokens';
 import type { LayerSpecification, Map as MapLibreMap } from 'maplibre-gl';
 
 /**
@@ -13,14 +14,14 @@ import type { LayerSpecification, Map as MapLibreMap } from 'maplibre-gl';
  * fond sombre, compensé par le contour sombre et la lueur claire des traits.
  */
 export const STATUS_COLORS = {
-  vert: '#0ca30c',
-  jaune: '#f7c325',
-  orange: '#e8702a',
-  rouge: '#b01e32',
+  vert: STATUS.vert,
+  jaune: STATUS.jaune,
+  orange: STATUS.orange,
+  rouge: STATUS.rouge,
 } as const;
 
 /** Encre des contours et des trames. */
-export const STATUS_INK = '#161a26';
+export const STATUS_INK = STATUS.ink;
 
 const RING_OUTLINE_SUFFIX = '-contour';
 

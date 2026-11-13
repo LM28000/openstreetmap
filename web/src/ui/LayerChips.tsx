@@ -42,8 +42,8 @@ export function LayerChips({ manager, onOpenLayer, onOpenCatalog, catalogOpen }:
               type="button"
               className="chip__remove"
               onClick={() => manager.setVisible(module.id, false)}
-              aria-label={`Masquer ${module.name}`}
-              title="Masquer"
+              aria-label={`Retirer ${module.name}`}
+              title="Retirer"
             >
               <Icon name="x" size={14} />
             </button>

@@ -18,6 +18,7 @@
  * Couleurs : la palette officielle de l'indice ATMO (2021), que le public connaît. Elle n'est
  * jamais seule : la légende, la fiche et le résumé donnent le libellé du niveau.
  */
+import { STATUS } from '../design/tokens';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus, scheduledStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
@@ -207,7 +208,7 @@ function episodePhrases(data: AirData, day: string): string[] {
 const SOURCE_ID = 'air';
 const FIELD_ID = 'air-champ';
 const SELECTED_ID = 'air-choisi';
-const INK = '#161a26';
+const INK = STATUS.ink;
 
 /** Rayon des cercles (pixels) d'une commune selon le zoom : se recouvrent de loin, se resserrent de près. */
 const RADIUS: Array<[number, number]> = [[4, 1.4], [5, 2.2], [6, 3.4], [7, 5.5], [8, 8], [9, 11], [10, 14], [12, 17], [15, 20]];

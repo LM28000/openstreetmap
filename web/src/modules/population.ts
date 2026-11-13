@@ -15,6 +15,7 @@
  * Secret statistique : sous 11 ménages fiscaux, l'INSEE publie une valeur imputée (approchée) ; la fiche indique la
  * part d'habitants concernée.
  */
+import { POP } from '../design/tokens';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
@@ -34,8 +35,8 @@ const UNDER = 'isochrones-zone';
  * est le plus clair, comme les autres couches sur le fond sombre. Validées avec `validate_palette.js --ordinal` :
  * ordre monotone, écarts nets, bout faible à 2,0:1 (jour, fond clair) et 2,4:1 (nuit, fond sombre).
  */
-const DAY_RAMP = ['#d8ac6c', '#c58b49', '#aa6c33', '#865027', '#63381d', '#432414', '#2a160c'];
-const NIGHT_RAMP = ['#7d4a2a', '#9a6034', '#b97a40', '#d1975b', '#e3b57f', '#f0cfa6', '#fbeed8'];
+const DAY_RAMP = POP.jour;
+const NIGHT_RAMP = POP.nuit;
 
 /** Seuils de densité (habitants par km²), fixes : une densité moyenne a le même sens à chaque échelle. */
 const DENSITY_STOPS = [10, 50, 200, 1000, 4000, 12000];

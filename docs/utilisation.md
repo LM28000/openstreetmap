@@ -1,4 +1,4 @@
-# Utiliser la carte
+# Utiliser Vigie
 
 Le serveur maison sert la carte en permanence, sur le réseau de la maison : **http://192.168.0.75:8787/**. Aucun programme n'a besoin de tourner sur l'ordinateur qui l'affiche.
 

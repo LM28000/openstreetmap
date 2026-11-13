@@ -1,11 +1,13 @@
-# Carte vivante
+# Vigie
+
+*La France en direct* (anciennement « Carte vivante »).
 
 **Une carte 3D interactive de la France, avec une trentaine de couches en temps réel et de gros jeux de données : trains, avions, bateaux, météo, population, immobilier, élections, couverture mobile… et une frise du temps qui rejoue le passé.**
 
-[![CI](https://github.com/LM28000/openstreetmap/actions/workflows/ci.yml/badge.svg)](https://github.com/LM28000/openstreetmap/actions/workflows/ci.yml)
+[![CI](https://github.com/LM28000/vigie/actions/workflows/ci.yml/badge.svg)](https://github.com/LM28000/vigie/actions/workflows/ci.yml)
 [![Licence MIT](https://img.shields.io/badge/licence-MIT-blue.svg)](LICENSE)
 
-> **In English.** *Carte vivante* ("living map") is an interactive 3D map of France with about 30 live and big-data layers: trains placed on real tracks from SNCF timetables and real-time delays, aircraft (ADS-B) and ships (AIS) as 3D models, weather, population grids, property prices, election results, mobile coverage, and a time slider that replays the past from server-side recordings. It is built with TypeScript, React 19, MapLibre and deck.gl on the front end, and a Rust (axum) server that ingests the data, computes public-transport isochrones (RAPTOR) and serves its own vector-tile engine (MVT and PMTiles). Documentation is in French. The MIT licence covers the code only; every dataset keeps its own licence.
+> **In English.** *Vigie* ("lookout", "la France en direct") is an interactive 3D map of France with about 30 live and big-data layers: trains placed on real tracks from SNCF timetables and real-time delays, aircraft (ADS-B) and ships (AIS) as 3D models, weather, population grids, property prices, election results, mobile coverage, and a time slider that replays the past from server-side recordings. It is built with TypeScript, React 19, MapLibre and deck.gl on the front end, and a Rust (axum) server that ingests the data, computes public-transport isochrones (RAPTOR) and serves its own vector-tile engine (MVT and PMTiles). Documentation is in French. The MIT licence covers the code only; every dataset keeps its own licence.
 
 ![Paris en 3D : bâtiments, ombres du soleil, trains et voies ferrées](docs/images/hero.jpg)
 
@@ -110,7 +112,7 @@ Détails, vérifications et outils : [docs/developpement.md](docs/developpement.
 ### Déploiement : Docker
 
 ```bash
-git clone https://github.com/LM28000/openstreetmap.git carte-vivante && cd carte-vivante
+git clone https://github.com/LM28000/vigie.git vigie && cd vigie
 mkdir -p data archive                  # avant le premier démarrage (sinon Docker les crée au nom de root)
 cp .env.example .env                   # facultatif : adresse d'écoute, clés des couches qui en demandent
 docker compose up -d --build           # le serveur sert aussi le site, sur http://127.0.0.1:8787
@@ -156,6 +158,7 @@ Deux idées structurent le code : **le temps est au cœur du système** (une hor
 | [docs/rendu-3d.md](docs/rendu-3d.md) | Maquettes, éclairage, ombres, performances |
 | [docs/deploiement.md](docs/deploiement.md) | Docker, variables d'environnement, mémoire, volumes |
 | [docs/developpement.md](docs/developpement.md) | Installation, tests, délai de 24 h des dépendances, approche qualité |
+| [design/](design/README.md) | Design system : règles de marque et de rédaction, jetons (couleurs, typographie, espacements, rayons), composants, logo |
 | [docs/feuille-de-route.md](docs/feuille-de-route.md) · [CHANGELOG.md](CHANGELOG.md) | Phases du projet et journal des changements |
 
 ## Données et licences

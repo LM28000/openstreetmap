@@ -9,6 +9,7 @@
  * reposer sur la couleur seule (le rouge et le vert se confondent chez les daltoniens),
  * l'épaisseur du trait augmente aussi avec le niveau, et la fiche donne le libellé.
  */
+import { STATUS } from '../design/tokens';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
@@ -128,7 +129,7 @@ export const floods = defineModule<FloodData>({
           source: SOURCE_ID,
           layout: { 'line-cap': 'round', 'line-join': 'round' },
           paint: {
-            'line-color': '#161a26',
+            'line-color': STATUS.ink,
             'line-opacity': byLevel([0.35, 0.8, 0.85, 0.9]) as never,
             'line-width': ['interpolate', ['linear'], ['zoom'], 5, byLevel([2, 4, 5.5, 7]), 10, byLevel([3.5, 7, 9, 11])] as never,
           },

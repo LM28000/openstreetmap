@@ -20,6 +20,7 @@
  * position est estimée d'après les horaires et non mesurée : même couleur, même forme, seul le
  * contour change.
  */
+import { STATUS } from '../design/tokens';
 import type { IconLayerProps } from '@deck.gl/layers';
 
 type IconMapping = NonNullable<IconLayerProps['iconMapping']>;
@@ -50,7 +51,7 @@ const HALO = 10;
 /** Contour pointillé : plus épais (il perd la moitié de sa surface en tirets) ; tirets et vides en pixels de l'atlas. */
 const HALO_DASHED = 11;
 const DASH: [number, number] = [16, 12];
-const OUTLINE_DARK = '#161a26';
+const OUTLINE_DARK = STATUS.ink;
 
 /** Les éléments du véhicule, centrés sur l'origine, avant en haut. */
 function path(ctx: CanvasRenderingContext2D, kind: Kind): void {

@@ -1,4 +1,4 @@
-//! Serveur de la carte vivante.
+//! Serveur de Vigie.
 //!
 //! - charge les horaires SNCF (GTFS) et les remet à jour quand la SNCF en publie de nouveaux ;
 //! - interroge le flux temps réel SNCF (GTFS-RT) toutes les 30 secondes, et l'archive si demandé ;

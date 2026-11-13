@@ -1,4 +1,4 @@
-# Contribuer à la Carte vivante
+# Contribuer à Vigie
 
 Merci de l'intérêt porté au projet. C'est un projet personnel né pour apprendre : les contributions, les idées de couches et les corrections sont les bienvenues, avec un rythme de réponse qui reste celui d'un projet personnel.
 

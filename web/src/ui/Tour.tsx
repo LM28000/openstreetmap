@@ -4,6 +4,7 @@ import { tour } from '../core/tour';
 import { formatShortDate, formatTime } from './format';
 import { useClockState, useClockTime, useModuleStates } from './hooks';
 import { Icon } from './icons';
+import { Mark } from './Mark';
 
 /** État de la visite guidée, pour l'interface. */
 export function useTour() {
@@ -58,7 +59,7 @@ export function TourPanel({ manager, phone }: { manager: ModuleManager; phone: b
   const when = live ? 'En direct' : `${formatShortDate(time)} · ${formatTime(time)}`;
 
   return (
-    <section ref={ref} className={`tour panel${phone ? ' tour--phone' : ''}`} role="region" aria-label="Visite guidée">
+    <section ref={ref} className={`tour panel${phone ? ' tour--phone' : ''}${ended ? ' tour--ended' : ''}`} role="region" aria-label="Visite guidée">
       <div className="tour__steps" aria-hidden="true">
         {Array.from({ length: state.total }, (_, i) => (
           <span
@@ -77,6 +78,7 @@ export function TourPanel({ manager, phone }: { manager: ModuleManager; phone: b
       </div>
 
       <header className="tour__head">
+        {ended && <Mark size={40} className="tour__mark" />}
         <span className="kicker">
           {ended ? 'Fin de la visite' : state.kicker}{' '}
           {!ended && (
@@ -131,12 +133,13 @@ export function TourPanel({ manager, phone }: { manager: ModuleManager; phone: b
           <Icon name="chevron" size={18} />
         </button>
         <span className="tour__spacer" />
+        {/* Une seule action principale : à la fin, « Recommencer la visite » ; pendant la visite, la lecture. */}
         {ended && (
-          <button type="button" className="btn" onClick={() => tour.restart()}>
-            Recommencer
+          <button type="button" className="btn btn--primary" onClick={() => tour.restart()}>
+            Recommencer<span className="tour__more"> la visite</span>
           </button>
         )}
-        <button type="button" className={`btn${ended ? ' btn--primary' : ''}`} onClick={() => tour.quit()} title="Quitter et retrouver ma vue (Échap)">
+        <button type="button" className="btn" onClick={() => tour.quit()} title="Quitter et retrouver ma vue (Échap)">
           {ended ? 'Terminer' : 'Quitter'}
           {!ended && !phone && <kbd className="tour__kbd">Échap</kbd>}
         </button>

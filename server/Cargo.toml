@@ -3,7 +3,7 @@ name = "carte-vivante-serveur"
 version = "0.1.0"
 edition = "2024"
 publish = false
-description = "Serveur de la carte vivante : horaires et temps réel des trains SNCF"
+description = "Serveur de Vigie : horaires et temps réel des trains SNCF"
 
 [dependencies]
 anyhow = "1.0.104"

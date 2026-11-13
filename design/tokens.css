@@ -1,0 +1,165 @@
+/* Vigie — generated from tokens.json */
+:root, [data-theme="jour"] {
+  --ui-glass: #0e121b;
+  --ui-glass-strong: #0b0e15;
+  --ui-ink: #f1f4f9;
+  --ui-muted: #9aa4b6;
+  --ui-faint: #7a8498;
+  --ui-line: rgba(255,255,255,0.09);
+  --ui-control: rgba(255,255,255,0.07);
+  --ui-control-hover: rgba(255,255,255,0.13);
+  --ui-selected: rgba(255,255,255,0.14);
+  --ui-primary: #f1f4f9;
+  --ui-primary-ink: #10141c;
+  --ui-live: #ff453a;
+  --ui-live-soft: rgba(255,69,58,0.16);
+  --ui-live-ink: #ffb3ad;
+  --ui-warn: #ffd29a;
+  --train-ter: #2a78d6;
+  --train-gv: #eb6834;
+  --train-ic: #1baf7a;
+  --train-inconnu: #8a8f9c;
+  --retard-heure: #ffffff;
+  --retard-5: #f0913a;
+  --retard-15: #a83a16;
+  --transit-bus: #d9548f;
+  --transit-tram: #0a93a6;
+  --transit-metro: #b98a00;
+  --transit-autre: #8b92a1;
+  --ship-marchandises: #a3262a;
+  --ship-passagers: #a66b00;
+  --ship-petits: #00897a;
+  --ship-autres: #6b7280;
+  --status-vert: #0ca30c;
+  --status-jaune: #f7c325;
+  --status-orange: #e8702a;
+  --status-rouge: #b01e32;
+  --status-ink: #161a26;
+  --marine: #1d6fb8;
+  --avion-alt-1: #aca8ff;
+  --avion-alt-2: #918be5;
+  --avion-alt-3: #7670c7;
+  --avion-alt-4: #5d55a9;
+  --avion-alt-5: #463b8d;
+  --pop-1: #d8ac6c;
+  --pop-2: #c58b49;
+  --pop-3: #aa6c33;
+  --pop-4: #865027;
+  --pop-5: #63381d;
+  --pop-6: #432414;
+  --pop-7: #2a160c;
+  --iso-1: #ec8fb2;
+  --iso-2: #e0709f;
+  --iso-3: #cc4a86;
+  --iso-4: #ad2368;
+  --iso-5: #86114f;
+  --iso-6: #5a0a3a;
+  --immo-1: #1b5a94;
+  --immo-2: #3f84bf;
+  --immo-3: #86b3dc;
+  --immo-4: #a3a3a3;
+  --immo-5: #d889b0;
+  --immo-6: #bb3d78;
+  --immo-7: #821a54;
+  --couv-1: #a6bf4d;
+  --couv-2: #87a420;
+  --couv-3: #668300;
+  --couv-4: #466000;
+  --couv-5: #2a3a00;
+  --pluie-1: #71b5ff;
+  --pluie-2: #599ee7;
+  --pluie-3: #4286ce;
+  --pluie-4: #2a6fb6;
+  --pluie-5: #0e599d;
+  --accident-1: #d6aa62;
+  --accident-2: #b98340;
+  --accident-3: #9c6224;
+  --accident-4: #80481a;
+  --participation-1: #86b6ef;
+  --participation-2: #5598e7;
+  --participation-3: #2a78d6;
+  --participation-4: #1c5cab;
+  --participation-5: #104281;
+  --participation-6: #0a2548;
+  --elec-exg: #e34948;
+  --elec-gauche: #e87ba4;
+  --elec-eco: #008300;
+  --elec-centre: #eda100;
+  --elec-droite: #2a78d6;
+  --elec-ed: #6250d6;
+  --elec-autres: #8c8b85;
+  --elec-sans: #cfcdc4;
+  --ui-shadow: 0 14px 34px rgba(0,0,0,0.34);
+}
+[data-theme="nuit"] {
+  --pop-1: #7d4a2a;
+  --pop-2: #9a6034;
+  --pop-3: #b97a40;
+  --pop-4: #d1975b;
+  --pop-5: #e3b57f;
+  --pop-6: #f0cfa6;
+  --pop-7: #fbeed8;
+  --iso-1: #a9255f;
+  --iso-2: #c43a7b;
+  --iso-3: #d95b92;
+  --iso-4: #e982ab;
+  --iso-5: #f4a9c3;
+  --iso-6: #fbd0de;
+  --immo-1: #9fd0f7;
+  --immo-2: #6aaee8;
+  --immo-3: #3f86c4;
+  --immo-4: #7d7d7d;
+  --immo-5: #c04a85;
+  --immo-6: #e07aa6;
+  --immo-7: #f7b5cf;
+  --couv-1: #4f6411;
+  --couv-2: #6e8a14;
+  --couv-3: #92b222;
+  --couv-4: #b9d94a;
+  --couv-5: #e0f58a;
+  --participation-1: #1c5cab;
+  --participation-2: #2a78d6;
+  --participation-3: #5598e7;
+  --participation-4: #86b6ef;
+  --participation-5: #b7d3f6;
+  --participation-6: #e3effd;
+  --elec-exg: #e66767;
+  --elec-gauche: #d55181;
+  --elec-centre: #c98500;
+  --elec-droite: #3987e5;
+  --elec-ed: #9085e9;
+  --elec-autres: #8a8984;
+  --elec-sans: #46464a;
+}
+:root {
+  --space-1: 2px;
+  --space-2: 4px;
+  --space-3: 6px;
+  --space-4: 8px;
+  --space-5: 12px;
+  --space-6: 16px;
+  --space-7: 24px;
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 14px;
+  --radius-pill: 999px;
+  --font-display: "Bricolage Grotesque", "Avenir Next", "Segoe UI", system-ui, sans-serif;
+  --font-body: "Instrument Sans", "Helvetica Neue", "Segoe UI", system-ui, sans-serif;
+  --font-data: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Consolas, monospace;
+}
+.display { font-family: var(--font-display); font-size: 22px; line-height: 26px; font-weight: 700; letter-spacing: -0.01em; }
+.title { font-family: var(--font-display); font-size: 20px; line-height: 24px; font-weight: 700; letter-spacing: -0.01em; }
+.body { font-family: var(--font-body); font-size: 14px; line-height: 20px; font-weight: 400; }
+.body-strong { font-family: var(--font-body); font-size: 14px; line-height: 20px; font-weight: 600; }
+.small { font-family: var(--font-body); font-size: 13px; line-height: 18px; font-weight: 400; }
+.caption { font-family: var(--font-body); font-size: 12px; line-height: 16px; font-weight: 500; }
+.figure { font-family: var(--font-data); font-size: 22px; line-height: 26px; font-weight: 500; }
+.data { font-family: var(--font-data); font-size: 13px; line-height: 18px; font-weight: 500; }
+.eyebrow { font-family: var(--font-data); font-size: 11px; line-height: 14px; font-weight: 500; letter-spacing: 0.12em; }
+@font-face { font-family: "Bricolage Grotesque"; src: url("fonts/bricolage-grotesque-latin-700-normal.woff2") format("woff2"); font-weight: 700; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/instrument-sans-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/instrument-sans-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "Instrument Sans"; src: url("fonts/instrument-sans-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono-latin-400-normal.woff2") format("woff2"); font-weight: 400; font-style: normal; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono-latin-500-normal.woff2") format("woff2"); font-weight: 500; font-style: normal; font-display: swap; }
+@font-face { font-family: "JetBrains Mono"; src: url("fonts/jetbrains-mono-latin-600-normal.woff2") format("woff2"); font-weight: 600; font-style: normal; font-display: swap; }

@@ -4,9 +4,10 @@ dist/
 target/
 target-*/
 
-# Fichiers locaux
+# Fichiers locaux (secrets compris : clés et comptes ne sont jamais versionnés)
 .env
 .env.*
+!.env.example
 *.local
 .DS_Store
 
@@ -16,4 +17,10 @@ target-*/
 
 # Archives du temps réel (serveur maison)
 /archive/
-.claude/worktrees/
+
+# Archives de tuiles et captures de mesure produites en local
+*.pmtiles
+perf/*.png
+
+# Configuration locale de Claude Code et copies de travail
+.claude/

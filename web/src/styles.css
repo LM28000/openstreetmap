@@ -2505,8 +2505,14 @@ p {
 }
 
 @media (max-width: 719.98px) {
+  /* À gauche de la colonne des commandes de la carte, qu'elle ne doit pas recouvrir. */
   .zone-bar {
-    bottom: calc(var(--sheet-h, 68px) + 64px);
+    bottom: calc(var(--sheet-h, 68px) + 12px);
+    left: var(--ui-edge);
+    right: calc(var(--ui-edge) + 44px + var(--space-4));
+    width: auto;
+    max-width: none;
+    margin: 0;
   }
 
   .zone-chip {

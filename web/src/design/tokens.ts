@@ -122,12 +122,12 @@ export type ElecFamily = 'exg' | 'gauche' | 'eco' | 'centre' | 'droite' | 'ed' |
 
 /** Couleur de chaque famille (aplat « en tête », pastille de la fiche, légende). */
 export const ELEC: Record<ElecFamily, { jour: string; nuit: string }> = {
-  exg: { jour: '#e34948', nuit: '#e66767' },
-  gauche: { jour: '#e87ba4', nuit: '#d55181' },
-  eco: { jour: '#008300', nuit: '#008300' },
-  centre: { jour: '#eda100', nuit: '#c98500' },
-  droite: { jour: '#2a78d6', nuit: '#3987e5' },
-  ed: { jour: '#6250d6', nuit: '#9085e9' },
+  exg: { jour: '#a60412', nuit: '#b41520' },
+  gauche: { jour: '#ed75a3', nuit: '#d34188' },
+  eco: { jour: '#409048', nuit: '#53a658' },
+  centre: { jour: '#e09f02', nuit: '#a1701e' },
+  droite: { jour: '#3b95f6', nuit: '#508dd4' },
+  ed: { jour: '#524993', nuit: '#6648cb' },
   autres: { jour: '#8c8b85', nuit: '#8a8984' },
 };
 

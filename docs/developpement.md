@@ -70,6 +70,10 @@ Les mesures de performance du rendu (temps d'image, temps processeur par image s
 
 En développement, `window.__tour` donne en plus la main sur la visite guidée (`window.__tour.next()`…). Ces accès n'existent pas dans le site construit.
 
+## Design system
+
+Les règles de marque et de rédaction, les jetons (couleurs, typographie, espacements, rayons), les guides de composants et le logo sont dans [`design/`](../design/README.md). Les jetons sont déclarés dans `web/src/styles.css` sous les mêmes noms que `design/tokens.css` ; les palettes de données (trains, rampes de population, immobilier…) sont dans `web/src/design/tokens.ts`, qui reprend `design/tokens.json`. Une couleur ou une échelle se change d'abord dans `design/`, puis dans le code. Le favicon (`web/public/favicon.svg`) est une copie de `design/logos/vigie-mark.svg`.
+
 ## Ajouter une couche
 
 Pas à pas dans [architecture.md](architecture.md#ajouter-une-couche) (côté site) et [moteur-de-tuiles.md](moteur-de-tuiles.md#ajouter-un-jeu-de-données) (côté serveur, pour un gros jeu de données). Une couche doit aussi déclarer sa source et sa licence : ajouter une ligne à [sources-et-licences.md](sources-et-licences.md) et au tableau de [couches.md](couches.md).

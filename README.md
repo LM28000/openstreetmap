@@ -158,6 +158,7 @@ Deux idées structurent le code : **le temps est au cœur du système** (une hor
 | [docs/rendu-3d.md](docs/rendu-3d.md) | Maquettes, éclairage, ombres, performances |
 | [docs/deploiement.md](docs/deploiement.md) | Docker, variables d'environnement, mémoire, volumes |
 | [docs/developpement.md](docs/developpement.md) | Installation, tests, délai de 24 h des dépendances, approche qualité |
+| [design/](design/README.md) | Design system : règles de marque et de rédaction, jetons (couleurs, typographie, espacements, rayons), composants, logo |
 | [docs/feuille-de-route.md](docs/feuille-de-route.md) · [CHANGELOG.md](CHANGELOG.md) | Phases du projet et journal des changements |
 
 ## Données et licences

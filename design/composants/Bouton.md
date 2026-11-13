@@ -2,7 +2,7 @@
 
 Les boutons déclenchent une action dans un panneau : une action principale au plus, les autres secondaires.
 
-- **Principal :** fond `ui-primary`, texte `ui-primary-ink`, `body-strong`. Un seul par panneau (« Partager » n'en est pas un ; « Analyser » ou « Recommencer la visite » oui).
+- **Principal :** fond `ui-primary`, texte `ui-primary-ink`, 13 px en 600 (`small` en gras, pour que deux actions tiennent sur une rangée de fiche). Un seul par panneau (« Partager » n'en est pas un ; « Analyser » ou « Recommencer la visite » oui).
 - **Secondaire :** fond `ui-control`, survol `ui-control-hover`, texte `ui-ink`.
 - **En direct :** pastille `radius-pill` ; en direct, point `ui-live` et texte `ui-live-ink` ; en relecture, fond `ui-live-soft` et libellé « Revenir au direct ».
 - **Anatomie :** hauteur 34 px, marge interne `space-5`, écart icône–texte `space-3`, `radius-md`. Icône de 16 px à gauche, facultative.

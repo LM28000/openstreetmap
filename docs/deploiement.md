@@ -2,6 +2,8 @@
 
 Le serveur tourne en permanence dans Docker (`compose.yaml`, `server/Dockerfile`) : il archive le temps réel en continu, enregistre l'historique des couches mobiles et sert le site. Rien n'est exposé à Internet par défaut.
 
+> Le projet s'appelle Vigie depuis novembre 2026 (anciennement « Carte vivante »). Les identifiants techniques gardent l'ancien nom pour ne rien casser en production : nom du projet et de l'image Docker (`carte-vivante`, `carte-vivante-serveur`), exécutable `carte-vivante-serveur`, clés `localStorage` du navigateur (`carte-vivante:*`).
+
 ```mermaid
 flowchart LR
   subgraph Image["Image Docker (build multi-étapes)"]
@@ -19,7 +21,7 @@ L'image se construit depuis la racine du dépôt (contexte `.`). Étapes du `ser
 ## Installation
 
 ```bash
-git clone https://github.com/LM28000/openstreetmap.git carte-vivante && cd carte-vivante
+git clone https://github.com/LM28000/vigie.git vigie && cd vigie
 mkdir -p data archive              # avant le premier démarrage : sinon Docker les crée au nom de root
 cat > .env <<EOF
 BIND_ADDRESS=192.168.0.75          # adresse d'écoute (127.0.0.1 par défaut : la machine seule)

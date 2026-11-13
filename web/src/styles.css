@@ -1303,6 +1303,16 @@ p {
 }
 
 .welcome__head {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.welcome__mark {
+  flex: none;
+}
+
+.welcome__headtext {
   display: grid;
   gap: 4px;
 }
@@ -1851,6 +1861,15 @@ p {
   align-items: baseline;
   justify-content: space-between;
   gap: 12px;
+}
+
+.tour__head:has(.tour__mark) {
+  align-items: center;
+  justify-content: flex-start;
+}
+
+.tour__mark {
+  flex: none;
 }
 
 .tour__when {

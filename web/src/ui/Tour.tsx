@@ -4,6 +4,7 @@ import { tour } from '../core/tour';
 import { formatShortDate, formatTime } from './format';
 import { useClockState, useClockTime, useModuleStates } from './hooks';
 import { Icon } from './icons';
+import { Mark } from './Mark';
 
 /** État de la visite guidée, pour l'interface. */
 export function useTour() {
@@ -77,6 +78,7 @@ export function TourPanel({ manager, phone }: { manager: ModuleManager; phone: b
       </div>
 
       <header className="tour__head">
+        {ended && <Mark size={40} className="tour__mark" />}
         <span className="kicker">
           {ended ? 'Fin de la visite' : state.kicker}{' '}
           {!ended && (

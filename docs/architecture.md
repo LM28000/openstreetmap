@@ -1,6 +1,6 @@
 # Architecture
 
-La Carte vivante est composée de deux programmes :
+Vigie est composée de deux programmes :
 
 - un **site** (`web/`) en TypeScript, React 19, MapLibre GL JS 5.24 (fond de carte, relief, globe) et deck.gl 9.4 (couches de données, maquettes 3D), construit avec Vite ;
 - un **serveur** (`server/`) en Rust (édition 2024, tokio, axum), qui collecte et prépare les données, calcule (tracés de trains, isochrones RAPTOR, analyse de zone), enregistre l'historique, fabrique et sert ses propres tuiles vectorielles, et sert aussi le site construit.

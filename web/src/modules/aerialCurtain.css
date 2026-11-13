@@ -56,7 +56,7 @@
   transform: scale(1.08);
 }
 .rideau__poignee:focus-visible .rideau__bouton {
-  box-shadow: 0 0 0 3px #141a26, 0 0 0 5px #fff;
+  box-shadow: 0 0 0 2px var(--ui-glass), 0 0 0 4px var(--ui-ink);
 }
 
 /* Étiquettes de part et d'autre de la poignée, à la hauteur de son bouton (suivent le rideau). */
@@ -64,7 +64,7 @@
   position: absolute;
   top: calc(50% - 15px);
   height: 30px;
-  padding: 0 11px;
+  padding: 0 var(--space-5);
   display: inline-flex;
   align-items: center;
   font: 600 12.5px/1 var(--font-body, system-ui, sans-serif);
@@ -72,7 +72,7 @@
   color: var(--ui-ink, #f1f4f9);
   background: var(--ui-glass-strong, rgb(11, 14, 21));
   border: 1px solid var(--ui-line, rgba(255, 255, 255, 0.09));
-  border-radius: 15px;
+  border-radius: var(--radius-lg);
   box-shadow: var(--ui-shadow, 0 6px 18px rgba(0, 0, 0, 0.3));
   white-space: nowrap;
 }

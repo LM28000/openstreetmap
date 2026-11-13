@@ -262,7 +262,7 @@ function Legend({ items }: { items: LegendItem[] }) {
             <img className="legend__icon" src={item.icon} alt="" />
           ) : (
             <span
-              className={`legend__swatch legend__swatch--${item.size ?? 'medium'}`}
+              className={`legend__swatch legend__swatch--${item.size ?? 'flat'}`}
               style={{ background: item.color }}
               aria-hidden="true"
             />

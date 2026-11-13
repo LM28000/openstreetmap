@@ -12,6 +12,7 @@
  * Entre deux gares, on suppose une vitesse constante le long du tracé. Si le
  * serveur n'a pas (encore) de tracé pour un tronçon, le train y va en ligne droite.
  */
+import { hexToRgb, RETARD, TRAIN } from '../design/tokens';
 import type { Color } from '@deck.gl/core';
 import { TripsLayer } from '@deck.gl/geo-layers';
 import { IconLayer, PathLayer, ScatterplotLayer, SolidPolygonLayer, TextLayer } from '@deck.gl/layers';
@@ -211,18 +212,18 @@ const FAMILY_OF: Record<string, Family> = {
 
 /** Couleur par famille ; les trains à grande vitesse ont aussi un nez profilé et sont plus longs. */
 const FAMILY_STYLE: Record<Family, { color: [number, number, number]; css: string; nose: Nose; label: string }> = {
-  ter: { color: [42, 120, 214], css: '#2a78d6', nose: 'standard', label: 'TER et trains régionaux' },
-  'grande-vitesse': { color: [235, 104, 52], css: '#eb6834', nose: 'profile', label: 'Grande vitesse : TGV INOUI, OUIGO, ICE, Lyria' },
-  intercites: { color: [27, 175, 122], css: '#1baf7a', nose: 'standard', label: 'Intercités, de jour et de nuit' },
+  ter: { color: hexToRgb(TRAIN.ter), css: TRAIN.ter, nose: 'standard', label: 'TER et trains régionaux' },
+  'grande-vitesse': { color: hexToRgb(TRAIN.gv), css: TRAIN.gv, nose: 'profile', label: 'Grande vitesse : TGV INOUI, OUIGO, ICE, Lyria' },
+  intercites: { color: hexToRgb(TRAIN.ic), css: TRAIN.ic, nose: 'standard', label: 'Intercités, de jour et de nuit' },
 };
 const FAMILY_ORDER: Family[] = ['ter', 'grande-vitesse', 'intercites'];
 
 /** Le retard est une grandeur ordonnée : neutre à l'heure, puis un orange de plus en plus sombre. */
 const DELAY_STYLE: Record<DelayClass, { css: string; rgb: [number, number, number]; label: string }> = {
-  inconnu: { css: '#8a8f9c', rgb: [138, 143, 156], label: 'Sans information temps réel' },
-  heure: { css: '#ffffff', rgb: [255, 255, 255], label: 'À l’heure (moins de 5 min)' },
-  retard: { css: '#f0913a', rgb: [240, 145, 58], label: '5 à 14 min de retard' },
-  'gros-retard': { css: '#a83a16', rgb: [168, 58, 22], label: '15 min de retard ou plus' },
+  inconnu: { css: TRAIN.inconnu, rgb: hexToRgb(TRAIN.inconnu), label: 'Sans information temps réel' },
+  heure: { css: RETARD.heure, rgb: hexToRgb(RETARD.heure), label: 'À l’heure (moins de 5 min)' },
+  retard: { css: RETARD.cinq, rgb: hexToRgb(RETARD.cinq), label: '5 à 14 min de retard' },
+  'gros-retard': { css: RETARD.quinze, rgb: hexToRgb(RETARD.quinze), label: '15 min de retard ou plus' },
 };
 const DELAY_ORDER: DelayClass[] = ['heure', 'retard', 'gros-retard', 'inconnu'];
 

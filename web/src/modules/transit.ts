@@ -35,6 +35,7 @@
  * marquée comme telle (contour pointillé, fiche), avec le prochain arrêt et le retard connus à ce moment-là. Là où rien
  * n'a été enregistré, la couche se masque et dit pourquoi.
  */
+import { TRANSIT } from '../design/tokens';
 import type { Color } from '@deck.gl/core';
 import { IconLayer, ScatterplotLayer, TextLayer } from '@deck.gl/layers';
 import { defineModule, type InfoContent, type InfoFigure, type InfoStatus, type LegendItem } from '../core/module';
@@ -251,13 +252,13 @@ const STALE_AFTER_S = 120;
  * admis car la forme porte aussi le mode) ; contraste ≥ 3:1 sur les deux fonds.
  */
 const MODE_COLORS: Record<Kind, string> = {
-  bus: '#d9548f',
-  tram: '#0a93a6',
-  metro: '#b98a00',
+  bus: TRANSIT.bus,
+  tram: TRANSIT.tram,
+  metro: TRANSIT.metro,
   /** Neutre (train, bateau, câble : rares) et mode inconnu : hors de la palette validée, gris sans teinte. */
-  other: '#8b92a1',
+  other: TRANSIT.autre,
 };
-const UNKNOWN_MODE_COLOR = '#8b92a1';
+const UNKNOWN_MODE_COLOR = TRANSIT.autre;
 const OUTLINE_DARK: [number, number, number] = [22, 26, 38];
 const OUTLINE_LIGHT: [number, number, number] = [255, 255, 255];
 /** Sélection : un anneau blanc sous un anneau sombre, jamais une couleur de plus. */

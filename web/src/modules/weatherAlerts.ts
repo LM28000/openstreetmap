@@ -14,6 +14,7 @@
  * Les contours des départements viennent d'IGN Admin Express (Licence Ouverte), via
  * gregoiredavid/france-geojson, réduits à 3 décimales et embarqués (src/data/).
  */
+import { STATUS } from '../design/tokens';
 import type { GeoJSONSource, Map as MapLibreMap } from 'maplibre-gl';
 import { scheduledStatus } from '../core/infoStatus';
 import { defineModule } from '../core/module';
@@ -80,7 +81,7 @@ const PHENOMENA: Record<number, string> = {
   9: 'Vagues-submersion',
 };
 
-const INK = '#161a26';
+const INK = STATUS.ink;
 const DAY_MS = 24 * 3600_000;
 
 /** Trames : la même information que la couleur, pour ceux qui ne la distinguent pas. */

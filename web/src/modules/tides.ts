@@ -12,6 +12,7 @@
  * Comme toute couche, l'affichage est une fonction de l'instant : en rejouant le temps, la jauge suit la courbe
  * mesurée des 48 heures, puis l'estimation pour les 36 heures à venir.
  */
+import { MARINE } from '../design/tokens';
 import { IconLayer, TextLayer } from '@deck.gl/layers';
 import { estimatedStatus, measuredStatus, replayStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent } from '../core/module';
@@ -67,7 +68,6 @@ interface Reading {
   kind: 'measured' | 'estimated' | 'held';
 }
 
-const MARINE = '#1d6fb8';
 const PALE = '#f3f7fb';
 /** Au-dessus de cette variation (m/h), la mer monte ou descend : en dessous, elle est « étale ». */
 const SLACK_RATE = 0.08;

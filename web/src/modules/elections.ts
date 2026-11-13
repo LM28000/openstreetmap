@@ -17,12 +17,13 @@
  * - « Participation » : votants / inscrits, une seule teinte (bleu), six classes ;
  * - « En tête » : le candidat ou la liste qui a le plus de voix, coloré par **famille politique** (palette catégorielle,
  *   toujours accompagnée de sa légende et du nom dans la fiche : la couleur ne porte jamais seule l'information) ;
- * - « Part d'un candidat » : sa part des exprimés, une seule teinte (terre de Sienne), sept classes.
+ * - « Part d'un candidat » : sa part des exprimés, une seule teinte (celle de la famille du candidat), sept classes.
  *
  * Les familles sont un regroupement *indicatif* : d'après la nuance du ministère de l'Intérieur quand elle existe
  * (législatives, listes des européennes), d'après l'étiquette du candidat pour la présidentielle (qui n'a pas de nuance).
  * Fiche : le détail de chaque candidat ou liste, avec sa couleur, son nom et son score.
  */
+import { ELEC, ELEC_SANS, ELEC_SHARE, PARTICIPATION } from '../design/tokens';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type InfoRow, type InfoTable, type LegendItem } from '../core/module';
@@ -60,28 +61,29 @@ interface Bloc {
  * sont voisins, comme le bleu et le violet : ce sont des familles proches. « Autres » est un gris neutre.
  */
 const BLOCS: Record<BlocId, Bloc> = {
-  exg: { label: 'Extrême gauche', short: 'ExG', day: '#e34948', night: '#e66767' },
-  gauche: { label: 'Gauche', short: 'G', day: '#e87ba4', night: '#d55181' },
-  eco: { label: 'Écologistes', short: 'Éco', day: '#008300', night: '#008300' },
-  centre: { label: 'Centre', short: 'C', day: '#eda100', night: '#c98500' },
-  droite: { label: 'Droite', short: 'D', day: '#2a78d6', night: '#3987e5' },
-  ed: { label: 'Extrême droite', short: 'ExD', day: '#6250d6', night: '#9085e9' },
-  autres: { label: 'Autres', short: 'Aut.', day: '#8c8b85', night: '#8a8984' },
+  exg: { label: 'Extrême gauche', short: 'ExG', day: ELEC.exg.jour, night: ELEC.exg.nuit },
+  gauche: { label: 'Gauche', short: 'G', day: ELEC.gauche.jour, night: ELEC.gauche.nuit },
+  eco: { label: 'Écologistes', short: 'Éco', day: ELEC.eco.jour, night: ELEC.eco.nuit },
+  centre: { label: 'Centre', short: 'C', day: ELEC.centre.jour, night: ELEC.centre.nuit },
+  droite: { label: 'Droite', short: 'D', day: ELEC.droite.jour, night: ELEC.droite.nuit },
+  ed: { label: 'Extrême droite', short: 'ExD', day: ELEC.ed.jour, night: ELEC.ed.nuit },
+  autres: { label: 'Autres', short: 'Aut.', day: ELEC.autres.jour, night: ELEC.autres.nuit },
 };
 const BLOC_ORDER: BlocId[] = ['exg', 'gauche', 'eco', 'centre', 'droite', 'ed', 'autres'];
 
 /** Bureau sans résultat pour ce scrutin (ou jamais de voix) : un gris clair, hors de toute légende de données. */
-const NO_DATA = { day: '#cfcdc4', night: '#46464a' };
+const NO_DATA = { day: ELEC_SANS.jour, night: ELEC_SANS.nuit };
 
 /**
  * Participation : bleu, six classes (validées avec `--ordinal`, ΔL ≥ 0,06). Fond clair : le plus fort est le plus foncé ;
  * fond sombre : le plus fort est le plus clair, comme les autres couches.
  */
-const PARTICIPATION_DAY = ['#86b6ef', '#5598e7', '#2a78d6', '#1c5cab', '#104281', '#0a2548'];
-const PARTICIPATION_NIGHT = ['#1c5cab', '#2a78d6', '#5598e7', '#86b6ef', '#b7d3f6', '#e3effd'];
-/** Part d'un candidat : terre de Sienne, sept classes (la rampe de la couche Population, validée avec `--ordinal`). */
-const SHARE_DAY = ['#d8ac6c', '#c58b49', '#aa6c33', '#865027', '#63381d', '#432414', '#2a160c'];
-const SHARE_NIGHT = ['#7d4a2a', '#9a6034', '#b97a40', '#d1975b', '#e3b57f', '#f0cfa6', '#fbeed8'];
+const PARTICIPATION_DAY = PARTICIPATION.jour;
+const PARTICIPATION_NIGHT = PARTICIPATION.nuit;
+/** Part d'un candidat : une seule teinte, celle de la famille du candidat, sept classes (`ELEC_SHARE`, du plus clair au plus foncé le jour). */
+function shareRamp(bloc: BlocId, night: boolean): readonly string[] {
+  return night ? ELEC_SHARE[bloc].nuit : ELEC_SHARE[bloc].jour;
+}
 
 // ---------------------------------------------------------------------------------------------
 // Les scrutins : colonnes des tuiles (même ordre que `server/src/tiles/elections.rs`), noms, familles
@@ -356,7 +358,7 @@ function shareCuts(sheet: ElectionsSheet, index: number): number[] {
   return ascending(sheet.parts[index] ?? [1, 5, 10, 20, 30, 40]);
 }
 
-function stepExpression(input: unknown[], ramp: string[], cuts: number[]): unknown[] {
+function stepExpression(input: unknown[], ramp: readonly string[], cuts: number[]): unknown[] {
   const expression: unknown[] = ['step', input, ramp[0]];
   cuts.forEach((c, i) => expression.push(c, ramp[i + 1]));
   return expression;
@@ -369,8 +371,8 @@ function colorExpression(def: ScrutinDef, sheet: ElectionsSheet, affichage: Affi
     return ['case', ['<=', ['get', 'i'], 0], noData, stepExpression(['*', 100, ['/', ['get', 'v'], ['get', 'i']]], ramp, participationCuts(sheet))];
   }
   if (affichage === 'part') {
-    const ramp = night ? SHARE_NIGHT : SHARE_DAY;
     const index = columnIndex(def, listKey);
+    const ramp = shareRamp(def.columns[index]?.bloc ?? 'autres', night);
     return [
       'case',
       ['<=', ['get', 'x'], 0],
@@ -561,7 +563,8 @@ export const elections = defineModule<ElectionsData>({
       return rangeLabels(participationCuts(sheet)).map((label, i) => ({ color: PARTICIPATION_DAY[i]!, label }));
     }
     const index = columnIndex(def, settings.liste ?? '');
-    const items: LegendItem[] = rangeLabels(shareCuts(sheet, index)).map((label, i) => ({ color: SHARE_DAY[i]!, label }));
+    const ramp = shareRamp(def.columns[index]?.bloc ?? 'autres', night);
+    const items: LegendItem[] = rangeLabels(shareCuts(sheet, index)).map((label, i) => ({ color: ramp[i]!, label }));
     items.push({ color: NO_DATA.day, label: 'Pas de résultat' });
     return items;
   },

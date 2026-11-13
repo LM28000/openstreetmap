@@ -26,6 +26,7 @@
  * des opérateurs. Validées avec `validate_palette.js --ordinal` (jour : bout faible à 2,0:1 sur fond clair ; nuit : 2,6:1
  * sur fond sombre ; une teinte, ordre monotone, écarts nets).
  */
+import { COUV } from '../design/tokens';
 import type { LayerSpecification, Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
@@ -42,8 +43,8 @@ const SELECTED_ID = 'couverture-choisi';
  * Cinq crans, du **plus couvert** au **moins couvert** : 4 opérateurs, 3, 2, 1, 0 (la zone blanche, la plus visible).
  * Jour : foncé = rien ; nuit : clair = rien.
  */
-const DAY_RAMP = ['#a6bf4d', '#87a420', '#668300', '#466000', '#2a3a00'];
-const NIGHT_RAMP = ['#4f6411', '#6e8a14', '#92b222', '#b9d94a', '#e0f58a'];
+const DAY_RAMP = COUV.jour;
+const NIGHT_RAMP = COUV.nuit;
 
 const OPERATORS = ['Orange', 'SFR', 'Bouygues Telecom', 'Free Mobile'] as const;
 /** Valeur du réglage « Afficher » → rang de l'opérateur dans les propriétés des tuiles. */

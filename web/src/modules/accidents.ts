@@ -16,6 +16,7 @@
  * `validate_palette.js --ordinal` en clair et en sombre. La palette de statut (vert, jaune, orange,
  * rouge) n'est pas utilisée : elle dit des états, pas des magnitudes.
  */
+import { ACCIDENT, hexToRgb } from '../design/tokens';
 import { GridCellLayer, ScatterplotLayer } from '@deck.gl/layers';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
@@ -25,10 +26,10 @@ import { HALO, KEY, selectionRing } from './symbols';
 
 /** Gravité, de la moins grave à la plus grave. */
 const SEVERITIES = [
-  { label: 'Indemne', css: '#d6aa62', color: [214, 170, 98] as [number, number, number], radius: 2.2 },
-  { label: 'Blessé léger', css: '#b98340', color: [185, 131, 64] as [number, number, number], radius: 2.8 },
-  { label: 'Blessé hospitalisé', css: '#9c6224', color: [156, 98, 36] as [number, number, number], radius: 3.6 },
-  { label: 'Tué', css: '#80481a', color: [128, 72, 26] as [number, number, number], radius: 5 },
+  { label: 'Indemne', css: ACCIDENT.jour[0]!, color: hexToRgb(ACCIDENT.jour[0]!), radius: 2.2 },
+  { label: 'Blessé léger', css: ACCIDENT.jour[1]!, color: hexToRgb(ACCIDENT.jour[1]!), radius: 2.8 },
+  { label: 'Blessé hospitalisé', css: ACCIDENT.jour[2]!, color: hexToRgb(ACCIDENT.jour[2]!), radius: 3.6 },
+  { label: 'Tué', css: ACCIDENT.jour[3]!, color: hexToRgb(ACCIDENT.jour[3]!), radius: 5 },
 ] as const;
 
 export interface AccidentsData {

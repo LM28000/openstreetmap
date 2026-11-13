@@ -20,6 +20,7 @@
  * l'image courante, de la précédente et des deux suivantes sont gardées, donc déjà chargées
  * quand l'horloge y arrive), et on fond deux images voisines l'une dans l'autre selon l'instant t.
  */
+import { PLUIE } from '../design/tokens';
 import { addProtocol, type Map as MapLibreMap, type RasterSourceSpecification } from 'maplibre-gl';
 import { defineModule, type LegendItem } from '../core/module';
 import { firstSymbolLayerId } from '../map/baseMap';
@@ -60,7 +61,7 @@ interface RainData {
  * Rampe d'une seule teinte (bleu), de la pluie faible à la pluie très forte. Chaque pas est plus
  * foncé que le précédent. Valeurs validées avec `validate_palette.js --ordinal` en clair et en sombre.
  */
-const RAMP = ['#71b5ff', '#599ee7', '#4286ce', '#2a6fb6', '#0e599d'] as const;
+const RAMP = PLUIE.jour;
 /** Réflectivité (dBZ) où chaque pas de la rampe est atteint, d'après la relation de Marshall-Palmer. */
 const RAMP_DBZ = [20, 28, 36, 44, 52] as const;
 const LEGEND_LABELS = ['Faible (moins de 1 mm/h)', 'Modérée (1 à 3 mm/h)', 'Soutenue (3 à 10 mm/h)', 'Forte (10 à 30 mm/h)', 'Très forte (plus de 30 mm/h)'];

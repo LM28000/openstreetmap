@@ -15,6 +15,7 @@
  * comparer les quartiers d'une ville chère entre eux (à Paris, tout dépasse 2,8 fois la médiane nationale). Le relief
  * (option) donne le nombre de ventes.
  */
+import { IMMO } from '../design/tokens';
 import type { Map as MapLibreMap } from 'maplibre-gl';
 import { plainStatus } from '../core/infoStatus';
 import { defineModule, type InfoContent, type LegendItem } from '../core/module';
@@ -45,8 +46,8 @@ const UNDER = 'isochrones-zone';
  * clairs. Chaque demi-palette est validée avec `validate_palette.js --ordinal` (une teinte, luminosité monotone, écarts nets,
  * bout clair au-dessus de 2:1 sur le fond), le gris central à 2,5:1 (jour) ; l'ordre des classes se lit aussi par la teinte.
  */
-const DAY_RAMP = ['#1b5a94', '#3f84bf', '#86b3dc', '#a3a3a3', '#d889b0', '#bb3d78', '#821a54'];
-const NIGHT_RAMP = ['#9fd0f7', '#6aaee8', '#3f86c4', '#7d7d7d', '#c04a85', '#e07aa6', '#f7b5cf'];
+const DAY_RAMP = IMMO.jour;
+const NIGHT_RAMP = IMMO.nuit;
 /** Bornes des classes, en multiples de la médiane nationale : moins de la moitié, 50-70 %, 70-90 %, autour de la médiane (90-115 %), 115-170 %, 170-280 %, plus de 2,8 fois. */
 const RATIOS = [0.5, 0.7, 0.9, 1.15, 1.7, 2.8];
 

@@ -3,7 +3,7 @@
 #   docker compose up -d --build      installer ou mettre à jour
 #   docker compose logs -f            suivre les journaux
 #
-# Réglages dans un fichier .env à côté de ce fichier (jamais versionné), par exemple :
+# Réglages dans un fichier .env à côté de ce fichier (jamais versionné ; modèle : .env.example, détail : docs/deploiement.md), par exemple :
 #   BIND_ADDRESS=192.168.0.75          adresse d'écoute sur la machine (127.0.0.1 par défaut : la machine seule)
 #   ARCHIVE_PATH=/mnt/pool/carte-vivante   où garder les archives du temps réel
 #   RUN_AS=1000:1000                   utilisateur:groupe propriétaire des dossiers data et archive
@@ -32,7 +32,7 @@ services:
       ATMO_PASSWORD: "${ATMO_PASSWORD:-}"
       # Vide = métro, RER, Transilien et tramways d'Île-de-France ignorés. Clé PRIM d'Île-de-France Mobilités : elle ne sort jamais du serveur.
       IDFM_PRIM_API_KEY: "${IDFM_PRIM_API_KEY:-}"
-      # Facultatifs : modes (« metro,tram,train,cable » par défaut ; ajouter « bus » demande +80 Mo en permanence et +175 Mo de pic : voir le README, pas avec 1 Go), intervalle du relevé en secondes (180), budget de mémoire en Mo (100).
+      # Facultatifs : modes (« metro,tram,train,cable » par défaut ; ajouter « bus » demande +80 Mo en permanence et +175 Mo de pic : voir docs/couches.md, pas avec 1 Go), intervalle du relevé en secondes (180), budget de mémoire en Mo (100).
       IDFM_MODES: "${IDFM_MODES:-}"
       IDFM_INTERVALLE_S: "${IDFM_INTERVALLE_S:-}"
       IDFM_MEMOIRE_MO: "${IDFM_MEMOIRE_MO:-}"

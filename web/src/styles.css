@@ -177,7 +177,7 @@ p {
   border-radius: var(--radius-md);
   background: var(--ui-control);
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 20px;
   text-decoration: none;
@@ -1065,7 +1065,7 @@ p {
   border-radius: var(--radius-pill);
   background: var(--ui-live-soft);
   color: var(--ui-ink);
-  font-size: 14px;
+  font-size: 13px;
   font-weight: 600;
   line-height: 20px;
   white-space: nowrap;
@@ -2029,6 +2029,11 @@ p {
 }
 
 /* À la fin, l'action principale est « Recommencer la visite » : la lecture redevient un contrôle ordinaire. */
+/* Sur téléphone, le libellé raccourci tient dans la rangée de commandes. */
+.tour--phone .tour__more {
+  display: none;
+}
+
 .tour--ended .tour__play,
 .tour--ended .tour__play:hover {
   background: var(--ui-control);

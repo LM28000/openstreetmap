@@ -136,7 +136,7 @@ export function TourPanel({ manager, phone }: { manager: ModuleManager; phone: b
         {/* Une seule action principale : à la fin, « Recommencer la visite » ; pendant la visite, la lecture. */}
         {ended && (
           <button type="button" className="btn btn--primary" onClick={() => tour.restart()}>
-            Recommencer la visite
+            Recommencer<span className="tour__more"> la visite</span>
           </button>
         )}
         <button type="button" className="btn" onClick={() => tour.quit()} title="Quitter et retrouver ma vue (Échap)">

@@ -1,0 +1,49 @@
+name: Nouvelle couche de données
+description: Proposer une source de données à afficher sur la carte
+labels: ["nouvelle couche"]
+body:
+  - type: input
+    id: nom
+    attributes:
+      label: Nom de la couche
+      placeholder: "Qualité des eaux de baignade"
+    validations:
+      required: true
+  - type: textarea
+    id: montre
+    attributes:
+      label: Ce qu'elle montrerait
+      description: Quelle question la carte aide à résoudre, et comment l'afficher (points, zones, colonnes 3D, suit la frise du temps…).
+    validations:
+      required: true
+  - type: input
+    id: source
+    attributes:
+      label: Source des données
+      description: Adresse de la page ou du jeu de données (data.gouv.fr, API…).
+    validations:
+      required: true
+  - type: dropdown
+    id: licence
+    attributes:
+      label: Licence connue
+      description: La licence doit autoriser la réutilisation ; l'attribution sera affichée.
+      options:
+        - Licence Ouverte / Etalab 2.0
+        - ODbL
+        - CC BY
+        - Autre (préciser ci-dessous)
+        - Je ne sais pas
+    validations:
+      required: true
+  - type: textarea
+    id: details
+    attributes:
+      label: Volume, rythme de mise à jour, clé d'API
+      description: Taille des données, fréquence de mise à jour, et si la source demande une clé ou un compte (qui devra rester sur le serveur).
+  - type: checkboxes
+    id: contribuer
+    attributes:
+      label: Contribution
+      options:
+        - label: Je peux proposer l'implémentation (voir CONTRIBUTING.md)

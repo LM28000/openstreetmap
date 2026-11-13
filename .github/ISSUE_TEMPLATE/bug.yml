@@ -1,0 +1,49 @@
+name: Bug
+description: Quelque chose ne marche pas ou s'affiche de travers
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Merci de ne coller **aucune clé, mot de passe ou jeton** dans ce ticket (ni dans les captures d'écran ou les journaux).
+  - type: textarea
+    id: probleme
+    attributes:
+      label: Ce qui se passe
+      description: Ce que vous voyez, et ce que vous attendiez.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Comment le reproduire
+      description: "L'adresse de la page garde la vue, les couches, les réglages et l'instant : collez-la, elle rouvre exactement la même carte."
+      placeholder: "1. Ouvrir …\n2. Afficher la couche …\n3. …"
+    validations:
+      required: true
+  - type: dropdown
+    id: partie
+    attributes:
+      label: Partie concernée
+      options:
+        - Site (affichage, interface)
+        - Serveur (API, collecte de données)
+        - Moteur de tuiles
+        - Isochrones
+        - Historique et relecture
+        - Docker, déploiement
+        - Documentation
+        - Je ne sais pas
+    validations:
+      required: true
+  - type: input
+    id: navigateur
+    attributes:
+      label: Navigateur et appareil
+      placeholder: "Chrome 140 sur macOS, Safari sur iPhone…"
+  - type: textarea
+    id: journaux
+    attributes:
+      label: Messages d'erreur
+      description: Console du navigateur ou journaux du serveur (`docker compose logs`), après avoir retiré tout secret.
+      render: text

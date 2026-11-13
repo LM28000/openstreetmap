@@ -1,0 +1,63 @@
+# Intégration continue : le site (types, construction) et le serveur (tests).
+# Pas de `cargo fmt --check` : le code n'est pas formaté avec rustfmt (voir docs/developpement.md).
+name: CI
+
+on:
+  push:
+  pull_request:
+
+# Une seule exécution par branche : une nouvelle poussée annule la précédente.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  web:
+    name: Site (typecheck, build)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: web
+    steps:
+      - uses: actions/checkout@v4
+      # Même version de pnpm que server/Dockerfile.
+      - uses: pnpm/action-setup@v4
+        with:
+          version: 12.8.1
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: pnpm
+          cache-dependency-path: web/pnpm-lock.yaml
+      - run: pnpm install --frozen-lockfile
+      - run: pnpm typecheck
+      - run: pnpm build
+
+  server:
+    name: Serveur (clippy, tests)
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: server
+    env:
+      CARGO_TERM_COLOR: always
+      CARGO_PROFILE_DEV_DEBUG: 0
+    steps:
+      - uses: actions/checkout@v4
+      # Édition 2024 : Rust 1.85 au moins ; on prend la version de server/Dockerfile.
+      - name: Chaîne d'outils Rust
+        run: |
+          rustup toolchain install 1.94 --profile minimal --component clippy
+          rustup default 1.94
+      - uses: Swatinem/rust-cache@v2
+        with:
+          workspaces: server
+      # Le code produit encore des avertissements clippy : ils sont affichés sans faire échouer la CI.
+      - name: cargo clippy (avertissements tolérés)
+        run: cargo clippy --locked --all-targets
+        continue-on-error: true
+      - name: cargo test
+        run: cargo test --locked

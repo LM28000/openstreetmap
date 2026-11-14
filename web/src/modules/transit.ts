@@ -152,6 +152,8 @@ interface Estimate {
   stepMs: number;
   /** Longitude et latitude de chaque point : [lon0, lat0, lon1, lat1, …]. */
   xy: Float64Array;
+  /** Direction (degrés depuis le nord) du segment de trajectoire où se trouve le véhicule ; absente tant qu'il n'a pas bougé. */
+  bearing?: number;
 }
 
 export interface Vehicle {
@@ -236,6 +238,11 @@ const MIN_SPAN_MS = 10_000;
 const MAX_SPAN_MS = 40_000;
 /** Écart (degrés) au-delà duquel un véhicule a « sauté » (fin de service, retour au dépôt) : on ne l'anime pas. */
 const MAX_GLIDE_DEG = 0.03;
+/**
+ * Déplacement (mètres) en dessous duquel on ne lit plus de direction : une position arrondie à 5 décimales (1 m) ou le
+ * bruit d'un GPS à l'arrêt donneraient un cap au hasard.
+ */
+const MIN_MOVE_M = 6;
 /** Une position plus vieille que cela (secondes) est affichée estompée. */
 const DIM_AFTER_S = 120;
 /** Au-delà de cet écart (ms) entre l'horloge du serveur et celle du navigateur, on ne se fie pas à l'heure du serveur pour lire les trajectoires. */
@@ -373,7 +380,18 @@ function estimateOf(v: ApiVehicle, e: ApiEstimate, receivedAt: number, stepMs: n
   };
 }
 
-/** Écrit dans `out` la position de la trajectoire à l'instant `time` ; vrai si la trajectoire est finie (le véhicule s'y arrête). */
+/** Cap (degrés depuis le nord) et longueur (mètres) du déplacement de (lon0, lat0) à (lon1, lat1). */
+function moveFrom(lon0: number, lat0: number, lon1: number, lat1: number): { bearing: number; meters: number } {
+  const dx = (lon1 - lon0) * Math.cos((((lat0 + lat1) / 2) * Math.PI) / 180);
+  const dy = lat1 - lat0;
+  return { bearing: ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360, meters: Math.hypot(dx, dy) * 111_320 };
+}
+
+/**
+ * Écrit dans `out` la position de la trajectoire à l'instant `time` ; vrai si la trajectoire est finie (le véhicule s'y arrête).
+ * Met aussi à jour `e.bearing`, la direction du segment parcouru : le véhicule regarde où il va, y compris dans les virages
+ * (le cap envoyé par le serveur est celui du seul premier segment). À l'arrêt, le dernier cap est conservé.
+ */
 function atTime(e: Estimate, time: number, out: [number, number, number]): boolean {
   const last = e.xy.length / 2 - 1;
   const u = Math.min(Math.max((time - e.t0) / e.stepMs, 0), last);
@@ -382,6 +400,10 @@ function atTime(e: Estimate, time: number, out: [number, number, number]): boole
   const next = Math.min(i + 1, last);
   out[0] = e.xy[2 * i]! + (e.xy[2 * next]! - e.xy[2 * i]!) * f;
   out[1] = e.xy[2 * i + 1]! + (e.xy[2 * next + 1]! - e.xy[2 * i + 1]!) * f;
+  if (next > i) {
+    const move = moveFrom(e.xy[2 * i]!, e.xy[2 * i + 1]!, e.xy[2 * next]!, e.xy[2 * next + 1]!);
+    if (move.meters >= MIN_MOVE_M) e.bearing = move.bearing;
+  }
   return u >= last;
 }
 
@@ -395,6 +417,20 @@ function pathBearing(v: Vehicle): number {
     if (Math.abs(dx) + Math.abs(dy) > 1e-6) return ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
   }
   return 0;
+}
+
+/** Réseaux dont au moins trois véhicules annoncent un cap et dont tous ces caps valent exactement 0 : le champ n'est pas renseigné. */
+function fakeHeadingNetworks(json: ApiTransit, lines: Line[]): Set<number> {
+  const counts = new Map<number, { all: number; zero: number }>();
+  for (const v of json.vehicles) {
+    if (v.est || v.heading === undefined) continue;
+    const index = lines[v.line]!.network.index;
+    const c = counts.get(index) ?? { all: 0, zero: 0 };
+    c.all++;
+    if (v.heading === 0) c.zero++;
+    counts.set(index, c);
+  }
+  return new Set([...counts].filter(([, c]) => c.all >= 3 && c.zero === c.all).map(([index]) => index));
 }
 
 async function loadTransit(signal: AbortSignal): Promise<TransitData> {
@@ -416,9 +452,13 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
     kind: kindOf(l.mode),
   }));
 
+  // Certains réseaux écrivent 0 dans le cap de tous leurs véhicules (« non renseigné ») : ils regarderaient tous vers le nord.
+  const zeroOnly = fakeHeadingNetworks(json, lines);
+
   const sums = networks.map(() => ({ lon: 0, lat: 0 }));
   const list: Vehicle[] = json.vehicles.map((v) => {
     const line = lines[v.line]!;
+    const heading = !v.est && zeroOnly.has(line.network.index) ? undefined : v.heading;
     const sum = sums[line.network.index]!;
     sum.lon += v.lon;
     sum.lat += v.lat;
@@ -436,8 +476,8 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
       fromLat: v.lat,
       arrivedAt: receivedAt,
       spanMs: MIN_SPAN_MS,
-      headingDeg: v.heading,
-      bearing: v.heading ?? 0,
+      headingDeg: heading,
+      bearing: heading ?? 0,
       speedKmh: v.speed,
       ts: v.ts * 1000,
       fill,
@@ -448,13 +488,14 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
       settled: !v.est,
       groundVersion: -1,
     };
-    if (v.heading === undefined) vehicle.bearing = previous?.byKey.get(key)?.bearing ?? pathBearing(vehicle);
-    // Continuité : le véhicule part de là où on le voyait, et non de sa position précédente.
     const old = vehicle.estimate ? undefined : previous?.byKey.get(key);
+    // Sans cap annoncé : celui qu'on lui voyait, sinon celui de sa trajectoire estimée.
+    if (heading === undefined) vehicle.bearing = old?.bearing ?? pathBearing(vehicle);
+    // Continuité : le véhicule part de là où on le voit, et non de sa position précédente.
     if (old && !old.estimate) {
       if (old.ts === vehicle.ts) {
         // Pas de nouvelle mesure : le mouvement en cours se poursuit.
-        Object.assign(vehicle, { fromLon: old.fromLon, fromLat: old.fromLat, arrivedAt: old.arrivedAt, spanMs: old.spanMs, settled: old.settled });
+        Object.assign(vehicle, { fromLon: old.fromLon, fromLat: old.fromLat, arrivedAt: old.arrivedAt, spanMs: old.spanMs, settled: old.settled, bearing: old.bearing });
         vehicle.position = old.position;
         vehicle.groundVersion = old.groundVersion;
       } else {
@@ -463,7 +504,11 @@ async function loadTransit(signal: AbortSignal): Promise<TransitData> {
         if (Math.abs(shownLon - v.lon) < MAX_GLIDE_DEG && Math.abs(shownLat - v.lat) < MAX_GLIDE_DEG && (shownLon !== v.lon || shownLat !== v.lat)) {
           vehicle.fromLon = shownLon;
           vehicle.fromLat = shownLat;
-          if (v.heading === undefined) vehicle.bearing = ((Math.atan2((v.lon - shownLon) * Math.cos((v.lat * Math.PI) / 180), v.lat - shownLat) * 180) / Math.PI + 360) % 360;
+          // Il glisse en ligne droite de là où on le voit à la nouvelle position : son corps suit cette direction (un cap
+          // annoncé qui s'en écarte le ferait avancer en crabe). Un déplacement trop court ne dit rien : on garde le cap d'avant.
+          const glide = moveFrom(shownLon, shownLat, v.lon, v.lat);
+          if (glide.meters >= MIN_MOVE_M) vehicle.bearing = glide.bearing;
+          else vehicle.bearing = old.bearing;
           vehicle.spanMs = Math.min(Math.max((vehicle.ts - old.ts) || MIN_SPAN_MS, MIN_SPAN_MS), MAX_SPAN_MS);
           vehicle.settled = false;
           vehicle.position = [shownLon, shownLat, old.position[2]];
@@ -605,14 +650,14 @@ function placeReplayVehicle(chunk: DecodedChunk, v: Vehicle, time: number): bool
   const speed = measure(chunk, scratch, 1);
   v.headingDeg = heading === undefined ? undefined : Math.round(heading);
   v.speedKmh = speed === undefined ? undefined : Math.round(speed);
-  if (heading !== undefined) {
-    v.bearing = heading;
-  } else if (scratch.j >= 0 && !scratch.held) {
-    // Sans cap annoncé : le sens du mouvement entre les deux points enregistrés.
-    const dx = (chunk.lon[scratch.j]! - chunk.lon[scratch.i]!) * Math.cos((scratch.lat * Math.PI) / 180);
-    const dy = chunk.lat[scratch.j]! - chunk.lat[scratch.i]!;
-    v.bearing = ((Math.atan2(dx, dy) * 180) / Math.PI + 360) % 360;
-  }
+  // Le véhicule va en ligne droite entre les deux points enregistrés : son corps suit ce sens. Le cap annoncé ne sert qu'à
+  // l'arrêt (déplacement trop court pour dire quoi que ce soit), et à défaut le dernier cap est conservé.
+  const move =
+    scratch.j >= 0 && !scratch.held
+      ? moveFrom(chunk.lon[scratch.i]! / 1e5, chunk.lat[scratch.i]! / 1e5, chunk.lon[scratch.j]! / 1e5, chunk.lat[scratch.j]! / 1e5)
+      : undefined;
+  if (move && move.meters >= MIN_MOVE_M) v.bearing = move.bearing;
+  else if (heading !== undefined && heading !== 0) v.bearing = heading;
   v.lon = scratch.lon;
   v.lat = scratch.lat;
   v.position[0] = scratch.lon;
@@ -694,6 +739,7 @@ function place(data: TransitData, time: number, terrain: { elevation(lon: number
     if (v.settled && !needsGround) continue;
     if (v.estimate) {
       v.settled = atTime(v.estimate, time, v.position);
+      if (v.estimate.bearing !== undefined) v.bearing = v.estimate.bearing;
     } else if (!v.settled) {
       const p = Math.min(Math.max((time - v.arrivedAt) / v.spanMs, 0), 1);
       v.position[0] = v.fromLon + (v.lon - v.fromLon) * p;

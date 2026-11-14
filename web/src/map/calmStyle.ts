@@ -239,6 +239,25 @@ export function applyCalmStyle(map: MapLibreMap): void {
   if (ids.has('poi_transit')) paint(map, 'poi_transit', 'icon-opacity', ['interpolate', ['linear'], ['zoom'], 15, 0.4, 17, 0.7]);
 
   thinCities(map, ids);
+  guardShieldFilters(map, ids);
+}
+
+/**
+ * Les écussons de routes (Liberty) filtrent sur `ref_length <= 6`. Les tronçons sans numéro n'ont pas
+ * de `ref_length` : la comparaison reçoit `null` et MapLibre avertit « Expected value to be of type
+ * number, but found null » (une fois par couche, dès que les écussons s'affichent, au zoom 10 ici).
+ * Le résultat était déjà « faux » pour ces tronçons : on le dit explicitement avec `has`, qui court-circuite
+ * la comparaison, sans changer ce qui est dessiné.
+ */
+const SHIELD_LAYERS = ['highway-shield-non-us', 'highway-shield-us-interstate', 'road_shield_us'];
+
+function guardShieldFilters(map: MapLibreMap, ids: Set<string>): void {
+  for (const id of SHIELD_LAYERS) {
+    if (!ids.has(id)) continue;
+    const filter = map.getFilter(id);
+    if (!filter) continue;
+    map.setFilter(id, ['all', ['has', 'ref_length'], filter] as never);
+  }
 }
 
 /** Aux petits zooms, seules les plus grandes villes ; les autres arrivent un peu plus près. */

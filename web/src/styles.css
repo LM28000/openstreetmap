@@ -1806,9 +1806,15 @@ p {
     bottom: calc(var(--sheet-h, 68px) + 6px);
   }
 
-  .app[data-sheet='full'] .maplibregl-ctrl-bottom-right,
-  .app[data-sheet='full'] .maplibregl-ctrl-attrib {
+  .app[data-sheet='full']:not([data-zone-drawing]) .maplibregl-ctrl-bottom-right,
+  .app[data-sheet='full']:not([data-zone-drawing]) .maplibregl-ctrl-attrib {
     display: none;
+  }
+
+  /* Pendant le tracé d'une zone la feuille est masquée (voir plus bas) : commandes, échelle et crédits
+     retombent au ras du bas de l'écran, et restent visibles même si la feuille était ouverte en grand. */
+  .app[data-zone-drawing] {
+    --sheet-h: 0px;
   }
 
   .welcome {
@@ -2505,9 +2511,10 @@ p {
 }
 
 @media (max-width: 719.98px) {
-  /* À gauche de la colonne des commandes de la carte, qu'elle ne doit pas recouvrir. */
+  /* À gauche de la colonne des commandes de la carte, qu'elle ne doit pas recouvrir, et au-dessus de la rangée
+     échelle et crédits (bouton « i » de 24 px, posé à 6 px du bas), qu'elle ne doit pas cacher non plus. */
   .zone-bar {
-    bottom: calc(var(--sheet-h, 68px) + 12px);
+    bottom: calc(var(--sheet-h, 68px) + 6px + 24px + var(--space-4));
     left: var(--ui-edge);
     right: calc(var(--ui-edge) + 44px + var(--space-4));
     width: auto;

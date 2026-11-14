@@ -98,17 +98,21 @@ pub fn load(dir: &Path, tile: TileId) -> Result<Option<Tile>> {
     if bytes.is_empty() {
         return Ok(None);
     }
+    Ok(Some(Tile { heights: decode(&bytes)? }))
+}
+
+/// Altitudes (mètres, ligne par ligne) d'une tuile WebP « terrarium » de 512 × 512 pixels.
+pub fn decode(bytes: &[u8]) -> Result<Vec<f32>> {
     let mut decoder = image_webp::WebPDecoder::new(Cursor::new(bytes))?;
     let (width, height) = decoder.dimensions();
     anyhow::ensure!(width as usize == SIZE && height as usize == SIZE, "tuile d'altitude de taille inattendue");
     let channels = if decoder.has_alpha() { 4 } else { 3 };
     let mut pixels = vec![0; decoder.output_buffer_size().context("taille de tuile inconnue")?];
     decoder.read_image(&mut pixels)?;
-    let heights = pixels
+    Ok(pixels
         .chunks_exact(channels)
         .map(|p| f32::from(p[0]) * 256.0 + f32::from(p[1]) + f32::from(p[2]) / 256.0 - 32_768.0)
-        .collect();
-    Ok(Some(Tile { heights }))
+        .collect())
 }
 
 /// Altitude de nombreux points d'un coup : chaque tuile n'est décodée qu'une fois.

@@ -1,7 +1,7 @@
 /** Commandes : aller à une date, revenir au direct, relief, globe, pause. */
 import { clock } from '../core/clock';
 import { tour } from '../core/tour';
-import { TERRAIN_EXAGGERATION, TERRAIN_SOURCE } from '../map/baseMap';
+import { terrainOptions } from '../map/baseMap';
 import { mapOf } from './access';
 import { FUTURE_LIMIT_MS, isLiveWord, parseWhen, PAST_LIMIT_MS } from './dates';
 import { matchScore, pad, rank } from './normalize';
@@ -49,7 +49,7 @@ export const commandsProvider: Provider = {
         subtitle: 'Commande de la carte',
         run: () => {
           if (!map) return;
-          map.setTerrain(terrainOn ? null : { source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
+          map.setTerrain(terrainOn ? null : terrainOptions());
         },
       },
       {

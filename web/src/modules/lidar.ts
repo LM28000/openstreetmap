@@ -15,10 +15,17 @@
  * Les estompages sont servis en tuiles WMTS (`PM`, zoom 0 à 18), la hauteur colorée par le WMS-Raster (la couche
  * « hypso_mnh » n'existe pas en tuiles). La couche est insérée sous les étiquettes (et sous l'ombre de la nuit),
  * donc le relief, les noms et les symboles restent lisibles ; elle est drapée sur le relief s'il est affiché.
+ *
+ * Le relief 3D lui-même peut aussi prendre son altitude du LiDAR HD (réglage « Relief 3D », allumé par défaut) : le
+ * serveur convertit le MNT de l'IGN (BIL 32 bits) en tuiles « terrarium » (`/api/relief-lidar`, voir `server/src/relief_lidar.rs`)
+ * et retombe sur Mapterhorn hors de la zone couverte. MapLibre n'admet qu'une source de relief à la fois : on bascule de
+ * l'une à l'autre (`setLidarTerrain`) en s'approchant d'une zone de France (zoom 11) et on revient en s'éloignant (zoom 10),
+ * jamais à chaque zoom : un changement de source recharge tout le relief. C'est toujours le terrain nu (MNT) qui donne la
+ * forme, quel que soit le produit affiché en estompage.
  */
 import type { Map as MapLibreMap, RasterSourceSpecification } from 'maplibre-gl';
 import { defineModule, type LegendItem } from '../core/module';
-import { firstSymbolLayerId } from '../map/baseMap';
+import { firstSymbolLayerId, isLidarTerrain, setLidarTerrain } from '../map/baseMap';
 
 const SOURCE_PREFIX = 'lidar-hd-';
 const LAYER_ID = 'lidar-hd';
@@ -61,6 +68,28 @@ const PRODUCTS: Record<string, Product> = {
 /** Les quatre teintes de l'échelle hypsométrique, relevées dans les images du WMS (sol, bas, haut, très haut). */
 const HYPSO = ['#94ff3d', '#fffa7b', '#ffa83e', '#ff4d00'];
 
+/** Relief 3D du LiDAR : on bascule en s'approchant (zoom `TERRAIN_ON_ZOOM`) et on revient en s'éloignant (`TERRAIN_OFF_ZOOM`). */
+const TERRAIN_ON_ZOOM = 11;
+const TERRAIN_OFF_ZOOM = 10;
+/** France métropolitaine (ouest, sud, est, nord) : le LiDAR HD n'existe pas ailleurs (le serveur n'interroge pas l'IGN hors de là). */
+const FRANCE_BOX = [-5.5, 41.2, 9.9, 51.3] as const;
+/** Marge (degrés) avant de repasser au relief ordinaire en quittant la France : évite de basculer sur la frontière. */
+const LEAVE_MARGIN = 0.5;
+
+function inFrance(lng: number, lat: number, margin: number): boolean {
+  const [west, south, east, north] = FRANCE_BOX;
+  return lng >= west - margin && lng <= east + margin && lat >= south - margin && lat <= north + margin;
+}
+
+/** Faut-il que le relief 3D prenne l'altitude du LiDAR, vu le réglage, le zoom et la zone regardée ? */
+function wantsLidarTerrain(map: MapLibreMap, settings: Readonly<Record<string, string>>, zoom: number): boolean {
+  if (settings.relief3d === 'non') return false;
+  const center = map.getCenter();
+  const on = isLidarTerrain();
+  if (!inFrance(center.lng, center.lat, on ? LEAVE_MARGIN : 0)) return false;
+  return on ? zoom >= TERRAIN_OFF_ZOOM : zoom >= TERRAIN_ON_ZOOM;
+}
+
 const sourceId = (product: string) => `${SOURCE_PREFIX}${product}`;
 
 function productOf(settings: Readonly<Record<string, string>>): string {
@@ -102,6 +131,8 @@ export const lidar = defineModule<null>({
   description: 'Le relief et la hauteur des arbres et des bâtiments d’après le LiDAR HD de l’IGN, à fort zoom, là où il est publié.',
   attribution: 'IGN, LiDAR HD (Licence Etalab 2.0)',
   timeStepMs: 60_000,
+  followsView: true,
+  zoomBreaks: [TERRAIN_OFF_ZOOM, TERRAIN_ON_ZOOM],
 
   settings: [
     {
@@ -109,6 +140,15 @@ export const lidar = defineModule<null>({
       label: 'Produit',
       defaultValue: 'mnt',
       options: Object.entries(PRODUCTS).map(([value, product]) => ({ value, label: product.label })),
+    },
+    {
+      id: 'relief3d',
+      label: 'Relief 3D',
+      defaultValue: 'oui',
+      options: [
+        { value: 'oui', label: 'Altitude du LiDAR HD' },
+        { value: 'non', label: 'Relief ordinaire (Mapterhorn)' },
+      ],
     },
     {
       id: 'opacite',
@@ -127,8 +167,16 @@ export const lidar = defineModule<null>({
   ],
 
   legend(settings): LegendItem[] {
-    if (productOf(settings) !== 'mnh') return [];
+    const altitude: LegendItem = {
+      color: 'var(--ui-muted)',
+      label:
+        settings.relief3d === 'non'
+          ? 'Relief 3D : altitude Mapterhorn (relief ordinaire)'
+          : 'Relief 3D : altitude du LiDAR HD de l’IGN (terrain nu, maille de 50 cm), là où il est publié, sinon Mapterhorn',
+    };
+    if (productOf(settings) !== 'mnh') return [altitude];
     return [
+      altitude,
       { color: HYPSO[0]!, label: 'Au ras du sol, herbe, toits plats' },
       { color: HYPSO[1]!, label: 'Haies, arbustes, maisons' },
       { color: HYPSO[2]!, label: 'Grands arbres, immeubles' },
@@ -139,8 +187,9 @@ export const lidar = defineModule<null>({
   summary({ settings, view }) {
     const minZoom = Number(settings.zoom) || 14;
     const about = PRODUCTS[productOf(settings)]!.about;
-    if (view.zoom < minZoom) return `Approchez-vous (zoom ${minZoom} ou plus) pour voir le ${about}`;
-    return `LiDAR HD : ${about}. Couverture partielle : rien là où l’IGN n’a pas encore publié`;
+    const relief = isLidarTerrain() ? ' Altitude du relief 3D : LiDAR HD de l’IGN.' : '';
+    if (view.zoom < minZoom) return `Approchez-vous (zoom ${minZoom} ou plus) pour voir le ${about}.${relief}`;
+    return `LiDAR HD : ${about}. Couverture partielle : rien là où l’IGN n’a pas encore publié.${relief}`;
   },
 
   native: {
@@ -148,7 +197,8 @@ export const lidar = defineModule<null>({
       ensure(map, 'mnt', 14);
     },
 
-    update(map, { settings, night }) {
+    update(map, { settings, night, view }) {
+      setLidarTerrain(map, wantsLidarTerrain(map, settings, view.zoom));
       const product = productOf(settings);
       const minZoom = Number(settings.zoom) || 14;
       ensure(map, product, minZoom);
@@ -160,6 +210,7 @@ export const lidar = defineModule<null>({
     },
 
     remove(map) {
+      setLidarTerrain(map, false);
       removeAll(map);
     },
   },

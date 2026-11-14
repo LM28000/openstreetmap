@@ -24,6 +24,11 @@ export const TERRAIN_SOURCE = 'relief';
 export const TERRAIN_EXAGGERATION = 1.4;
 const HILLSHADE_SOURCE = 'relief-ombrage';
 
+/** Relief du LiDAR HD de l'IGN (module « Relief LiDAR HD »), converti par le serveur : voir `setLidarTerrain`. */
+export const LIDAR_TERRAIN_SOURCE = 'relief-lidar';
+const LIDAR_HILLSHADE_SOURCE = 'relief-lidar-ombrage';
+const LIDAR_HILLSHADE_LAYER = 'ombrage-relief-lidar';
+
 /**
  * Altitudes Mapterhorn (encodage « terrarium », tuiles 512 px).
  * Couverture mondiale jusqu'au zoom 12 ; au-delà, MapLibre agrandit les tuiles.
@@ -36,6 +41,71 @@ const DEM_SOURCE: RasterDEMSourceSpecification = {
   encoding: 'terrarium',
   attribution: '<a href="https://mapterhorn.com/attribution" target="_blank" rel="noreferrer">© Mapterhorn</a>',
 };
+
+/**
+ * Altitudes du LiDAR HD, mêmes encodage et taille de tuile. Le serveur (`/api/relief-lidar`) rend le MNT de l'IGN là où
+ * il existe et renvoie vers la tuile Mapterhorn ailleurs et sous le zoom 13. Mapterhorn n'a plus de tuiles en France
+ * au-dessus du zoom 16 (ni du 17 à Lille) : la source s'arrête au 16, MapLibre agrandit au-delà.
+ */
+function lidarDemSource(): RasterDEMSourceSpecification {
+  return {
+    type: 'raster-dem',
+    tiles: [new URL('/api/relief-lidar/{z}/{x}/{y}.png', window.location.href).href.replace(/%7B/g, '{').replace(/%7D/g, '}')],
+    tileSize: 512,
+    maxzoom: 16,
+    encoding: 'terrarium',
+    attribution: 'IGN, LiDAR HD (Licence Etalab 2.0)',
+  };
+}
+
+/**
+ * Source d'altitude du relief 3D à un instant donné. MapLibre n'en admet qu'une seule à la fois pour `setTerrain` :
+ * changer de source remplace tout le relief (et son cache de rendu), donc on ne le fait qu'à l'allumage et à
+ * l'extinction du relief LiDAR, pas à chaque zoom (le serveur se charge de retomber sur Mapterhorn au besoin).
+ */
+let lidarTerrain = false;
+
+export const isLidarTerrain = (): boolean => lidarTerrain;
+export const isTerrainSource = (id: string | undefined): boolean => id === TERRAIN_SOURCE || id === LIDAR_TERRAIN_SOURCE;
+
+/** Le réglage du relief 3D (source et exagération) à donner à `map.setTerrain`. L'exagération est la même pour les deux sources : pas de saut au passage de l'une à l'autre. */
+export function terrainOptions(): { source: string; exaggeration: number } {
+  return { source: lidarTerrain ? LIDAR_TERRAIN_SOURCE : TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION };
+}
+
+/** Ajoute (si besoin) les deux sources du relief LiDAR, et la couche d'ombrage qui lui correspond. */
+function ensureLidarSources(map: MapLibreMap): void {
+  if (!map.getSource(LIDAR_TERRAIN_SOURCE)) map.addSource(LIDAR_TERRAIN_SOURCE, lidarDemSource());
+  if (!map.getSource(LIDAR_HILLSHADE_SOURCE)) map.addSource(LIDAR_HILLSHADE_SOURCE, lidarDemSource());
+  if (!map.getLayer(LIDAR_HILLSHADE_LAYER) && map.getLayer('ombrage-relief')) {
+    map.addLayer(
+      { id: LIDAR_HILLSHADE_LAYER, type: 'hillshade', source: LIDAR_HILLSHADE_SOURCE, layout: { visibility: 'none' }, paint: hillshadePaint() as never },
+      'ombrage-relief',
+    );
+  }
+}
+
+/**
+ * Allume ou éteint le relief 3D du LiDAR HD (appelé par le module « Relief LiDAR HD »). L'ombrage change de source en même
+ * temps, sinon un ombrage de relief grossier se poserait sur un relief fin.
+ */
+export function setLidarTerrain(map: MapLibreMap, on: boolean): void {
+  if (lidarTerrain === on) return;
+  lidarTerrain = on;
+  if (on) ensureLidarSources(map);
+  const layer = map.getLayer(LIDAR_HILLSHADE_LAYER);
+  if (layer) map.setLayoutProperty(LIDAR_HILLSHADE_LAYER, 'visibility', on ? 'visible' : 'none');
+  if (map.getLayer('ombrage-relief')) map.setLayoutProperty('ombrage-relief', 'visibility', on && layer ? 'none' : 'visible');
+  syncTerrainSource(map);
+}
+
+/** Met la source du relief en place en accord avec `lidarTerrain` (seulement si le relief est affiché : l'éteindre est un choix de l'utilisateur). */
+function syncTerrainSource(map: MapLibreMap): void {
+  const terrain = map.getTerrain();
+  if (!terrain || terrain.source === terrainOptions().source || !map.getSource(terrainOptions().source)) return;
+  if (map.getProjection()?.type === 'globe') return;
+  map.setTerrain(terrainOptions());
+}
 
 /** Ciel de jour. Le module « Jour et nuit » l'assombrit selon la position du soleil. */
 export const DAY_SKY: SkySpecification = {
@@ -89,7 +159,15 @@ export function setupBaseMap(map: MapLibreMap): void {
     );
   }
 
-  map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
+  // Après un changement de style, le relief LiDAR (s'il est demandé) est à remettre avec ses sources.
+  if (lidarTerrain) {
+    ensureLidarSources(map);
+    if (map.getLayer(LIDAR_HILLSHADE_LAYER)) {
+      map.setLayoutProperty(LIDAR_HILLSHADE_LAYER, 'visibility', 'visible');
+      map.setLayoutProperty('ombrage-relief', 'visibility', 'none');
+    }
+  }
+  map.setTerrain(terrainOptions());
 
   map.setSky(DAY_SKY);
 }
@@ -134,14 +212,14 @@ export function keepGlobeAndTerrainApart(map: MapLibreMap): void {
 
   const setTerrain = (on: boolean) => {
     imposed = on;
-    map.setTerrain(on ? { source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION } : null);
+    map.setTerrain(on ? terrainOptions() : null);
   };
 
   map.on('projectiontransition', () => {
     const hasTerrain = map.getTerrain() !== null;
     if (isGlobe()) {
       if (hasTerrain) setTerrain(false);
-    } else if (terrainWanted && !hasTerrain && map.getSource(TERRAIN_SOURCE)) {
+    } else if (terrainWanted && !hasTerrain && map.getSource(terrainOptions().source)) {
       // (L'événement arrive aussi pendant le chargement du style, avant que la source existe.)
       setTerrain(true);
     }

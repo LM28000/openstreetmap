@@ -10,6 +10,7 @@
 //! - relève l'indice de qualité de l'air (Atmo Data, avec un compte) toutes les heures ;
 //! - relève le niveau de la mer aux marégraphes du Shom (REFMAR) toutes les 10 minutes ;
 //! - estime la position des bus, trams et métros des réseaux qui ne publient que leurs horaires en temps réel ;
+//! - convertit le MNT du LiDAR HD de l'IGN en tuiles d'altitude pour le relief 3D (`/api/relief-lidar`) ;
 //! - sert l'API `/api/trains` au site.
 //!
 //! Réglages par variables d'environnement :
@@ -18,6 +19,7 @@
 //! - `ARCHIVE_DIR` (aucun) : si défini, archive chaque version du flux temps réel et enregistre l'historique des avions, bateaux et transports ;
 //! - `HISTORIQUE_JOURS` (7) : durée de conservation des positions enregistrées, en jours ;
 //! - `ARCHIVE_SNCF_JOURS` (180) : durée de conservation de l'archive brute du temps réel SNCF (0 = sans limite) ;
+//! - `RELIEF_LIDAR_MO` (300) : plafond du cache disque des tuiles de relief LiDAR, en Mo ;
 //! - `RUST_LOG` (info) : niveau de détail des journaux ;
 //! - `AISSTREAM_API_KEY` (aucune) : clé du flux des navires ; sans elle, la couche est désactivée ;
 //! - `TUILES_EFFACER_SOURCES` (aucune) : si définie, la source d'un jeu de tuiles est effacée après sa fabrication ;
@@ -45,6 +47,7 @@ mod planes;
 mod raptor;
 mod rails;
 mod realtime;
+mod relief_lidar;
 mod ships;
 mod satellites;
 mod state;
@@ -145,7 +148,10 @@ async fn main() -> Result<()> {
     let address = SocketAddr::new(config.host, config.port);
     let listener = tokio::net::TcpListener::bind(address).await.with_context(|| format!("écoute sur {address}"))?;
     info!("serveur prêt sur http://{address}");
-    axum::serve(listener, api::router(state, config.web_dir.as_deref()).merge(history::router(history))).with_graceful_shutdown(shutdown_signal()).await?;
+    let app = api::router(state, config.web_dir.as_deref())
+        .merge(history::router(history))
+        .merge(relief_lidar::router(http.clone(), config.data_dir.clone()));
+    axum::serve(listener, app).with_graceful_shutdown(shutdown_signal()).await?;
     Ok(())
 }
 

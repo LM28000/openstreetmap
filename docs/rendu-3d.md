@@ -7,7 +7,7 @@ Le rendu repose sur deux moteurs superposés dans un même contexte WebGL : **Ma
 ## Le fond de carte, le relief et la nuit
 
 - Le fond est le style OpenFreeMap « Liberty », retouché au chargement (`web/src/map/calmStyle.ts`) : routes en gris chaud, eau en bleu-gris, moins de libellés de loin ; la couleur reste réservée aux données. Il passe à une vraie palette sombre la nuit, selon le soleil au centre de la vue.
-- Le relief vient des tuiles Mapterhorn (`raster-dem`), avec une exagération de 1,4 (`TERRAIN_EXAGGERATION` dans `map/baseMap.ts`). Des erreurs 404 sur `tiles.mapterhorn.com` apparaissent dans la console : c'est normal, Mapterhorn ne fournit pas de tuiles au-dessus de l'océan.
+- Le relief vient des tuiles Mapterhorn (`raster-dem`), avec une exagération de 1,4 (`TERRAIN_EXAGGERATION` dans `map/baseMap.ts`). Avec la couche « Relief LiDAR HD » (réglage « Relief 3D »), la source du relief devient `relief-lidar` (le MNT LiDAR HD de l'IGN converti par le serveur, Mapterhorn en repli, même exagération) à partir du zoom 11 sur la France : MapLibre n'admet qu'une source de relief, `setLidarTerrain` (`map/baseMap.ts`) la change donc d'un bloc, et l'ombrage avec elle (voir `docs/couches.md`). Des erreurs 404 sur `tiles.mapterhorn.com` apparaissent dans la console : c'est normal, Mapterhorn ne fournit pas de tuiles au-dessus de l'océan.
 - La couche « Jour et nuit » calcule la position du soleil (`modules/solar.ts`), teinte le fond et dessine l'ombre de la nuit et des crépuscules.
 
 ![Le fond de carte passe en palette sombre la nuit](images/nuit.jpg)

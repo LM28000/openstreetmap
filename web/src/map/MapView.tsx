@@ -16,7 +16,8 @@ import {
   BASE_STYLE_URL,
   INITIAL_VIEW,
   TERRAIN_EXAGGERATION,
-  TERRAIN_SOURCE,
+  isTerrainSource,
+  terrainOptions,
   ignoreMissingIcons,
   CalmScaleControl,
   keepGlobeAndTerrainApart,
@@ -63,7 +64,8 @@ export function MapView({ manager }: { manager: ModuleManager }) {
     // MapLibre empile du bas vers le haut : le dernier contrôle ajouté est le plus haut.
     map.addControl(new AttributionControl(), 'bottom-right'); // placé en bas de l'écran par le CSS
     map.addControl(new CalmScaleControl({ maxWidth: 110 }), 'bottom-right');
-    map.addControl(new TerrainControl({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION }), 'bottom-right');
+    // Le bouton relief réactive le relief avec la source du moment (ordinaire ou LiDAR HD, voir `setLidarTerrain`).
+    map.addControl(new TerrainControl({ get source() { return terrainOptions().source; }, exaggeration: TERRAIN_EXAGGERATION }), 'bottom-right');
     map.addControl(new GlobeControl(), 'bottom-right');
     map.addControl(new NavigationControl({ visualizePitch: true }), 'bottom-right');
     keepGlobeAndTerrainApart(map);
@@ -79,7 +81,7 @@ export function MapView({ manager }: { manager: ModuleManager }) {
       }, 250);
     };
     map.on('sourcedata', (event) => {
-      if (event.sourceId === TERRAIN_SOURCE && event.tile) onTerrainChanged();
+      if (isTerrainSource(event.sourceId) && event.tile) onTerrainChanged();
     });
     map.on('terrain', onTerrainChanged);
 

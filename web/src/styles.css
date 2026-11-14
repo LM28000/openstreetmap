@@ -1627,6 +1627,15 @@ p {
   padding: var(--space-2) var(--space-4) var(--space-4);
   overflow-y: auto;
   overscroll-behavior: contain;
+  touch-action: pan-y;
+}
+
+/* Le catalogue a sa propre zone défilante sous le filtre : le corps de la feuille lui donne sa hauteur. Sans cela la zone
+   grandit avec la liste, ne défile jamais, et son `overscroll-behavior` retient aussi le geste qui devrait aller au parent. */
+.sheet__body--catalog {
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .sheet__fiche {

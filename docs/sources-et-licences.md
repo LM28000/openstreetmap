@@ -30,7 +30,7 @@ Les clés personnelles (aisstream.io, Atmo Data, PRIM d'Île-de-France Mobilité
 | Vélos en libre-service | chaque réseau, via transport.data.gouv.fr | licence ouverte ou ODbL selon le réseau |
 | Feux | NASA FIRMS (capteurs VIIRS) | libre, citer la NASA |
 | Qualité de l'air | Atmo France / AASQA, via Atmo Data (compte requis) | données ouvertes, citer « Atmo France / AASQA » |
-| Avions | adsb.lol (récepteurs ADS-B de la communauté) | ODbL |
+| Avions | adsb.lol (récepteurs ADS-B de la communauté) ; adsb.fi en secours quand adsb.lol demande de ralentir | ODbL ; adsb.fi : usage personnel non commercial |
 | Bateaux | aisstream.io (récepteurs AIS de la communauté) | gratuit, clé personnelle à garder sur le serveur |
 | Population | INSEE, Filosofi 2019, revenus, pauvreté et niveau de vie, données carroyées de 200 m | licence ouverte Etalab 2.0, citer « INSEE, Filosofi 2019 » |
 | Couverture mobile | ARCEP, Mon réseau mobile, cartes de couverture théorique 2026 T2 (data.arcep.fr) ; contours des départements Etalab / IGN Admin Express (masque de terre) | Licence Ouverte, citer « ARCEP, Mon réseau mobile » |
@@ -58,7 +58,7 @@ Les clés personnelles (aisstream.io, Atmo Data, PRIM d'Île-de-France Mobilité
 - **Ministère de la Culture (Mérimée)** : Licence Ouverte 2.0.
 - **Shom (REFMAR)** : Licence Ouverte 2.0, mention « Shom, REFMAR » ; mesures brutes non validées ; les prédictions officielles de marée ne sont pas des données ouvertes et ne sont pas utilisées.
 - **SNCF** : ODbL, via transport.data.gouv.fr.
-- **adsb.lol** : ODbL, crédit affiché ; **aisstream.io** : gratuit, clé personnelle, à garder sur le serveur.
+- **adsb.lol** : ODbL, crédit affiché ; **adsb.fi** (secours) : données ouvertes pour un usage personnel et non commercial, une requête par seconde au plus ; **aisstream.io** : gratuit, clé personnelle, à garder sur le serveur.
 - **CelesTrak** : au plus un téléchargement par groupe toutes les 2 h sous peine de blocage de l'adresse ; seul le serveur télécharge (au plus toutes les 3 h) et garde les réponses dans `data/satellites/`.
 - **NASA FIRMS** : libre, citer la NASA ; **EMSC** : citer l'EMSC.
 - **Atmo France / AASQA** : données ouvertes via Atmo Data (compte requis), à citer « Atmo France / AASQA ».

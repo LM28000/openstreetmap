@@ -5,9 +5,12 @@
 //! L'API est ouverte et gratuite, sans clé ni limite de débit publiée (la documentation
 //! annonce seulement qu'une clé deviendra nécessaire « à l'avenir », et demande de
 //! prévenir avant un usage en production ; le README de l'API parle de limites « dynamiques selon la charge »). On reste donc
-//! discret : une requête à la fois, un cercle après l'autre toutes les 3,3 s (et non trois d'un coup, que l'API refusait en
-//! « 429 »), un recul court et progressif après un refus (en suivant `Retry-After` s'il existe), et les cercles déjà obtenus
-//! restent publiés pendant ce temps.
+//! discret : une requête à la fois, un cercle après l'autre toutes les 5 s. À 3,3 s (18 requêtes par minute), l'API
+//! refusait une requête en « 429 » presque exactement chaque minute : un quota par minute, dépassé de peu.
+//!
+//! Quand adsb.lol refuse ou échoue, le même cercle est demandé aussitôt à adsb.fi (https://opendata.adsb.fi, même format
+//! readsb, usage personnel non commercial, une requête par seconde au plus), et adsb.fi sert les tours suivants tant que
+//! dure la pause demandée par adsb.lol (`Retry-After`). Les cercles déjà obtenus restent publiés pendant ce temps.
 //!
 //! Chaque requête décrit un cercle de 250 milles nautiques (le maximum accepté) ; trois
 //! cercles couvrent la métropole, la Corse et les abords. Un avion à la frontière de deux
@@ -24,11 +27,15 @@ use tracing::{debug, warn};
 use crate::state::AppState;
 
 const BASE_URL: &str = "https://api.adsb.lol/v2/point";
+/// Source de secours, même format (la liste s'appelle `aircraft` et non `ac`).
+const FALLBACK_URL: &str = "https://opendata.adsb.fi/api/v2";
+/// Pause d'adsb.lol après un refus sans `Retry-After` : adsb.fi sert les cercles pendant ce temps.
+const LOL_PAUSE_DEFAULT: Duration = Duration::from_secs(15);
 /// Centre (latitude, longitude) et rayon en milles nautiques de chaque requête.
 const CIRCLES: [(f64, f64, u32); 3] = [(49.0, 0.5, 250), (44.8, 2.0, 250), (45.0, 8.0, 250)];
-/// Intervalle entre deux requêtes : chacun des trois cercles est relu toutes les 10 s, mais un seul à la fois, régulièrement
-/// espacés (3,3 s). Le flux de l'API est rafraîchi chaque seconde environ ; la carte extrapole les positions entre deux relevés.
-const SLOT: Duration = Duration::from_millis(3_334);
+/// Intervalle entre deux requêtes : chacun des trois cercles est relu toutes les 15 s, un seul à la fois, régulièrement
+/// espacés (5 s, soit 12 requêtes par minute). La carte extrapole les positions entre deux relevés.
+const SLOT: Duration = Duration::from_secs(5);
 /// Recul après un refus ou un échec : 2 s, 4 s, 8 s, puis 12 s au plus (jamais de trou de plus de 20 s dans les données).
 const BACKOFF_BASE: Duration = Duration::from_secs(2);
 const BACKOFF_MAX: Duration = Duration::from_secs(12);
@@ -76,7 +83,7 @@ struct RawAircraft {
 
 #[derive(Deserialize)]
 struct RawResponse {
-    #[serde(default)]
+    #[serde(default, alias = "aircraft")]
     ac: Vec<RawAircraft>,
 }
 
@@ -207,23 +214,40 @@ pub async fn poll_forever(http: reqwest::Client, state: AppState) {
     let mut pacer = Pacer::new();
     let mut next = 0;
     let mut refusals = 0u32;
+    // Tant qu'adsb.lol demande une pause, les cercles viennent d'adsb.fi.
+    let mut lol_paused_until: Option<Instant> = None;
     loop {
         let started = Instant::now();
         let mut retry_after = None;
-        match fetch_circle(&http, next).await {
+        let lol_paused = lol_paused_until.is_some_and(|until| started < until);
+        let result = if lol_paused {
+            fetch_from(&http, Source::Fallback, next).await
+        } else {
+            match fetch_from(&http, Source::Lol, next).await {
+                Ok(planes) => Ok(planes),
+                Err(refusal) => {
+                    if refusal.too_many {
+                        refusals += 1;
+                    }
+                    let pause = refusal.retry_after.unwrap_or(LOL_PAUSE_DEFAULT).min(Duration::from_secs(120));
+                    lol_paused_until = Some(Instant::now() + pause);
+                    warn!(refus_429 = refusals, "avions : adsb.lol indisponible pour le cercle {next} ({:#}) : adsb.fi pendant {pause:?}", refusal.error);
+                    fetch_from(&http, Source::Fallback, next).await
+                }
+            }
+        };
+        match result {
             Ok(planes) => {
                 snapshots[next] = Some(Snapshot { planes, answered: Instant::now() });
                 next = (next + 1) % CIRCLES.len();
                 pacer.success();
             }
             Err(refusal) => {
-                // On garde les cercles déjà obtenus (ils vieillissent, voir `merge`) et on retente le même cercle.
-                if refusal.too_many {
-                    refusals += 1;
-                }
+                // Les deux sources ont échoué. On garde les cercles déjà obtenus (ils vieillissent, voir `merge`) et on
+                // retente le même cercle après un recul court.
                 pacer.failure(refusal.too_many);
                 retry_after = refusal.retry_after;
-                warn!(refus_429 = refusals, "avions : cercle {next} indisponible : {:#}", refusal.error);
+                warn!("avions : cercle {next} indisponible (adsb.lol et adsb.fi) : {:#}", refusal.error);
             }
         }
         // Publié aussi après un refus : les avions des cercles déjà obtenus sont republiés avec leur âge à jour, et le site
@@ -268,12 +292,36 @@ fn aged_at(best: HashMap<String, (PlaneOut, f64)>, end_s: f64) -> Vec<PlaneOut> 
         .collect()
 }
 
-async fn fetch_circle(http: &reqwest::Client, index: usize) -> Result<Vec<PlaneOut>, Refusal> {
-    let (lat, lon, radius) = CIRCLES[index];
-    let response = http.get(format!("{BASE_URL}/{lat}/{lon}/{radius}")).timeout(Duration::from_secs(15)).send().await?;
+/// D'où vient un cercle : adsb.lol, ou adsb.fi en secours.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Source {
+    Lol,
+    Fallback,
+}
+
+impl Source {
+    fn name(self) -> &'static str {
+        match self {
+            Source::Lol => "adsb.lol",
+            Source::Fallback => "adsb.fi",
+        }
+    }
+
+    fn url(self, (lat, lon, radius): (f64, f64, u32)) -> String {
+        match self {
+            Source::Lol => format!("{BASE_URL}/{lat}/{lon}/{radius}"),
+            Source::Fallback => format!("{FALLBACK_URL}/lat/{lat}/lon/{lon}/dist/{radius}"),
+        }
+    }
+}
+
+async fn fetch_from(http: &reqwest::Client, source: Source, index: usize) -> Result<Vec<PlaneOut>, Refusal> {
+    let (lat, lon, _) = CIRCLES[index];
+    let response = http.get(source.url(CIRCLES[index])).timeout(Duration::from_secs(15)).send().await?;
     if response.status() == reqwest::StatusCode::TOO_MANY_REQUESTS {
         let retry_after = response.headers().get(reqwest::header::RETRY_AFTER).and_then(|v| v.to_str().ok()).and_then(parse_retry_after);
-        return Err(Refusal { too_many: true, retry_after, error: anyhow::anyhow!("adsb.lol demande de ralentir (429, Retry-After {retry_after:?})") });
+        let name = source.name();
+        return Err(Refusal { too_many: true, retry_after, error: anyhow::anyhow!("{name} demande de ralentir (429, Retry-After {retry_after:?})") });
     }
     let text = response.error_for_status()?.text().await?;
     Ok(parse(&text).with_context(|| format!("cercle {lat},{lon}"))?)
@@ -299,7 +347,7 @@ fn merge(snapshots: &[Option<Snapshot>], now: Instant) -> Result<(Vec<u8>, usize
 
 /// Décode une réponse et ne garde que les avions positionnés, récents et dans la zone.
 fn parse(json: &str) -> Result<Vec<PlaneOut>> {
-    let raw: RawResponse = serde_json::from_str(json).context("réponse adsb.lol illisible")?;
+    let raw: RawResponse = serde_json::from_str(json).context("réponse illisible")?;
     let (south, west, north, east) = AREA;
     let clean = |text: Option<String>| text.map(|t| t.trim().to_string()).filter(|t| !t.is_empty());
 
@@ -351,6 +399,15 @@ mod tests {
       {"hex":"4d24cb","type":"adsb_icao","flight":"RYR4AU  ","r":"9H-VVJ","t":"B38M","alt_baro":37000,"alt_geom":37500,"gs":466.4,"ias":256,"track":137.52,"track_rate":-0.03,"baro_rate":-64,"geom_rate":0,"squawk":"2267","emergency":"none","category":"A3","lat":50.423894,"lon":0.408424,"seen_pos":0.366,"mlat":[],"tisb":[],"messages":46555,"seen":0.3,"rssi":-23.4},
       {"hex":"3814BA","type":"adsb_icao","r":"F-WWIR","t":"A20N","alt_baro":"ground","gs":0.1,"squawk":"7776","emergency":"none","lat":43.634399,"lon":1.344979,"seen_pos":49.622,"mlat":[],"tisb":[],"messages":8086,"seen":4.1},
       {"hex":"a1b2c3","flight":"UAL1","alt_baro":35000,"gs":480,"track":90,"lat":55.0,"lon":0.5,"seen_pos":1.0}]}"#;
+
+    #[test]
+    fn decode_une_reponse_adsb_fi() {
+        // adsb.fi : même format readsb, mais la liste s'appelle `aircraft`.
+        let fi = SAMPLE.replacen("\"ac\":[", "\"aircraft\":[", 1);
+        assert_eq!(parse(&fi).unwrap().len(), 2);
+        assert_eq!(Source::Fallback.url((49.0, 0.5, 250)), "https://opendata.adsb.fi/api/v2/lat/49/lon/0.5/dist/250");
+        assert_eq!(Source::Lol.url((49.0, 0.5, 250)), "https://api.adsb.lol/v2/point/49/0.5/250");
+    }
 
     #[test]
     fn decode_un_extrait_reel() {
@@ -424,8 +481,9 @@ mod tests {
         // Une requête de 0,4 s : on attend le reste de l'intervalle, de départ à départ.
         let wait = pacer.wait(Duration::from_millis(400), None);
         assert_eq!(wait + Duration::from_millis(400), SLOT);
-        // Trois requêtes (un tour) durent 10 s : chaque cercle est relu toutes les 10 s, comme avant.
-        assert!((SLOT * 3).as_secs_f64() > 10.0 && (SLOT * 3).as_secs_f64() < 10.01);
+        // 12 requêtes par minute au plus (à 18, adsb.lol refusait une requête par minute) ; chaque cercle relu toutes les 15 s.
+        assert!(Duration::from_secs(60).as_secs_f64() / SLOT.as_secs_f64() <= 12.0);
+        assert_eq!(SLOT * 3, S(15));
         // Une requête plus longue que l'intervalle n'est pas suivie d'une attente.
         assert_eq!(pacer.wait(S(5), None), Duration::ZERO);
     }

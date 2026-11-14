@@ -372,7 +372,7 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
   const receivedAt = Date.now();
   // Âge de la collecte, lu sur l'horloge du serveur seule : « maintenant » est l'en-tête `Date` de sa réponse (à la seconde),
   // « la collecte » son `updatedAt` (tronqué à la seconde). Le décalage entre les deux horloges s'annule, et une collecte
-  // vieille de plusieurs dizaines de secondes (le serveur patiente une minute quand adsb.lol lui demande de ralentir) garde
+  // vieille de plusieurs dizaines de secondes (le serveur passe par adsb.fi quand adsb.lol lui demande de ralentir, mais les deux peuvent échouer) garde
   // son âge. Soustraire l'horloge du navigateur et plafonner l'âge à 15 s, comme avant, faisait croire à chaque nouvelle
   // réception de cette même collecte qu'elle venait d'être relevée : tous les avions repartaient de leur position périmée.
   const serverNow = Date.parse(response.headers.get('date') ?? '');
@@ -608,7 +608,7 @@ export const planes = defineModule<PlanesData>({
   name: 'Avions',
   category: 'transport',
   description: 'Trafic aérien au-dessus de la France : position, altitude, cap, vitesse. En direct, ou relu depuis l’enregistrement du serveur quand on remonte la frise.',
-  attribution: 'adsb.lol (récepteurs ADS-B de la communauté, licence ODbL)',
+  attribution: 'adsb.lol (récepteurs ADS-B de la communauté, licence ODbL) ; adsb.fi en secours',
   refreshIntervalMs: 10_000,
   timeStepMs: 0, // les avions avancent à chaque image
   zoomBreaks: [...halfZoomBreaks(LABEL_MIN_ZOOM), MESH_MIN_ZOOM].sort((a, b) => a - b),

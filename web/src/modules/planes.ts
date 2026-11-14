@@ -107,6 +107,8 @@ export interface Plane {
   offLon: number;
   offLat: number;
   offAt: number;
+  /** Durée (ms) sur laquelle cet écart est résorbé : assez longue pour que l'avion ne recule jamais (voir `smoothingMs`). */
+  offSpanMs: number;
   // Position affichée (recalculée à chaque image) et ombre au sol.
   position: [number, number, number];
   shadow: [number, number, number];
@@ -148,10 +150,15 @@ export interface PlanesSelection {
 
 const FT = 0.3048;
 const KT = 0.514444;
-/** Au-delà, on ne prolonge plus la trajectoire d'un avion dont on n'a plus de nouvelles. */
-const MAX_EXTRAPOLATION_S = 40;
-/** Durée sur laquelle on résorbe l'écart entre l'ancienne trajectoire et la nouvelle position. */
+/**
+ * Au-delà, on ne prolonge plus la trajectoire d'un avion dont on n'a plus de nouvelles. Le serveur garde un avion tant que sa
+ * position a moins de 60 s, et il lui arrive de rester plus d'une minute sans collecte (adsb.lol demande de ralentir).
+ */
+const MAX_EXTRAPOLATION_S = 90;
+/** Durée minimale sur laquelle on résorbe l'écart entre l'ancienne trajectoire et la nouvelle position. */
 const SMOOTHING_MS = 5_000;
+/** Part de sa vitesse que l'avion garde au pire pendant la résorption d'un écart : il ralentit parfois, il ne recule jamais. */
+const MIN_FORWARD_SHARE = 0.5;
 /** Écart maximal, en degrés, qu'on lisse (au-delà, l'avion a manœuvré : on le laisse sauter). */
 const MAX_SMOOTHED_DEG = 0.15;
 /** Écart toléré entre l'instant affiché et le présent pour considérer qu'on est « en direct ». */
@@ -249,7 +256,7 @@ function extrapolate(plane: Plane, time: number): { lon: number; lat: number; al
   const metres = plane.speedKt * KT * seconds;
   const radians = (plane.track * Math.PI) / 180;
   const cosLat = Math.cos((plane.lat * Math.PI) / 180);
-  const smoothing = Math.max(0, 1 - (time - plane.offAt) / SMOOTHING_MS);
+  const smoothing = Math.max(0, 1 - (time - plane.offAt) / plane.offSpanMs);
   return {
     lon: plane.lon + (metres * Math.sin(radians)) / (111_320 * cosLat) + plane.offLon * smoothing,
     lat: plane.lat + (metres * Math.cos(radians)) / 110_540 + plane.offLat * smoothing,
@@ -258,6 +265,17 @@ function extrapolate(plane: Plane, time: number): { lon: number; lat: number; al
 }
 
 let previous: PlanesData | undefined;
+
+/**
+ * Durée de résorption d'un écart de `meters` mètres pour un avion qui va à `speedKt` : l'écart fondu à vitesse constante
+ * retranche `meters / durée` à sa vitesse, qui doit rester au moins `MIN_FORWARD_SHARE` de la sienne. Un écart de 3 km à
+ * 450 kt (230 m/s) prend donc 26 s, et non 5 s pendant lesquelles l'avion reculerait de 360 m/s.
+ */
+function smoothingMs(meters: number, speedKt: number): number {
+  const mps = speedKt * KT;
+  if (mps < 5) return SMOOTHING_MS;
+  return Math.max(SMOOTHING_MS, (meters / (mps * (1 - MIN_FORWARD_SHARE))) * 1000);
+}
 
 const G = 9.81;
 /** Au-delà, l'écart de cap vient d'un trou dans les données plutôt que d'un virage. */
@@ -352,10 +370,19 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
   if (!response.ok) throw new Error(`le serveur des avions a répondu ${response.status}`);
   const json = (await response.json()) as { updatedAt: number; planes: ApiPlane[] };
   const receivedAt = Date.now();
-  // L'âge de la collecte vient de l'horloge du serveur : on le borne pour qu'un décalage d'horloge ne fausse pas tout.
-  const collectionAgeS = Math.min(Math.max(receivedAt / 1000 - json.updatedAt, 0), 15);
+  // Âge de la collecte, lu sur l'horloge du serveur seule : « maintenant » est l'en-tête `Date` de sa réponse (à la seconde),
+  // « la collecte » son `updatedAt` (tronqué à la seconde). Le décalage entre les deux horloges s'annule, et une collecte
+  // vieille de plusieurs dizaines de secondes (le serveur patiente une minute quand adsb.lol lui demande de ralentir) garde
+  // son âge. Soustraire l'horloge du navigateur et plafonner l'âge à 15 s, comme avant, faisait croire à chaque nouvelle
+  // réception de cette même collecte qu'elle venait d'être relevée : tous les avions repartaient de leur position périmée.
+  const serverNow = Date.parse(response.headers.get('date') ?? '');
+  const collectionAgeS = Number.isFinite(serverNow)
+    ? Math.max(0, (serverNow + 500) / 1000 - (json.updatedAt + 0.5))
+    : Math.min(Math.max(receivedAt / 1000 - json.updatedAt, 0), 15);
 
   const list: Plane[] = json.planes.map((p) => {
+    // Sans cap (rare) : celui qu'on lui voyait à la collecte précédente.
+    const track = p.track ?? previous?.byHex.get(p.hex)?.track ?? 0;
     const altBaroM = p.altBaro === undefined ? undefined : p.altBaro * FT;
     const altM = p.altGeom !== undefined ? p.altGeom * FT : (altBaroM ?? null);
     const speedKt = p.speed ?? 0;
@@ -371,7 +398,7 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
       altM,
       altBaroFt: p.altBaro,
       speedKt,
-      track: p.track ?? 0,
+      track,
       climbFpm: p.climb ?? 0,
       squawk: p.squawk,
       emergency: p.emergency,
@@ -384,9 +411,10 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
       offLon: 0,
       offLat: 0,
       offAt: receivedAt,
+      offSpanMs: SMOOTHING_MS,
       position: [p.lon, p.lat, 0],
       shadow: [p.lon, p.lat, 0],
-      angle: 90 - (p.track ?? 0),
+      angle: 90 - track,
       bank: 0,
       groundZ: 0,
       groundAt: 0,
@@ -408,6 +436,8 @@ async function loadPlanes(signal: AbortSignal): Promise<PlanesData> {
       if (Math.abs(dLon) < MAX_SMOOTHED_DEG && Math.abs(dLat) < MAX_SMOOTHED_DEG) {
         plane.offLon = dLon;
         plane.offLat = dLat;
+        const meters = Math.hypot(dLon * 111_320 * Math.cos((plane.lat * Math.PI) / 180), dLat * 110_540);
+        plane.offSpanMs = smoothingMs(meters, plane.speedKt);
       }
     }
   }
@@ -471,6 +501,7 @@ function replayPlane(chunk: DecodedChunk, o: number): Plane {
     offLon: 0,
     offLat: 0,
     offAt: 0,
+    offSpanMs: SMOOTHING_MS,
     position: [0, 0, 0],
     shadow: [0, 0, 0],
     angle: 0,

@@ -12,7 +12,7 @@
 //! cercles apparaît deux fois : on garde l'observation la plus récente de chaque code ICAO.
 
 use std::collections::HashMap;
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use anyhow::{Context, Result, bail};
 use jiff::Timestamp;
@@ -144,8 +144,36 @@ pub async fn poll_forever(http: reqwest::Client, state: AppState) {
     }
 }
 
+/// Garde, pour chaque avion, l'observation la plus récente. `answered_s` : l'instant (secondes depuis le début du tour) où
+/// adsb.lol a répondu ; `seen_pos` en est l'âge à cet instant. On compare donc des instants d'observation, et non des âges
+/// pris à des moments différents (les trois requêtes se suivent à plusieurs secondes d'écart).
+fn keep_freshest(best: &mut HashMap<String, (PlaneOut, f64)>, planes: Vec<PlaneOut>, answered_s: f64) {
+    for plane in planes {
+        let observed_s = answered_s - plane.seen_pos;
+        match best.get(&plane.hex) {
+            Some((_, known)) if *known >= observed_s => {}
+            _ => {
+                best.insert(plane.hex.clone(), (plane, observed_s));
+            }
+        }
+    }
+}
+
+/// Remet l'âge de chaque position à l'instant `end_s` de la fin du tour, celui que porte `updatedAt` : le site retranche cet
+/// âge à l'heure de la collecte pour dater l'observation. Sans cela, un avion relevé par la première requête paraissait
+/// plus jeune qu'il n'est de l'écart qui sépare les requêtes (jusqu'à plusieurs secondes, soit plusieurs km à 250 m/s).
+fn aged_at(best: HashMap<String, (PlaneOut, f64)>, end_s: f64) -> Vec<PlaneOut> {
+    best.into_values()
+        .map(|(mut plane, observed_s)| {
+            plane.seen_pos = ((end_s - observed_s) * 1000.0).round().max(0.0) / 1000.0;
+            plane
+        })
+        .collect()
+}
+
 async fn fetch_all(http: &reqwest::Client) -> Result<(Vec<u8>, usize)> {
-    let mut best: HashMap<String, PlaneOut> = HashMap::new();
+    let started = Instant::now();
+    let mut best: HashMap<String, (PlaneOut, f64)> = HashMap::new();
     for (i, (lat, lon, radius)) in CIRCLES.into_iter().enumerate() {
         if i > 0 {
             tokio::time::sleep(PAUSE_BETWEEN_REQUESTS).await;
@@ -155,16 +183,10 @@ async fn fetch_all(http: &reqwest::Client) -> Result<(Vec<u8>, usize)> {
             bail!("adsb.lol demande de ralentir (429)");
         }
         let text = response.error_for_status()?.text().await?;
-        for plane in parse(&text).with_context(|| format!("cercle {lat},{lon}"))? {
-            match best.get(&plane.hex) {
-                Some(known) if known.seen_pos <= plane.seen_pos => {}
-                _ => {
-                    best.insert(plane.hex.clone(), plane);
-                }
-            }
-        }
+        let answered_s = started.elapsed().as_secs_f64();
+        keep_freshest(&mut best, parse(&text).with_context(|| format!("cercle {lat},{lon}"))?, answered_s);
     }
-    let mut planes: Vec<PlaneOut> = best.into_values().collect();
+    let mut planes = aged_at(best, started.elapsed().as_secs_f64());
     planes.sort_unstable_by(|a, b| a.hex.cmp(&b.hex)); // réponse stable d'un tour à l'autre
     let count = planes.len();
     let body = serde_json::to_vec(&PlanesOut { updated_at: Timestamp::now().as_second(), planes })?;
@@ -244,6 +266,50 @@ mod tests {
     fn ecarte_les_positions_perimees() {
         let json = r#"{"ac":[{"hex":"abc123","lat":47.0,"lon":2.0,"seen_pos":75.0,"alt_baro":3000}]}"#;
         assert!(parse(json).unwrap().is_empty());
+    }
+
+    fn plane(hex: &str, lon: f64, seen_pos: f64) -> PlaneOut {
+        PlaneOut {
+            hex: hex.into(),
+            callsign: None,
+            registration: None,
+            kind: None,
+            category: None,
+            lon,
+            lat: 47.0,
+            alt_baro: None,
+            alt_geom: None,
+            speed: None,
+            track: None,
+            climb: None,
+            squawk: None,
+            emergency: None,
+            ground: false,
+            seen_pos,
+        }
+    }
+
+    #[test]
+    fn deux_cercles_comparent_des_instants_d_observation() {
+        // Cercle 1 (réponse à 0,2 s) : relevé il y a 0,5 s, soit à -0,3 s. Cercle 3 (réponse à 1,6 s) : relevé il y a 1,5 s,
+        // soit à +0,1 s : c'est le plus récent, bien que son âge brut soit le plus grand.
+        let mut best = HashMap::new();
+        keep_freshest(&mut best, vec![plane("a", 1.0, 0.5)], 0.2);
+        keep_freshest(&mut best, vec![plane("a", 2.0, 1.5)], 1.6);
+        assert_eq!(best["a"].0.lon, 2.0);
+        // Un relevé plus ancien arrivé plus tard ne remplace pas le plus récent.
+        keep_freshest(&mut best, vec![plane("a", 3.0, 5.0)], 2.0);
+        assert_eq!(best["a"].0.lon, 2.0);
+    }
+
+    #[test]
+    fn l_age_est_ramene_a_la_fin_du_tour() {
+        let mut best = HashMap::new();
+        keep_freshest(&mut best, vec![plane("a", 1.0, 0.5)], 0.2); // observé à -0,3 s
+        keep_freshest(&mut best, vec![plane("b", 1.0, 0.1)], 1.6); // observé à 1,5 s
+        let planes = aged_at(best, 2.0);
+        let age = |hex: &str| planes.iter().find(|p| p.hex == hex).unwrap().seen_pos;
+        assert_eq!((age("a"), age("b")), (2.3, 0.5));
     }
 
     #[test]

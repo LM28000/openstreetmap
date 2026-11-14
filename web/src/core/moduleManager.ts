@@ -185,8 +185,9 @@ export class ModuleManager {
     const { entry, selection } = found;
     const ctx = this.context(entry, time);
     const content = entry.module.describe?.(selection.value, ctx);
-    // « Suivre » n'a de sens que pour ce qui a une position à suivre (un train, pas une gare).
-    const canFollow = entry.module.focus?.(selection.value, ctx) != null;
+    // « Suivre » n'a de sens que pour ce qui bouge (un train, pas une gare ni un marégraphe).
+    const target = entry.module.focus?.(selection.value, ctx);
+    const canFollow = target != null && !target.fixed;
     return content ? { moduleName: entry.module.name, content, canFollow } : null;
   }
 

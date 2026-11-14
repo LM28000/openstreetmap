@@ -2,6 +2,7 @@ import { useEffect, useRef } from 'react';
 import {
   AttributionControl,
   GlobeControl,
+  LngLat,
   Map as MapLibreMap,
   NavigationControl,
   TerrainControl,
@@ -93,8 +94,49 @@ export function MapView({ manager }: { manager: ModuleManager }) {
       }, VIEW_NOTIFY_INTERVAL_MS);
       onTerrainChanged();
     });
-    // Déplacer la carte à la main arrête de suivre la sélection (zoomer ou tourner, non).
-    map.on('dragstart', () => manager.setFollowing(false));
+    // Déplacer la carte à la main arrête de suivre la sélection. Zoomer, tourner ou pincer à deux doigts, non.
+    map.on('dragstart', (e) => {
+      const touches = (e.originalEvent as TouchEvent | undefined)?.touches;
+      if (touches && touches.length > 1) return;
+      manager.setFollowing(false);
+    });
+
+    // Pendant le suivi, la caméra est recentrée à chaque image. Un `jumpTo` interrompt toute animation en cours
+    // (boutons +/−, clavier) : celles qui ne font que zoomer, tourner ou incliner sont donc rejouées par le suivi.
+    let followEase: { from: FollowCamera; to: FollowCamera; start: number; duration: number } | null = null;
+    const easeTo = map.easeTo.bind(map);
+    map.easeTo = (options, eventData) => {
+      const offset = options.offset as [number, number] | { x: number; y: number } | undefined;
+      const pans = offset != null && (Array.isArray(offset) ? offset[0] !== 0 || offset[1] !== 0 : offset.x !== 0 || offset.y !== 0);
+      if (pans || !manager.followTarget(clock.now())) return easeTo(options, eventData);
+      const from = { zoom: map.getZoom(), bearing: map.getBearing(), pitch: map.getPitch() };
+      followEase = {
+        from,
+        to: { zoom: options.zoom ?? from.zoom, bearing: options.bearing ?? from.bearing, pitch: options.pitch ?? from.pitch },
+        start: performance.now(),
+        duration: options.duration ?? 300,
+      };
+      return map;
+    };
+    const followEaseStep = (): Partial<FollowCamera> => {
+      if (!followEase) return {};
+      const k = Math.min(1, (performance.now() - followEase.start) / Math.max(1, followEase.duration));
+      const e = 1 - (1 - k) ** 3;
+      const { from, to } = followEase;
+      if (k >= 1) followEase = null;
+      const turn = ((((to.bearing - from.bearing) % 360) + 540) % 360) - 180; // par le plus court
+      return { zoom: from.zoom + (to.zoom - from.zoom) * e, bearing: from.bearing + turn * e, pitch: from.pitch + (to.pitch - from.pitch) * e };
+    };
+    /** Vrai pendant le suivi : molette et pincement zooment alors autour du centre (l'objet suivi), pas du pointeur. */
+    let zoomsAroundCenter = false;
+    // Doigts ou boutons posés sur la carte. Tant qu'il y en a, pas de `jumpTo` : il remettrait à zéro les gestes
+    // de MapLibre (pincement, rotation au clic droit) avant même qu'ils démarrent.
+    const pressed = new Set<number>();
+    const canvasContainer = map.getCanvasContainer();
+    canvasContainer.addEventListener('pointerdown', (e) => pressed.add(e.pointerId), { passive: true });
+    for (const type of ['pointerup', 'pointercancel', 'lostpointercapture'] as const) {
+      window.addEventListener(type, (e) => pressed.delete(e.pointerId), { passive: true });
+    }
 
     // deck.gl dessine dans le même contexte WebGL que MapLibre (« interleaved ») :
     // ses couches se mélangent correctement avec le relief et les bâtiments.
@@ -131,21 +173,36 @@ export function MapView({ manager }: { manager: ModuleManager }) {
     const tick = () => {
       const time = clock.now();
       const target = manager.followTarget(time);
-      if (target?.alt !== undefined) {
+      if ((target != null) !== zoomsAroundCenter) {
+        zoomsAroundCenter = target != null;
+        const around = zoomsAroundCenter ? { around: 'center' as const } : undefined;
+        if (map.scrollZoom.isEnabled()) map.scrollZoom.enable(around);
+        if (map.touchZoomRotate.isEnabled()) map.touchZoomRotate.enable(around);
+        if (!zoomsAroundCenter) followEase = null;
+      }
+      if (target?.alt !== undefined && !aloft) {
         // Objet en vol : la caméra tourne autour de lui, à son altitude, et non autour du sol dessous.
-        if (!aloft) {
-          map.setCenterClampedToGround(false);
-          aloft = true;
+        map.setCenterClampedToGround(false);
+        aloft = true;
+      } else if (target?.alt === undefined && aloft) {
+        // Fin du suivi d'un objet en vol : le centre de la vue redescend sur le relief.
+        map.setCenterClampedToGround(true);
+        map.jumpTo({ elevation: map.queryTerrainElevation(map.getCenter()) ?? 0 });
+        aloft = false;
+      }
+      if (target) {
+        if (pressed.size > 0 || map.isMoving()) {
+          // Geste en cours (molette, pincement, rotation) : un `jumpTo` l'interromprait. On déplace seulement le centre.
+          map.transform.setCenter(new LngLat(target.lon, target.lat));
+          if (target.alt !== undefined) map.transform.setElevation(target.alt);
+          map.triggerRepaint();
+        } else {
+          map.jumpTo({
+            center: [target.lon, target.lat],
+            ...(target.alt !== undefined ? { elevation: target.alt } : {}),
+            ...followEaseStep(),
+          });
         }
-        map.jumpTo({ center: [target.lon, target.lat], elevation: target.alt });
-      } else {
-        if (aloft) {
-          // Fin du suivi d'un objet en vol : le centre de la vue redescend sur le relief.
-          map.setCenterClampedToGround(true);
-          map.jumpTo({ elevation: map.queryTerrainElevation(map.getCenter()) ?? 0 });
-          aloft = false;
-        }
-        if (target) map.jumpTo({ center: [target.lon, target.lat] });
       }
       const layers = manager.frame(time);
       // Maquettes 3D éclairées par le soleil du centre de la vue (vérifié quelques fois par seconde).
@@ -190,4 +247,11 @@ export function MapView({ manager }: { manager: ModuleManager }) {
   }, [manager]);
 
   return <div ref={containerRef} className="map" />;
+}
+
+/** Ce que le suivi anime lui-même quand on zoome ou tourne pendant qu'il recentre la caméra. */
+interface FollowCamera {
+  zoom: number;
+  bearing: number;
+  pitch: number;
 }

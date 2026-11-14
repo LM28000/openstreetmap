@@ -274,6 +274,6 @@ export const earthquakes = defineModule<Quake[]>({
   focus(selection, { data }) {
     const id = (selection as { id: string }).id;
     const q = data?.find((quake) => quake.id === id);
-    return q ? { lon: q.lon, lat: q.lat } : null;
+    return q ? { lon: q.lon, lat: q.lat, fixed: true } : null;
   },
 });

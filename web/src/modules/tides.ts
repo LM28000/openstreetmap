@@ -348,7 +348,7 @@ export const tides = defineModule<TidesData>({
 
   focus(selection, { data }) {
     const g = data?.byId.get((selection as { id: number }).id);
-    return g ? { lon: g.lon, lat: g.lat } : null;
+    return g ? { lon: g.lon, lat: g.lat, fixed: true } : null;
   },
 
   describe(selection, { data, time }) {

@@ -334,6 +334,11 @@ export interface FocusTarget {
   lon: number;
   lat: number;
   alt?: number;
+  /**
+   * Vrai pour un objet qui ne bouge pas (station, séisme, marégraphe, réseau) : la recherche peut s'y rendre,
+   * mais la fiche ne propose pas « Suivre », qui n'aurait rien à suivre.
+   */
+  fixed?: boolean;
 }
 
 /** Aide au typage : `defineModule<MesDonnées>({ ... })`. */

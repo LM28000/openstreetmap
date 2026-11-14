@@ -396,7 +396,7 @@ export const air = defineModule<AirData>({
 
   focus(selection, { data }) {
     const i = (selection as { i: number } | null)?.i;
-    return data && i !== undefined && data.zones.name[i] !== undefined ? { lon: data.zones.lon[i]!, lat: data.zones.lat[i]! } : null;
+    return data && i !== undefined && data.zones.name[i] !== undefined ? { lon: data.zones.lon[i]!, lat: data.zones.lat[i]!, fixed: true } : null;
   },
 
   describe(selection, { data, time }): InfoContent | null {

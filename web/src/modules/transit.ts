@@ -1253,7 +1253,7 @@ export const transit = defineModule<TransitData>({
     if (!data || !shows(data, time)) return null;
     if (sel.type === 'network') {
       const net = data.networks.find((n) => n.name === sel.name);
-      return net ? { lon: net.lon, lat: net.lat } : null;
+      return net ? { lon: net.lon, lat: net.lat, fixed: true } : null;
     }
     const v = data.byKey.get(sel.key);
     if (!v || (data.replay && !refreshReplayVehicle(data, v, time))) return null;

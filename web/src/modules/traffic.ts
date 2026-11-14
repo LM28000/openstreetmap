@@ -656,7 +656,7 @@ export const traffic = defineModule<TrafficData>({
     const chosen = selection as { type: string; id: string };
     if (!data || chosen.type !== 'event') return null;
     const event = data.eventsById.get(chosen.id);
-    return event ? { lon: event.lon, lat: event.lat } : null;
+    return event ? { lon: event.lon, lat: event.lat, fixed: true } : null;
   },
 });
 

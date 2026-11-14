@@ -19,6 +19,7 @@
  * Le même code sert au mode « Transparence » : pas de rideau (`curtain = Infinity`), opacité réglable.
  */
 import type { CustomLayerInterface, Map as MapLibreMap, OverscaledTileID } from 'maplibre-gl';
+import { isTerrainSource } from '../map/baseMap';
 
 /** Taille d'une tuile en unités de tuile de MapLibre (`EXTENT`). */
 const EXTENT = 8192;
@@ -82,6 +83,8 @@ interface Mesh {
   /** Le relief était-il chargé pour tous les sommets ? Sinon on recalcule quand il arrive. */
   complete: boolean;
   builtAtTerrain: number;
+  /** Source du relief au moment du calcul (voir `terrainEpoch`). */
+  epoch: number;
   zoomBucket: number;
 }
 
@@ -131,6 +134,8 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
   let opacity = 1;
   let frame = 0;
   let terrainVersion = 0;
+  /** Compte les changements de source du relief : les maillages d'une autre époque sont refaits, même complets. */
+  let terrainEpoch = 0;
   let inFlight = 0;
   let renderMs = 0;
   let buildMs = 0;
@@ -162,8 +167,12 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
   }
 
   /** Le relief change (tuiles d'altitude reçues) : les maillages incomplets seront refaits. */
-  const onTerrain = (event?: { sourceId?: string; tile?: unknown }) => {
-    if (event && (event.sourceId !== 'relief' || !event.tile)) return;
+  const onTerrain = (event?: { type?: string; sourceId?: string; tile?: unknown }) => {
+    // Le relief change de source (ordinaire ↔ LiDAR HD) : les altitudes mémorisées ne valent plus.
+    if (event?.type === 'terrain') {
+      elevations.clear();
+      terrainEpoch++;
+    } else if (event && (!isTerrainSource(event.sourceId) || !event.tile)) return;
     clearTimeout(terrainTimer);
     terrainTimer = setTimeout(() => {
       terrainVersion++;
@@ -205,7 +214,7 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
     const buffer = tile.mesh?.buffer ?? gl.createBuffer()!;
     gl.bindBuffer(gl.ARRAY_BUFFER, buffer);
     gl.bufferData(gl.ARRAY_BUFFER, data, gl.STATIC_DRAW);
-    tile.mesh = { buffer, complete: complete || !hasTerrain, builtAtTerrain: terrainVersion, zoomBucket: bucket };
+    tile.mesh = { buffer, complete: complete || !hasTerrain, builtAtTerrain: terrainVersion, epoch: terrainEpoch, zoomBucket: bucket };
   }
 
   function request(tile: TileEntry): void {
@@ -402,7 +411,7 @@ export function createCurtainLayer(id: string, initial: Vintage): CurtainLayer {
       let builds = 0;
       const bucket = Math.floor(map.getZoom());
       for (const { tile } of wanted) {
-        const stale = !tile.mesh || (tile.mesh.builtAtTerrain !== terrainVersion && (!tile.mesh.complete || tile.mesh.zoomBucket !== bucket));
+        const stale = !tile.mesh || tile.mesh.epoch !== terrainEpoch || (tile.mesh.builtAtTerrain !== terrainVersion && (!tile.mesh.complete || tile.mesh.zoomBucket !== bucket));
         if (stale && builds < MESH_BUILDS_PER_FRAME) {
           const t0 = performance.now();
           buildMesh(tile);

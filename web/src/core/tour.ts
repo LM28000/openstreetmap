@@ -11,7 +11,7 @@
  *   s'écrit déjà dans l'adresse et un relevé à part pour le reste.
  */
 import type { Map as MapLibreMap } from 'maplibre-gl';
-import { TERRAIN_EXAGGERATION, TERRAIN_SOURCE } from '../map/baseMap';
+import { terrainOptions } from '../map/baseMap';
 import { fromParis, parisParts } from '../ui/format';
 import { clock } from './clock';
 import type { ModuleManager } from './moduleManager';
@@ -211,7 +211,7 @@ class TourController {
     if (token !== this.token) return;
     // La visite se joue sur la carte plane, relief en place (la photo ancienne, le relief des Alpes).
     if (map.getProjection()?.type === 'globe') map.setProjection({ type: 'mercator' });
-    if (!map.getTerrain()) map.setTerrain({ source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION });
+    if (!map.getTerrain()) map.setTerrain(terrainOptions());
     void this.enter(0, 1);
   }
 
@@ -308,7 +308,7 @@ class TourController {
     if (!map) return;
     if (saved.globe && map.getProjection()?.type !== 'globe') map.setProjection({ type: 'globe' });
     else if (!saved.globe && saved.terrain !== (map.getTerrain() != null)) {
-      map.setTerrain(saved.terrain ? { source: TERRAIN_SOURCE, exaggeration: TERRAIN_EXAGGERATION } : null);
+      map.setTerrain(saved.terrain ? terrainOptions() : null);
     }
     const view = { center: saved.center, zoom: saved.zoom, bearing: saved.bearing, pitch: saved.pitch };
     if (prefersReducedMotion()) map.jumpTo(view);

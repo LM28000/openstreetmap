@@ -31,28 +31,32 @@ const LIDAR_HILLSHADE_LAYER = 'ombrage-relief-lidar';
 
 /**
  * Altitudes Mapterhorn (encodage « terrarium », tuiles 512 px).
- * Couverture mondiale jusqu'au zoom 12 ; au-delà, MapLibre agrandit les tuiles.
+ * Mesuré en novembre 2026 : couverture mondiale jusqu'au zoom 12 au moins ; en France, tuiles jusqu'au zoom 16 sur la terre ferme
+ * (issues du LiDAR HD, 0,8 m par pixel à 46° N), et jusqu'au 17 seulement par endroits (environ 40 % de 404 sur 80 points
+ * tirés au hasard) ; ailleurs, le zoom le plus fin varie (404 dès le 16 dans le Val d'Aoste). Les tuiles absentes (404 : mer
+ * au-delà du zoom 14, zones moins bien couvertes) ne font aucun trou : le relief 3D retombe sur la tuile du zoom inférieur déjà
+ * chargée (vérifié au zoom 16, côté italien du Mont-Blanc). Le zoom 16 est le dernier sans trou notable en France ; au-delà, MapLibre agrandit.
  */
 const DEM_SOURCE: RasterDEMSourceSpecification = {
   type: 'raster-dem',
   tiles: ['https://tiles.mapterhorn.com/{z}/{x}/{y}.webp'],
   tileSize: 512,
-  maxzoom: 12,
+  maxzoom: 16,
   encoding: 'terrarium',
   attribution: '<a href="https://mapterhorn.com/attribution" target="_blank" rel="noreferrer">© Mapterhorn</a>',
 };
 
 /**
  * Altitudes du LiDAR HD, mêmes encodage et taille de tuile. Le serveur (`/api/relief-lidar`) rend le MNT de l'IGN là où
- * il existe et renvoie vers la tuile Mapterhorn ailleurs et sous le zoom 13. Mapterhorn n'a plus de tuiles en France
- * au-dessus du zoom 16 (ni du 17 à Lille) : la source s'arrête au 16, MapLibre agrandit au-delà.
+ * il existe et renvoie vers la tuile Mapterhorn ailleurs et sous le zoom 13. Le serveur sert jusqu'au zoom 17 (0,4 m par
+ * pixel) : c'est le seul gain sur Mapterhorn (zoom 16 au plus, 17 par endroits), pour un zoom de carte de 18 ou plus.
  */
 function lidarDemSource(): RasterDEMSourceSpecification {
   return {
     type: 'raster-dem',
     tiles: [new URL('/api/relief-lidar/{z}/{x}/{y}.png', window.location.href).href.replace(/%7B/g, '{').replace(/%7D/g, '}')],
     tileSize: 512,
-    maxzoom: 16,
+    maxzoom: 17,
     encoding: 'terrarium',
     attribution: 'IGN, LiDAR HD (Licence Etalab 2.0)',
   };

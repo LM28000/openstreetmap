@@ -138,38 +138,43 @@ export const ELEC_SANS = { jour: '#cfcdc4', nuit: '#46464a' } as const;
  * « Part d'un candidat » : une rampe d'une seule teinte, celle de la famille du candidat (sept classes, de la part la plus
  * faible à la plus forte). Elle ne reprend donc plus la rampe de la population (terre de Sienne).
  *
- * Générées une fois à partir de la couleur de chaque famille (`ELEC`), dans l'espace OKLCH : teinte et chroma de la famille,
- * luminosité en pas réguliers (ΔL ≥ 0,078 entre classes voisines, contrôlé par calcul).
- * Jour : de 0,76 à 0,28, le plus fort est le plus foncé ; bout clair à 1,8:1 ou plus sur le fond de carte clair.
- * Nuit : de 0,46 à 0,94, le plus fort est le plus clair ; bout sombre à 2,4:1 ou plus sur le fond sombre.
+ * Générées une fois à partir de la couleur de chaque famille (`ELEC`), dans l'espace OKLCH : une teinte par famille (celle de sa
+ * couleur, au jour ou à la nuit), la chroma de la famille plafonnée à 97 % de ce que l'écran sait afficher à chaque clarté, et la
+ * clarté en pas réguliers de 0,0795 (ΔL ≥ 0,078 entre classes voisines, contrôlé par calcul après arrondi en hexadécimal).
+ * Jour : le plus fort est le plus foncé ; le bout clair, placé le plus clair possible, reste à 1,8:1 ou plus sur le fond de carte clair
+ * (clarté de 0,76 à 0,79 au départ, 0,28 à 0,31 à l'arrivée). Le bout foncé ne descend plus sous 0,28 de clarté : au-dessous, rouge,
+ * ocre et vert se confondent avec du noir et les libellés posés dessus ne se lisent plus.
+ * Nuit : le plus fort est le plus clair ; le bout sombre, placé le plus sombre possible, reste à 2,2:1 ou plus sur le fond sombre
+ * (clarté de 0,43 à 0,46 au départ, 0,90 à 0,93 à l'arrivée).
+ * Le gris « autres » garde sa chroma à 0,01 : sa teinte n'a pas de sens.
  */
 export const ELEC_SHARE: Record<ElecFamily, Ramp> = {
   exg: {
-    jour: ['#ff8b7f', '#f56057', '#d8463f', '#bc2827', '#9e0210', '#780009', '#540004'],
-    nuit: ['#a70318', '#c52c2f', '#e14946', '#fe645e', '#fe968d', '#ffbfb8', '#fee4e1'],
+    jour: ['#fd9b91', '#fd6c62', '#e34f48', '#c63330', '#aa0e17', '#85050e', '#610207'],
+    nuit: ['#a20919', '#c2282c', '#de4644', '#fb615b', '#fd9188', '#febab3', '#fedfdc'],
   },
   gauche: {
-    jour: ['#fd84b1', '#e16a99', '#c65281', '#aa3869', '#8f1d53', '#72023d', '#500129'],
-    nuit: ['#9f015e', '#bc2975', '#d9468d', '#f561a5', '#fe8ebd', '#ffbad4', '#fee3ec'],
+    jour: ['#fd96bb', '#ec74a2', '#d05b8a', '#b54272', '#9a295c', '#800746', '#5d0231'],
+    nuit: ['#9a085b', '#b92572', '#d5438a', '#f15ea2', '#fd88b9', '#feb5d1', '#fedde9'],
   },
   eco: {
-    jour: ['#77c77c', '#5eae64', '#45944c', '#2a7c35', '#07641d', '#014b12', '#003309'],
-    nuit: ['#0c6b1d', '#2e8336', '#489b4e', '#62b566', '#7bcf7e', '#95e997', '#beffbf'],
+    jour: ['#76c77c', '#5dad64', '#44944c', '#2a7c35', '#07641d', '#034b13', '#003309'],
+    nuit: ['#066118', '#22792d', '#3e9144', '#57aa5c', '#70c474', '#8ade8d', '#a3f9a6'],
   },
   centre: {
-    jour: ['#e5a313', '#c68c03', '#a77600', '#896004', '#6d4c02', '#523800', '#382501'],
-    nuit: ['#774f03', '#946407', '#ad7b2d', '#c79448', '#e1ad61', '#fcc77b', '#fee7c9'],
+    jour: ['#ebaa21', '#cd9214', '#ae7c0f', '#916609', '#745105', '#593d02', '#3f2a00'],
+    nuit: ['#6c4804', '#895c08', '#a47221', '#bd8a3e', '#d7a357', '#f1bc71', '#fedaaa'],
   },
   droite: {
-    jour: ['#76b5ff', '#419afc', '#2381e0', '#0469c1', '#01529a', '#003d75', '#012951'],
-    nuit: ['#1a599b', '#3470b5', '#4c89cf', '#64a2ea', '#83bbfe', '#b2d4fe', '#deedff'],
+    jour: ['#7fb9fd', '#4b9ffc', '#2985e5', '#0a6dc7', '#0656a0', '#02417b', '#002d58'],
+    nuit: ['#105193', '#2b68ad', '#4480c7', '#5c99e1', '#74b2fc', '#a2ccfd', '#cfe4fe'],
   },
   ed: {
-    jour: ['#aba6f8', '#938ddd', '#7b74c3', '#645da9', '#4f468f', '#3b2f76', '#28185e'],
-    nuit: ['#5938ba', '#6e52d5', '#846bf1', '#9b8aff', '#b4abfe', '#cecaff', '#eae9fe'],
+    jour: ['#b2adfd', '#9993e5', '#827bca', '#6b63b0', '#554c97', '#40367e', '#2d1f66'],
+    nuit: ['#5634b6', '#6b4ed1', '#8167ed', '#9785fc', '#afa6fd', '#c9c5fe', '#e4e3fe'],
   },
   autres: {
-    jour: ['#b2b1ac', '#999893', '#81807b', '#6a6964', '#53534e', '#3e3d3a', '#292926'],
-    nuit: ['#595854', '#706f6a', '#878681', '#9f9e9a', '#b8b7b3', '#d2d1cd', '#ecebe8'],
+    jour: ['#b7b6ad', '#9f9d95', '#87857d', '#6f6e66', '#595750', '#43423b', '#2f2d27'],
+    nuit: ['#504f47', '#66655d', '#7d7c74', '#95948b', '#aeaca4', '#c7c5bd', '#e1dfd6'],
   },
 };

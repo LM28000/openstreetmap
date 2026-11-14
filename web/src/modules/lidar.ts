@@ -16,7 +16,8 @@
  * « hypso_mnh » n'existe pas en tuiles). La couche est insérée sous les étiquettes (et sous l'ombre de la nuit),
  * donc le relief, les noms et les symboles restent lisibles ; elle est drapée sur le relief s'il est affiché.
  *
- * Le relief 3D lui-même peut aussi prendre son altitude du LiDAR HD (réglage « Relief 3D », allumé par défaut) : le
+ * Le relief 3D lui-même peut aussi prendre son altitude du LiDAR HD (réglage « Relief 3D », éteint par défaut : Mapterhorn, qui
+ * sert en France des tuiles jusqu'au zoom 16 issues du même LiDAR, donne la même forme à moins de 0,1 m près, voir docs/couches.md) : le
  * serveur convertit le MNT de l'IGN (BIL 32 bits) en tuiles « terrarium » (`/api/relief-lidar`, voir `server/src/relief_lidar.rs`)
  * et retombe sur Mapterhorn hors de la zone couverte. MapLibre n'admet qu'une source de relief à la fois : on bascule de
  * l'une à l'autre (`setLidarTerrain`) en s'approchant d'une zone de France (zoom 11) et on revient en s'éloignant (zoom 10),
@@ -144,10 +145,10 @@ export const lidar = defineModule<null>({
     {
       id: 'relief3d',
       label: 'Relief 3D',
-      defaultValue: 'oui',
+      defaultValue: 'non',
       options: [
-        { value: 'oui', label: 'Altitude du LiDAR HD' },
-        { value: 'non', label: 'Relief ordinaire (Mapterhorn)' },
+        { value: 'oui', label: 'Altitude du LiDAR HD (50 cm, jusqu’au zoom 17)' },
+        { value: 'non', label: 'Relief ordinaire (Mapterhorn, jusqu’au zoom 16)' },
       ],
     },
     {
@@ -171,7 +172,7 @@ export const lidar = defineModule<null>({
       color: 'var(--ui-muted)',
       label:
         settings.relief3d === 'non'
-          ? 'Relief 3D : altitude Mapterhorn (relief ordinaire)'
+          ? 'Relief 3D : altitude Mapterhorn (relief ordinaire, tuiles jusqu’au zoom 16)'
           : 'Relief 3D : altitude du LiDAR HD de l’IGN (terrain nu, maille de 50 cm), là où il est publié, sinon Mapterhorn',
     };
     if (productOf(settings) !== 'mnh') return [altitude];
